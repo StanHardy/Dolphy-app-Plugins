@@ -1,7 +1,21 @@
 {
   "format": "dolphy-plugins-v1",
-  "count": 6,
+  "count": 7,
   "plugins": [
+    {
+      "id": 8,
+      "name": "Battery Level Changer + GPS Spoofer",
+      "version": "3.2.0",
+      "author": "Artpart_13",
+      "description": {
+        "ru": "Меняет местоположение GPS и уровень батареи(визуал) при помощи Shizuku (на гугл картах не работоет)",
+        "en": "Changes GPS location and battery level (visual) using Shizuku (does not work on Google Maps)."
+      },
+      "file": "plugins/battery_level_changer_gps_spoofer/battery_level_changer_gps_spoofer.dolphyplugin",
+      "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/battery_level_changer_gps_spoofer/battery_level_changer_gps_spoofer.dolphyplugin",
+      "post_url": "https://t.me/c/3966541757/23929",
+      "updated_at": "2026-09-16 13:53:59"
+    },
     {
       "id": 1,
       "name": "BLE Scanner DEX MD3E",
