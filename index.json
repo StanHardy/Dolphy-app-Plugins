@@ -1,6 +1,6 @@
 {
   "format": "dolphy-plugins-v1",
-  "count": 24,
+  "count": 25,
   "plugins": [
     {
       "id": 16,
@@ -127,6 +127,20 @@
       "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/dolphy_performance_booster/dolphy_performance_booster.dolphyplugin",
       "post_url": "https://t.me/c/3966541757/27000",
       "updated_at": "2026-09-27 06:03:04"
+    },
+    {
+      "id": 25,
+      "name": "DroidMonitor",
+      "version": "1.2.1",
+      "author": "@Da_koroche",
+      "description": {
+        "ru": "DroidMonitor — мониторинг Android в Dolphy\n\nПредставляю DroidMonitor — плагин для мониторинга системы Android с показателями CPU, RAM, накопителя, батареи и сети. Есть журнал диагностики для поиска ошибок. Буду рад отзывам и предложениям по улучшению!",
+        "en": "DroidMonitor — Android System Monitor for Dolphy\n\nIntroducing DroidMonitor, a Dolphy plugin for monitoring Android system metrics, including CPU, RAM, storage, battery, and network status. It also includes diagnostic logs to help identify issues. Feedback and suggestions are welcome!"
+      },
+      "file": "plugins/droidmonitor/droidmonitor.dolphyplugin",
+      "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/droidmonitor/droidmonitor.dolphyplugin",
+      "post_url": "https://t.me/c/3966541757/34677",
+      "updated_at": "2026-10-17 16:09:35"
     },
     {
       "id": 9,
