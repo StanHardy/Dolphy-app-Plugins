@@ -1,0 +1,278 @@
+__id__ = "ble_guard"
+__name__ = "BLE Guard"
+__version__ = "1.0"
+__author__ = "WinterBalls"
+__description__ = "Защита от BLE spam через Shizuku"
+__icon__ = "shield"
+
+import json
+
+FLAGS = [
+    ("global", "ble_scan_always_enabled", "фоновое BLE-сканирование"),
+    ("global", "heads_up_notifications_enabled", "всплывающие уведомления"),
+]
+
+
+class BLEGuardPlugin(BasePlugin):
+
+    def __init__(self):
+        super().__init__()
+        self._ready = False
+        self._busy = False
+        self._orig = {}
+
+    def on_plugin_load(self):
+        try:
+            self.add_module(
+                title="BLE Guard",
+                description="Защита от BLE spam через Shizuku",
+                icon="shield",
+                screen="main",
+                section="PLUGINS",
+                order=0
+            )
+            saved = self.get_setting("orig", None)
+            if isinstance(saved, dict):
+                self._orig = saved
+            self._ready = True
+        except Exception as e:
+            try:
+                self.toast("Load: " + str(e))
+            except Exception:
+                pass
+
+    def on_plugin_unload(self):
+        try:
+            if self.get_setting("active", False):
+                self._restore()
+        except Exception:
+            pass
+        self._ready = False
+
+    # ------------------------------------------------------------------
+    # Shizuku типо
+    # ------------------------------------------------------------------
+
+    def _device(self):
+        try:
+            return self.api.getDevice()
+        except Exception:
+            return None
+
+    def _shizuku_ok(self):
+        d = self._device()
+        if d is None:
+            return False
+        try:
+            if not d.shizukuAvailable():
+                return False
+            if not d.shizukuHasPermission():
+                return False
+            return True
+        except Exception:
+            return False
+
+    def _exec(self, cmd):
+        raw = None
+        try:
+            fn = getattr(self.api, "shizukuExec", None)
+            if callable(fn):
+                raw = fn(cmd)
+        except Exception:
+            raw = None
+
+        if raw is None:
+            d = self._device()
+            if d is not None:
+                try:
+                    fn = getattr(d, "shizukuExec", None)
+                    if callable(fn):
+                        raw = fn(cmd)
+                except Exception:
+                    raw = None
+
+        if raw is None:
+            return False, ""
+
+        if isinstance(raw, str):
+            try:
+                data = json.loads(raw)
+                if isinstance(data, dict):
+                    code = data.get("code", 0)
+                    out = str(data.get("out", "") or "")
+                    return (code == 0), out
+                return False, raw
+            except Exception:
+                return True, raw
+
+        if isinstance(raw, dict):
+            code = raw.get("code", 0)
+            out = str(raw.get("out", "") or "")
+            return (code == 0), out
+
+        return False, ""
+
+    # ------------------------------------------------------------------
+    # Флаги типо
+    # ------------------------------------------------------------------
+
+    def _flag_id(self, ns, key):
+        return ns + "." + key
+
+    def _read_flag(self, ns, key):
+        ok, out = self._exec("settings get " + ns + " " + key)
+        if not ok:
+            return None
+        v = (out or "").strip()
+        if v in ("0", "1"):
+            return int(v)
+        return None
+
+    def _write_flag(self, ns, key, value):
+        ok, _ = self._exec("settings put " + ns + " " + key + " " + str(value))
+        return ok
+
+    def _scan_available(self):
+        found = []
+        for ns, key, desc in FLAGS:
+            val = self._read_flag(ns, key)
+            if val is not None:
+                found.append((ns, key, desc, val))
+        return found
+
+    # ------------------------------------------------------------------
+    # Действия типо
+    # ------------------------------------------------------------------
+
+    def _apply(self):
+        if not self._shizuku_ok():
+            return False
+
+        available = self._scan_available()
+        if not available:
+            return False
+
+        for ns, key, desc, val in available:
+            fid = self._flag_id(ns, key)
+            if fid not in self._orig:
+                self._orig[fid] = val
+
+        try:
+            self.set_setting("orig", self._orig)
+        except Exception:
+            pass
+
+        changed = False
+        for ns, key, desc, val in available:
+            if val != 0:
+                if self._write_flag(ns, key, 0):
+                    changed = True
+
+        if not changed:
+            return False
+
+        try:
+            self.set_setting("active", True)
+        except Exception:
+            pass
+        return True
+
+    def _restore(self):
+        if not self._shizuku_ok():
+            return False
+
+        restored = False
+        for fid, val in list(self._orig.items()):
+            if "." not in fid:
+                continue
+            ns, key = fid.split(".", 1)
+            if self._write_flag(ns, key, val):
+                restored = True
+
+        try:
+            self.set_setting("active", False)
+        except Exception:
+            pass
+
+        return restored
+
+    def _on_toggle(self):
+        if self._busy:
+            return
+        self._busy = True
+        try:
+            active = bool(self.get_setting("active", False))
+            if active:
+                self._restore()
+            else:
+                self._apply()
+            try:
+                self.refresh()
+            except Exception:
+                pass
+        finally:
+            self._busy = False
+
+    def screen_main(self, ui, api, state):
+        try:
+            active = bool(self.get_setting("active", False))
+            shizuku_ok = self._shizuku_ok()
+            available = self._scan_available() if shizuku_ok else []
+            can_exec = shizuku_ok and len(available) > 0
+
+            status_text = "Включена" if active else "Выключена"
+            if not shizuku_ok:
+                status_text = "Shizuku недоступен"
+            elif not available:
+                status_text = "Флаги не найдены"
+
+            # галочка-индикатор
+            check_icon = "check_circle" if active else "radio_button_unchecked"
+            check_tint = "#4CAF50" if active else "#888888"
+
+            children = [
+                ui.card([
+                    ui.row([
+                        ui.icon(check_icon, size=48, tint=check_tint),
+                        ui.spacer(width=12),
+                        ui.column([
+                            ui.text("Статус защиты", "titleMedium"),
+                            ui.text(status_text, "headlineSmall"),
+                        ], spacing=4),
+                    ], spacing=0),
+                ], padding=16),
+                ui.text(
+                    "Гасит фоновое BLE-сканирование и всплывающие уведомления "
+                    "(визуальная часть BLE-спама).",
+                    "bodySmall"
+                ),
+                ui.bounce_button(
+                    "Включить" if not active else "Выключить",
+                    on_click=self._on_toggle,
+                    enabled=can_exec and not self._busy
+                ),
+                ui.divider(),
+                ui.text("Диагностика", "titleMedium"),
+                ui.text("Shizuku: " + ("ок" if shizuku_ok else "нет"), "bodySmall"),
+            ]
+
+            if available:
+                children.append(ui.text("Доступные флаги:", "bodyMedium"))
+                for ns, key, desc, val in available:
+                    mark = "✓" if val == 0 else "•"
+                    children.append(ui.text(
+                        mark + " " + ns + "." + key + " = " + str(val),
+                        "bodySmall"
+                    ))
+            else:
+                children.append(ui.text("Флаги не найдены", "bodySmall"))
+
+            return ui.scaffold(
+                title="BLE Guard",
+                content=ui.lazy_column(children, padding=16, spacing=8)
+            )
+        except Exception as e:
+            return ui.scaffold(
+                title="Ошибка",
+                content=ui.text(str(e) if e else "unknown", "bodyMedium")
+            )
