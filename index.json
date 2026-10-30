@@ -1,6 +1,6 @@
 {
   "format": "dolphy-plugins-v1",
-  "count": 3,
+  "count": 4,
   "plugins": [
     {
       "id": 1,
@@ -29,6 +29,20 @@
       "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/usb_c_ir_backend/usb_c_ir_backend.dolphyplugin",
       "post_url": "https://t.me/c/3966541757/20533",
       "updated_at": "2026-08-28 08:53:03"
+    },
+    {
+      "id": 5,
+      "name": "WebSiteMe",
+      "version": "1.0.0",
+      "author": "h3rovnik",
+      "description": {
+        "ru": "Многофункциональный плагин, обеспечивающий быстрый доступ к встроенным сервисам,\nа также к любым дополнительным сайтам, которые пользователь добавляет через кнопку «+» в интерфейсе. Плагин поддерживает авторизацию и доступны функции входа и выхода из учётной записи.",
+        "en": "A multifunctional plugin providing quick access to built-in services as well as any additional sites added by the user via the \"+\" button in the interface. The plugin supports authentication, including account login and logout functions."
+      },
+      "file": "plugins/websiteme/websiteme.dolphyplugin",
+      "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/websiteme/websiteme.dolphyplugin",
+      "post_url": "https://t.me/c/3966541757/23028",
+      "updated_at": "2026-09-10 14:33:05"
     },
     {
       "id": 4,
