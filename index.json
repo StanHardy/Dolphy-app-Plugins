@@ -1,6 +1,6 @@
 {
   "format": "dolphy-plugins-v1",
-  "count": 26,
+  "count": 27,
   "plugins": [
     {
       "id": 16,
@@ -351,6 +351,20 @@
       "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/metalloiskatel/metalloiskatel.dolphyplugin",
       "post_url": "https://t.me/c/3966541757/26999",
       "updated_at": "2026-09-27 06:02:51"
+    },
+    {
+      "id": 27,
+      "name": "Металлоискатель PRO",
+      "version": "2.0",
+      "author": "@frostmench1k. @DobryyPIRATIK.",
+      "description": {
+        "ru": "Металлоискатель PRO 2.0 (@frostmench1k & @DobryyPIRATIK). Детектор металла на 3D-сенсоре с авто-калибровкой. Звук и вибрация Гейгера. Поиск проводки, труб, монет и жучков. Старт → Калибровка → Медленно ведите к цели.",
+        "en": "Metal Detector PRO 2.0 (@frostmench1k & @DobryyPIRATIK). 3D magnetic sensor, 2s auto-calibration, Geiger sound & vibration. Search wiring, pipes, coins & bugs. Start → Calibrate → Move phone to target."
+      },
+      "file": "plugins/metalloiskatel_pro/metalloiskatel_pro.dolphyplugin",
+      "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/metalloiskatel_pro/metalloiskatel_pro.dolphyplugin",
+      "post_url": "https://t.me/c/3966541757/35337",
+      "updated_at": "2026-10-20 17:22:06"
     },
     {
       "id": 26,
