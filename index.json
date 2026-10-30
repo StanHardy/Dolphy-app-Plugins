@@ -1,6 +1,6 @@
 {
   "format": "dolphy-plugins-v1",
-  "count": 14,
+  "count": 15,
   "plugins": [
     {
       "id": 16,
@@ -127,6 +127,20 @@
       "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/module_checker/module_checker.dolphyplugin",
       "post_url": "https://t.me/c/3966541757/23510",
       "updated_at": "2026-09-14 15:25:55"
+    },
+    {
+      "id": 18,
+      "name": "TV5A Remote",
+      "version": "2.1.0",
+      "author": "@halil2017l",
+      "description": {
+        "ru": "ИК-пульт для ТВ-бокса INEXT TV5A (Alma TV) через ИК-порт телефона.\nПротокол RC5, частота 36 кГц. Кнопки: питание, громкость, mute,\nканалы, стрелки, OK, меню, назад, домой. Есть проверка адресов\nRC5 (0 / 5 / 26 / 1). Работает без Wi-Fi и ADB.\nТребуется телефон с ИК-портом (например, Vivo V70).",
+        "en": "IR remote for the INEXT TV5A (Alma TV) TV box using the phone's IR blaster. RC5 protocol, 36 kHz frequency. Buttons: power, volume, mute, channels, arrow keys, OK, menu, back, home. Includes address verification RC5 (0/5 / 26 / 1). Works without Wi-Fi or ADB. Requires a phone with an IR blaster (e.g., Vivo V70)."
+      },
+      "file": "plugins/tv5a_remote/tv5a_remote.dolphyplugin",
+      "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/tv5a_remote/tv5a_remote.dolphyplugin",
+      "post_url": "https://t.me/c/3966541757/28149",
+      "updated_at": "2026-09-30 19:58:13"
     },
     {
       "id": 2,
