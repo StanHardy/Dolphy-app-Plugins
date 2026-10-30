@@ -1,0 +1,4215 @@
+__id__ = "ir_transceiver"
+__name__ = "IR Transceiver"
+__version__ = "2.0.3"
+__author__ = "RamboDonaT (@Abamazanat)"
+__description__ = "ИК-лаборатория для управления техникой: отправка и захват сигналов через USB OTG, Audio IR 3.5мм и встроенный ИК. Создание виртуальных пультов, библиотека сигналов, импорт/экспорт Flipper Zero, Pronto, LIRC. Подбор кодов (Finder), TV-B-Gone, управление Android TV по Wi-Fi ADB и переворот экрана 180° для донглов."
+__description_en__ = "Universal IR toolkit: transmit and capture signals via USB OTG, 3.5mm Audio IR, and built-in IR. Features virtual remotes, signal library, Flipper Zero/Pronto/LIRC import & export, brute-force IR Finder, TV-B-Gone power sweep, Wi-Fi ADB remote for Android TV, and 180-degree screen flip for bottom-mounted dongles."
+__icon__ = "rounded:settings_remote"
+__library__ = False
+__design_library__ = False
+__dependencies__ = []
+__permissions__ = ["usb", "infrared", "hooks", "files", "shell"]
+
+id = __id__
+name = __name__
+version = __version__
+author = __author__
+description = __description__
+icon = __icon__
+permissions = __permissions__
+
+import json
+import shlex
+import math
+import re
+import threading
+import time
+import xml.etree.ElementTree as ET
+import uuid
+import ipaddress
+import queue
+from collections import deque
+
+try:
+    from java import jclass, jarray, jbyte, jint, jshort
+except ImportError:
+    jclass = None
+    jarray = None
+    jbyte = None
+    jint = None
+    jshort = None
+
+try:
+    BasePlugin
+except NameError:
+    class BasePlugin:
+        def __init__(self):
+            self.ui = None
+            self.api = None
+        def add_module(self, *args, **kwargs): pass
+        def navigate(self, *args, **kwargs): pass
+        def navigate_app(self, *args, **kwargs): pass
+        def refresh(self): pass
+        def get_setting(self, key, default=None): return default
+        def set_setting(self, key, value): pass
+        def toast(self, text): pass
+        def hook_screen(self, *args, **kwargs): pass
+        def hook_surface(self, *args, **kwargs): pass
+        def provide_service(self, *args, **kwargs): pass
+        def hook_action(self, *args, **kwargs): pass
+        def shell(self, *args, **kwargs): return ""
+
+
+_CYRILLIC_TO_LATIN = {
+    'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e', 'ё': 'yo', 'ж': 'zh',
+    'з': 'z', 'и': 'i', 'й': 'y', 'к': 'k', 'л': 'l', 'м': 'm', 'н': 'n', 'о': 'o',
+    'п': 'p', 'р': 'r', 'с': 's', 'т': 't', 'у': 'u', 'ф': 'f', 'х': 'kh', 'ц': 'ts',
+    'ч': 'ch', 'ш': 'sh', 'щ': 'shch', 'ъ': '', 'ы': 'y', 'ь': '', 'э': 'e', 'ю': 'yu',
+    'я': 'ya',
+    'А': 'A', 'Б': 'B', 'В': 'V', 'Г': 'G', 'Д': 'D', 'Е': 'E', 'Ё': 'Yo', 'Ж': 'Zh',
+    'З': 'Z', 'И': 'I', 'Й': 'Y', 'К': 'K', 'Л': 'L', 'М': 'M', 'Н': 'N', 'О': 'O',
+    'П': 'P', 'Р': 'R', 'С': 'S', 'Т': 'T', 'У': 'U', 'Ф': 'F', 'Х': 'Kh', 'Ц': 'Ts',
+    'Ч': 'Ch', 'Ш': 'Sh', 'Щ': 'Shch', 'Ъ': '', 'Ы': 'Y', 'Ь': '', 'Э': 'E', 'Ю': 'Yu',
+    'Я': 'Ya',
+}
+
+_MANGLE_LUT = tuple((~int(f"{i:08b}"[::-1], 2)) & 0xFF for i in range(256))
+
+_CANONICAL_BUTTON_MAP = {
+    "power": "Power", "pwr": "Power", "on": "Power", "off": "Power",
+    "vol_up": "Vol_up", "volup": "Vol_up", "volume_up": "Vol_up", "vol+": "Vol_up", "volume+": "Vol_up",
+    "vol_dn": "Vol_dn", "voldn": "Vol_dn", "vol_down": "Vol_dn", "volumedown": "Vol_dn", "vol-": "Vol_dn", "volume-": "Vol_dn",
+    "mute": "Mute", "muting": "Mute",
+    "ch_next": "Ch_next", "chnext": "Ch_next", "channel_up": "Ch_next", "ch_up": "Ch_next", "ch+": "Ch_next",
+    "ch_prev": "Ch_prev", "chprev": "Ch_prev", "channel_down": "Ch_prev", "ch_down": "Ch_prev", "ch-": "Ch_prev",
+    "up": "Up", "arrow_up": "Up", "cursor_up": "Up", "dpad_up": "Up",
+    "down": "Down", "arrow_down": "Down", "cursor_down": "Down", "dpad_down": "Down",
+    "left": "Left", "arrow_left": "Left", "cursor_left": "Left", "dpad_left": "Left",
+    "right": "Right", "arrow_right": "Right", "cursor_right": "Right", "dpad_right": "Right",
+    "ok": "Ok", "enter": "Ok", "select": "Ok", "dpad_center": "Ok",
+    "back": "Back", "return": "Back", "exit": "Exit",
+    "menu": "Menu", "home": "Home", "source": "Input", "input": "Input",
+    "play": "Play", "pause": "Pause", "stop": "Stop",
+    "fast_fo": "Fast_fo", "forward": "Fast_fo", "ff": "Fast_fo",
+    "fast_ba": "Fast_ba", "rewind": "Fast_ba", "rw": "Fast_ba",
+}
+
+_BUTTON_SORT_ORDER = {
+    "Power": 0, "Input": 1, "Mute": 2, "Vol_up": 3, "Vol_dn": 4,
+    "Ch_next": 5, "Ch_prev": 6, "Up": 7, "Left": 8, "Ok": 9,
+    "Right": 10, "Down": 11, "Back": 12, "Exit": 13, "Menu": 14,
+    "Home": 15, "Play": 16, "Pause": 17, "Stop": 18,
+    "Fast_fo": 19, "Fast_ba": 20,
+}
+
+
+def _canonical_btn_name(name):
+    norm = re.sub(r"[^a-zA-Z0-9_+\-]", "", str(name or "")).strip().lower()
+    return _CANONICAL_BUTTON_MAP.get(norm, name)
+
+
+def validate_signal(frequency, pattern):
+    """Reject damaged mark/space sequences instead of dropping durations."""
+    def integer(value):
+        if isinstance(value, bool):
+            raise ValueError("Логическое значение вместо числа")
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str) and re.fullmatch(r"[0-9]+", value.strip()):
+            return int(value)
+        raise ValueError("Ожидалось целое число")
+    frequency = integer(frequency)
+    if not 15000 <= frequency <= 70000:
+        raise ValueError("Частота должна быть 15000–70000 Гц")
+    if not isinstance(pattern, (list, tuple)) or not 1 <= len(pattern) <= 4096:
+        raise ValueError("Нужно 1–4096 импульсов")
+    durations = [integer(value) for value in pattern]
+    if any(value <= 0 for value in durations) or sum(durations) > 2000000:
+        raise ValueError("Импульсы должны быть положительными; сигнал не длиннее 2 с")
+    return frequency, durations
+
+
+class DongleState:
+    DISCONNECTED = "DISCONNECTED"
+    CONNECTING = "CONNECTING"
+    CONNECTED = "CONNECTED"
+    LEARNING = "LEARNING"
+    CLOSING = "CLOSING"
+
+
+class UnknownProtocolEncoder:
+    name = "unknown"
+    supports_learning = False
+
+    def encode(self, freq_hz, pattern):
+        return None
+
+    def post_transmit_delay_ms(self, pattern):
+        return 50
+
+
+class _JavaPriorityQueue:
+    def __init__(self):
+        self._queue = []
+
+    def offer(self, item):
+        self._queue.append(item)
+        self._sift_up(len(self._queue) - 1, item)
+
+    def poll(self):
+        if not self._queue:
+            return None
+        result = self._queue[0]
+        last = self._queue.pop()
+        if self._queue:
+            self._sift_down(0, last)
+        return result
+
+    def _sift_up(self, k, value):
+        while k > 0:
+            parent = (k - 1) >> 1
+            parent_value = self._queue[parent]
+            if value.weight >= parent_value.weight:
+                break
+            self._queue[k] = parent_value
+            k = parent
+        self._queue[k] = value
+
+    def _sift_down(self, k, value):
+        half = len(self._queue) >> 1
+        while k < half:
+            child = (k << 1) + 1
+            child_value = self._queue[child]
+            right = child + 1
+            if right < len(self._queue) and child_value.weight > self._queue[right].weight:
+                child = right
+                child_value = self._queue[child]
+            if value.weight <= child_value.weight:
+                break
+            self._queue[k] = child_value
+            k = child
+        self._queue[k] = value
+
+    def __len__(self):
+        return len(self._queue)
+
+
+class _TiqiaaWireCounters:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._cmd_id = 0
+        self._seq = 0
+
+    def next_cmd_id(self):
+        with self._lock:
+            value = self._cmd_id + 1
+            if value >= 0x10:
+                value = 1
+            self._cmd_id = value
+            return value
+
+    def next_seq(self):
+        with self._lock:
+            self._seq = self._seq + 1 if self._seq < 0x7F else 0x01
+            return self._seq
+
+
+_TIQIAA_COUNTERS = _TiqiaaWireCounters()
+_TIQIAA_FREQ_TABLE = (
+    38000, 37900, 37917, 36000, 40000, 39700, 35750, 36400, 36700, 37000,
+    37700, 38380, 38400, 38462, 38740, 39200, 42000, 43600, 44000, 33000,
+    33500, 34000, 34500, 35000, 40500, 41000, 41500, 42500, 43000, 45000,
+)
+
+
+class LegacyBulkStEncoder:
+    name = "tiqiaa_bulk_st"
+    strict_handshake = False
+    wants_background_reader = True
+    continuous_reader = False
+    inter_frame_delay_ms = 0
+    supports_learning = True
+    _MODE_BYTES = (0x4C, 0x53, 0x52, 0x48, 0x4F, 0x4C, 0x43, 0x56)
+    _MAX_CHUNK = 0x38
+
+    def __init__(self):
+        self._counters = _TIQIAA_COUNTERS
+        self._last_freq_index = 0
+        self._learn_seq = 0
+        self._learn_env = 1
+
+    def _next_e(self):
+        return self._counters.next_cmd_id()
+
+    def _next_f(self):
+        return self._counters.next_seq()
+
+    @staticmethod
+    def _freq_index(freq_hz):
+        try:
+            wanted = int(freq_hz)
+        except Exception:
+            wanted = 38000
+        if wanted < 1000:
+            return 0
+        return min(range(len(_TIQIAA_FREQ_TABLE)), key=lambda i: abs(_TIQIAA_FREQ_TABLE[i] - wanted))
+
+    def _control_frame(self, command_byte=0x53):
+        return bytes([
+            0x02, 0x09, self._next_e(), 0x01, 0x01,
+            0x53, 0x54, self._next_f(), command_byte & 0xFF, 0x45, 0x4E,
+        ])
+
+    def open_handshake(self, connection, in_endpoint, out_endpoint, write_chunk, drain_in, read_reply=None):
+        drain_in(connection, in_endpoint, 80)
+        ok = write_chunk(connection, out_endpoint, self._control_frame(0x53), 250)
+        drain_in(connection, in_endpoint, 250)
+        return bool(ok)
+
+    def encode(self, freq_hz, pattern):
+        if not pattern:
+            return None
+        p = [max(1, int(v)) for v in pattern]
+        if len(p) % 2 == 0:
+            tail = p[-1]
+            p[-1] = tail - 3000 if tail > 3000 else 10
+        freq_index = self._freq_index(freq_hz)
+        self._last_freq_index = freq_index
+        payload = bytearray([0x53, 0x54, self._next_f(), 0x44, freq_index & 0xFF])
+        for i, duration in enumerate(p):
+            units = int(duration) // 16
+            if units <= 0:
+                units = 1
+            is_mark = (i % 2 == 0)
+            while units > 0:
+                chunk = min(units, 0x7F)
+                units -= chunk
+                payload.append(chunk | (0x80 if is_mark else 0x00))
+        payload.extend([0x45, 0x4E])
+        total = max(1, (len(payload) + self._MAX_CHUNK - 1) // self._MAX_CHUNK)
+        if total > 0xFF:
+            raise ValueError("Too many Tiqiaa USB frames")
+        e_value = self._next_e()
+        frames = []
+        for index, offset in enumerate(range(0, len(payload), self._MAX_CHUNK), start=1):
+            chunk = payload[offset:offset + self._MAX_CHUNK]
+            frame = bytearray([0x02, len(chunk) + 3, e_value, total & 0xFF, index & 0xFF])
+            frame.extend(chunk)
+            frames.append(bytes(frame))
+        return frames
+
+    def post_transmit_delay_ms(self, pattern):
+        total_us = sum(max(0, int(v)) for v in pattern)
+        return max(2, total_us // 1000 + 2)
+
+    def _next_learn_seq(self):
+        self._learn_seq = (self._learn_seq + 1) & 0xFF
+        if self._learn_seq == 0:
+            self._learn_seq = 1
+        return self._learn_seq
+
+    def _next_learn_env(self):
+        self._learn_env = self._learn_env + 1 if self._learn_env < 0x0F else 0x01
+        return self._learn_env
+
+    def _wrap_learning_payload(self, payload):
+        payload = bytes(payload)
+        total = max(1, (len(payload) + self._MAX_CHUNK - 1) // self._MAX_CHUNK)
+        env = self._next_learn_env()
+        frames = []
+        for index, offset in enumerate(range(0, len(payload), self._MAX_CHUNK), start=1):
+            chunk = payload[offset:offset + self._MAX_CHUNK]
+            frames.append(bytes([0x02, len(chunk) + 3, env, total & 0xFF, index & 0xFF]) + chunk)
+        return frames
+
+    def _send_learning_mode(self, connection, out_endpoint, write_chunk, mode):
+        if mode < 0 or mode >= len(self._MODE_BYTES):
+            return False
+        payload = bytes([0x53, 0x54, self._next_learn_seq(), self._MODE_BYTES[mode], 0x45, 0x4E])
+        for frame in self._wrap_learning_payload(payload):
+            if not write_chunk(connection, out_endpoint, frame, 400):
+                return False
+        return True
+
+    @staticmethod
+    def _read_learning_aggregate(connection, in_endpoint, timeout_ms):
+        if not jarray or not jbyte:
+            return None
+        size = max(64, int(in_endpoint.getMaxPacketSize()))
+        buf = jarray(jbyte)([0] * size)
+        aggregate = bytearray()
+        deadline = time.monotonic() + max(1, int(timeout_ms)) / 1000.0
+        while time.monotonic() < deadline:
+            remain = max(10, min(50, int((deadline - time.monotonic()) * 1000)))
+            try:
+                n = connection.bulkTransfer(in_endpoint, buf, size, remain)
+            except Exception:
+                n = -1
+            if n <= 0:
+                continue
+            data = bytes(int(x) & 0xFF for x in buf[:n])
+            if len(data) < 5 or data[0] != 0x01:
+                continue
+            chunk_len = (data[1] & 0xFF) - 3
+            if chunk_len < 0 or chunk_len > 0x38 or 5 + chunk_len > len(data):
+                continue
+            if len(aggregate) + chunk_len > 0x4000:
+                aggregate.clear()
+                continue
+            aggregate.extend(data[5:5 + chunk_len])
+            final_chunk = chunk_len < 0x38 or data[3] == data[4]
+            if final_chunk:
+                return bytes(aggregate)
+        return None
+
+    @staticmethod
+    def _parse_learning_frame(frame):
+        raw = bytes(frame or b"")
+        i = 0
+        while i <= len(raw) - 7:
+            if raw[i:i + 2] == b"ST":
+                cmd = raw[i + 3]
+                meta = raw[i + 4]
+                j = i + 5
+                while j < len(raw) - 1:
+                    if raw[j:j + 2] == b"EN":
+                        payload = raw[i + 5:j]
+                        ch = chr(cmd)
+                        if ch == "D":
+                            return {"type": 5, "status": 2, "payload": raw[i:j + 2], "quality": 0, "meta": meta}
+                        type_map = {"L": 0, "S": 1, "R": 2, "H": 3, "O": 4, "C": 6, "V": 7, "B": 8}
+                        if ch in type_map:
+                            return {
+                                "type": type_map[ch],
+                                "status": (meta >> 3) & 0x03,
+                                "payload": payload,
+                                "quality": 0,
+                                "meta": meta,
+                            }
+                        break
+                    j += 1
+            i += 1
+        return None
+
+    def _wait_learning_parsed(self, connection, in_endpoint, timeout_ms, cancel_check):
+        deadline = time.monotonic() + max(1, int(timeout_ms)) / 1000.0
+        while time.monotonic() < deadline and not cancel_check():
+            remain = max(1, min(500, int((deadline - time.monotonic()) * 1000)))
+            frame = self._read_learning_aggregate(connection, in_endpoint, remain)
+            if frame is None:
+                continue
+            parsed = self._parse_learning_frame(frame)
+            if parsed is not None:
+                return parsed
+        return None
+
+    @staticmethod
+    def decode_tiqiaa_preview(frame):
+        frame = bytes(frame or b"")
+        if len(frame) < 8:
+            return []
+        body_end = len(frame) - 2
+        if body_end <= 5:
+            return []
+        out = []
+        current_polarity = bool(frame[5] & 0x80)
+        units = frame[5] & 0x7F
+        for b in frame[6:body_end]:
+            polarity = bool(b & 0x80)
+            value = b & 0x7F
+            if polarity == current_polarity:
+                units += value
+            else:
+                if units > 0:
+                    out.append(max(1, units * 16))
+                current_polarity = polarity
+                units = value
+        if units > 0:
+            out.append(max(1, units * 16))
+        if out and not bool(frame[5] & 0x80):
+            out = out[1:]
+        return out
+
+    def learn_signal(self, connection, in_endpoint, out_endpoint, write_chunk, drain_in, cancel_check, timeout_s=8.0):
+        drain_in(connection, in_endpoint, 100)
+        current_state = 0
+        if not self._send_learning_mode(connection, out_endpoint, write_chunk, 2):
+            return None
+        ack = self._wait_learning_parsed(connection, in_endpoint, 500, cancel_check)
+        if ack is None:
+            return None
+        current_state = int(ack.get("status", 0))
+        if current_state != 2:
+            return None
+        deadline = time.monotonic() + max(1.0, float(timeout_s))
+        timed_out = False
+        try:
+            while time.monotonic() < deadline and not cancel_check():
+                parsed = self._wait_learning_parsed(connection, in_endpoint, 750, cancel_check)
+                if parsed is None:
+                    continue
+                current_state = int(parsed.get("status", current_state))
+                if parsed.get("type") == 5 and parsed.get("payload"):
+                    timings = self.decode_tiqiaa_preview(parsed["payload"])
+                    if timings:
+                        meta = int(parsed.get("meta", 0))
+                        freq = _TIQIAA_FREQ_TABLE[meta] if meta < len(_TIQIAA_FREQ_TABLE) else 38000
+                        return {"pattern": timings, "frequency": freq}
+                    return None
+            timed_out = (current_state == 2)
+            return None
+        finally:
+            if (cancel_check() or timed_out) and current_state == 2:
+                if self._send_learning_mode(connection, out_endpoint, write_chunk, 6):
+                    self._wait_learning_parsed(connection, in_endpoint, 350, lambda: False)
+            if current_state != 0:
+                if self._send_learning_mode(connection, out_endpoint, write_chunk, 0):
+                    self._wait_learning_parsed(connection, in_endpoint, 350, lambda: False)
+
+
+class ElkSmartBulkEncoder:
+    name = "elksmart_bulk"
+    strict_handshake = True
+    wants_background_reader = False
+    inter_frame_delay_ms = 2
+    supports_learning = True
+    _IDENT_PREFIX = 0xFC
+    _TOKEN_ACK = bytes([0xFA] * 4)
+    _TYPE_D552 = (0x70, 0x01)
+    _TYPE_D226 = (0x02, 0xAA)
+    _ODD_PATTERN_TRAILING_GAP_US = 10000
+
+    def __init__(self):
+        self._subtype = None
+        self.compat_mode = "android"
+
+    def can_support_packet_size(self, packet_size):
+        return packet_size >= 63
+
+    def _identify_exchange(self, connection, in_endpoint, out_endpoint, write_chunk, drain_in, read_reply=None, send_ack=False):
+        identify = bytes([self._IDENT_PREFIX] * 4)
+        for attempt in range(3):
+            drain_in(connection, in_endpoint, 80)
+            if not write_chunk(connection, out_endpoint, identify, 250):
+                continue
+            stream = bytearray()
+            deadline = time.monotonic() + 0.50
+            while time.monotonic() < deadline and len(stream) < 64:
+                if read_reply is not None:
+                    part = read_reply(connection, in_endpoint, 160)
+                    if part:
+                        stream.extend(part)
+                    else:
+                        continue
+                else:
+                    if not jarray or not jbyte:
+                        return False
+                    size = max(64, int(in_endpoint.getMaxPacketSize()))
+                    resp = jarray(jbyte)([0] * size)
+                    try:
+                        n = connection.bulkTransfer(in_endpoint, resp, size, 160)
+                    except Exception:
+                        n = -1
+                    if n > 0:
+                        stream.extend(bytes(int(x) & 0xFF for x in resp[:n]))
+                    else:
+                        continue
+                subtype = self._identify_subtype_bytes(stream)
+                if subtype is not None:
+                    self._subtype = subtype
+                    if send_ack:
+                        if not write_chunk(connection, out_endpoint, self._TOKEN_ACK, 300):
+                            return False
+                    return True
+            if attempt < 2:
+                time.sleep(0.04)
+        return False
+
+    def open_handshake(self, connection, in_endpoint, out_endpoint, write_chunk, drain_in, read_reply=None):
+        return self._identify_exchange(
+            connection, in_endpoint, out_endpoint, write_chunk, drain_in, read_reply, send_ack=False
+        )
+
+    def authorize_for_learning(self, connection, in_endpoint, out_endpoint, write_chunk, drain_in, read_reply=None):
+        return self._identify_exchange(
+            connection, in_endpoint, out_endpoint, write_chunk, drain_in, read_reply, send_ack=True
+        )
+
+    def _identify_subtype_bytes(self, data):
+        raw = bytes(data or b"")
+        prefix = bytes([self._IDENT_PREFIX] * 4)
+        idx = raw.find(prefix)
+        if idx < 0 or idx + 6 > len(raw):
+            return None
+        type_pair = (raw[idx + 4], raw[idx + 5])
+        if type_pair == self._TYPE_D552:
+            return "D552"
+        if type_pair == self._TYPE_D226:
+            return "D226"
+        return None
+
+    def encode(self, freq_hz, pattern):
+        pulses = self._to_pulses(pattern)
+        raw = self._compress_pulses(pulses)
+        payload = self._encode_d226_payload(raw) if (self._subtype or "D552") == "D226" else raw
+        if len(payload) > 0xFFFF:
+            raise ValueError(f"ElkSmart payload too large: {len(payload)} bytes")
+        f = int(freq_hz) + 0x7FFFF
+        msg = bytearray([0xFF, 0xFF, 0xFF, 0xFF])
+        msg.append(_MANGLE_LUT[(f >> 8) & 0xFF])
+        msg.append(_MANGLE_LUT[(f >> 16) & 0xFF])
+        msg.append(_MANGLE_LUT[f & 0xFF])
+        msg.append(_MANGLE_LUT[(len(payload) >> 8) & 0xFF])
+        msg.append(_MANGLE_LUT[len(payload) & 0xFF])
+        msg.extend(payload)
+        frames = []
+        offset = 0
+        while offset < len(msg):
+            chunk = min(62, len(msg) - offset)
+            frame = bytearray(msg[offset:offset + chunk])
+            if chunk == 62:
+                frame.append(self._checksum62(frame))
+            frames.append(bytes(frame))
+            offset += chunk
+        return frames
+
+    def post_transmit_delay_ms(self, pattern):
+        total_us = sum(max(0, int(v)) for v in pattern)
+        return max(80, int((total_us + 500) / 1000) + 25)
+
+    def drain_after_transmit(self, connection, in_endpoint, drain_in):
+        drain_in(connection, in_endpoint, 120)
+
+    def _to_pulses(self, pattern):
+        pulses = []
+        for i in range(0, len(pattern), 2):
+            on_us = max(0, int(pattern[i]))
+            off_us = max(0, int(pattern[i + 1])) if i + 1 < len(pattern) else self._ODD_PATTERN_TRAILING_GAP_US
+            pulses.append((on_us, off_us))
+        return pulses
+
+    def _compress_pulses(self, pulses):
+        if not pulses:
+            return bytes()
+        freq = {}
+        for pulse in pulses:
+            freq[pulse] = freq.get(pulse, 0) + 1
+        ranked = sorted(freq.items(), key=lambda item: item[1], reverse=True)
+        p1 = ranked[0][0]
+        p2 = ranked[1][0] if len(ranked) > 1 else p1
+        if self.compat_mode == "ocrustar_v15":
+            ordered = sorted((p1, p2), key=lambda p: p[0] + p[1])
+            pair0, pair1 = ordered[0], ordered[1]
+        else:
+            pair0, pair1 = p1, p2
+        out = bytearray()
+        self._compress_value_us(pair1[0], out)
+        self._compress_value_us(pair1[1], out)
+        self._compress_value_us(pair0[0], out)
+        self._compress_value_us(pair0[1], out)
+        out.extend([0xFF, 0xFF, 0xFF])
+        for pulse in pulses:
+            if pulse == pair0:
+                out.append(0x00)
+            elif pulse == pair1:
+                out.append(0x01)
+            else:
+                self._compress_value_us(pulse[0], out)
+                self._compress_value_us(pulse[1], out)
+        return bytes(out)
+
+    def _encode_d226_payload(self, raw):
+        if not raw:
+            return raw
+        freq = [0] * 256
+        for b in raw:
+            freq[int(b) & 0xFF] += 1
+
+        class Node:
+            def __init__(self, weight, symbol=None, left=None, right=None):
+                self.weight = weight
+                self.symbol = symbol
+                self.left = left
+                self.right = right
+
+        pq = _JavaPriorityQueue()
+        for symbol in range(256):
+            if freq[symbol] > 0:
+                pq.offer(Node(weight=freq[symbol], symbol=symbol))
+        if len(pq) == 0:
+            return raw
+        while len(pq) > 1:
+            left = pq.poll()
+            right = pq.poll()
+            pq.offer(Node(weight=left.weight + right.weight, left=left, right=right))
+        codes = []
+
+        def walk(node, path=""):
+            if node.symbol is not None:
+                codes.append((node.symbol, node.weight, path or "0"))
+                return
+            walk(node.left, path + "0")
+            walk(node.right, path + "1")
+
+        walk(pq.poll(), "")
+        codes.sort(key=lambda entry: entry[0])
+        code_map = {sym: bits for sym, _, bits in codes}
+        out = bytearray([(len(codes) >> 8) & 0xFF, len(codes) & 0xFF])
+        for sym, weight, _ in codes:
+            if weight > 0xFFFF:
+                raise ValueError("Huffman weight overflow")
+            out.extend([sym & 0xFF, (weight >> 8) & 0xFF, weight & 0xFF])
+        bitstring = "".join(code_map[int(b) & 0xFF] for b in raw)
+        remainder = len(bitstring) % 8
+        pad_count = (8 - remainder) % 8
+        if pad_count:
+            bitstring += "0" * pad_count
+        tail_meta = pad_count if self.compat_mode == "ocrustar_v15" else remainder
+        out.append(tail_meta & 0xFF)
+        for i in range(0, len(bitstring), 8):
+            out.append(int(bitstring[i:i + 8], 2) & 0xFF)
+        return bytes(out)
+
+    def _compress_value_us(self, value_us, out):
+        value_us = max(0, int(value_us))
+        if self.compat_mode == "ocrustar_v15":
+            if value_us <= 1:
+                v = value_us
+            else:
+                v = int(value_us / 16.0 + 0.5)
+        else:
+            if value_us <= 2032:
+                q = value_us if value_us in (0, 1) else int(value_us / 16.0 + 0.5)
+                out.append(q & 0xFF)
+                return
+            v = value_us
+        while True:
+            b = v & 0x7F
+            v >>= 7
+            if v:
+                b |= 0x80
+            if (b & 0xFF) == 0xFF:
+                b = 0xFE
+            out.append(b & 0xFF)
+            if not v:
+                break
+
+    def _checksum62(self, buf):
+        total = sum(int(buf[i]) & 0xFF for i in range(62))
+        x = (total & 0xF0) | ((total >> 8) & 0x0F)
+        return _MANGLE_LUT[x & 0xFF]
+
+    def decode_learned_signal(self, raw_bytes):
+        timings = []
+        carry = 0
+        for b in raw_bytes:
+            v = int(b) & 0xFF
+            if v < 0xFF:
+                timings.append(v * 16 + carry)
+                carry = 0
+            else:
+                carry += 0xFF0
+        return timings
+
+
+class AudioIrTransmitter:
+    _lock = threading.Lock()
+
+    @staticmethod
+    def transmit(frequency_hz, pattern_us, stereo=True):
+        try:
+            frequency_hz, pattern_us = validate_signal(frequency_hz, pattern_us)
+        except ValueError:
+            return False
+        return AudioIrTransmitter._play_safe(frequency_hz, pattern_us, bool(stereo))
+
+    @staticmethod
+    def _play_safe(frequency_hz, pattern_us, stereo):
+        with AudioIrTransmitter._lock:
+            for sample_rate in (96000, 48000):
+                if AudioIrTransmitter._play(frequency_hz, pattern_us, stereo, sample_rate):
+                    return True
+            return False
+
+    @staticmethod
+    def build_pcm(frequency_hz, pattern_us, stereo=True, sample_rate=48000):
+        # Antiparallel LED adapters emit on both halves of the audio waveform.
+        tone = frequency_hz / 2.0
+        if tone >= sample_rate / 2.0:
+            raise ValueError("Частота вне полосы аудиовыхода")
+        pcm = []
+        elapsed_us = 0
+        emitted = 0
+        increment = 2.0 * math.pi * tone / sample_rate
+        for index, duration in enumerate(pattern_us):
+            elapsed_us += duration
+            target = int(round(elapsed_us * sample_rate / 1000000.0))
+            is_mark = (index % 2 == 0)
+            for frame in range(target - emitted):
+                value = int(32000 * math.sin((emitted + frame) * increment)) if is_mark else 0
+                pcm.append(value)
+                if stereo:
+                    pcm.append(-value)
+            emitted = target
+        return pcm
+
+    @staticmethod
+    def _play(frequency_hz, pattern_us, stereo, sample_rate):
+        if not jclass or not jarray or not jshort:
+            return False
+        track = None
+        try:
+            AudioTrack = jclass("android.media.AudioTrack")
+            AudioFormat = jclass("android.media.AudioFormat")
+            AudioManager = jclass("android.media.AudioManager")
+            AudioAttributesBuilder = jclass("android.media.AudioAttributes$Builder")
+            AudioAttributes = jclass("android.media.AudioAttributes")
+            AudioFormatBuilder = jclass("android.media.AudioFormat$Builder")
+            pcm = AudioIrTransmitter.build_pcm(frequency_hz, pattern_us, stereo, sample_rate)
+
+            if not pcm:
+                return False
+            short_arr = jarray(jshort)(pcm)
+            channel_mask = AudioFormat.CHANNEL_OUT_STEREO if stereo else AudioFormat.CHANNEL_OUT_MONO
+            attrs = (AudioAttributesBuilder()
+                     .setUsage(AudioAttributes.USAGE_MEDIA)
+                     .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                     .build())
+            fmt = (AudioFormatBuilder()
+                   .setSampleRate(sample_rate)
+                   .setChannelMask(channel_mask)
+                   .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                   .build())
+            track = AudioTrack(attrs, fmt, len(pcm) * 2, AudioTrack.MODE_STATIC,
+                               AudioManager.AUDIO_SESSION_ID_GENERATE)
+            if track.getState() != AudioTrack.STATE_INITIALIZED:
+                return False
+            if track.write(short_arr, 0, len(pcm), AudioTrack.WRITE_BLOCKING) != len(pcm):
+                return False
+            track.play()
+            time.sleep((sum(pattern_us) / 1000000.0) + 0.05)
+            track.stop()
+            return True
+        except Exception:
+            return False
+        finally:
+            if track is not None:
+                try:
+                    track.release()
+                except Exception:
+                    pass
+
+
+class IrProtocolEngine:
+    @staticmethod
+    def encode_nec(hex_code, extended=False, carrier_hz=38222, repeat_full_frame=False):
+        cleaned = str(hex_code).replace("0x", "").strip()
+        val = int(cleaned, 16)
+        if len(cleaned) <= 4 and not extended:
+            addr = (val >> 8) & 0xFF
+            cmd = val & 0xFF
+            full_val = (addr << 24) | (((~addr) & 0xFF) << 16) | (cmd << 8) | ((~cmd) & 0xFF)
+        elif len(cleaned) <= 6 and extended:
+            addr = (val >> 8) & 0xFFFF
+            cmd = val & 0xFF
+            full_val = (addr << 16) | (cmd << 8) | ((~cmd) & 0xFF)
+        else:
+            full_val = val & 0xFFFFFFFF
+        bits = f"{full_val:032b}"
+        seq = [9000, 4500]
+        for b in bits:
+            seq.append(562)
+            seq.append(1687 if b == '1' else 562)
+        seq.append(562)
+        used = sum(seq)
+        seq.append(max(1, 108800 - used))
+        if repeat_full_frame:
+            seq.extend([9000, 4500])
+            for b in bits:
+                seq.append(562)
+                seq.append(1687 if b == '1' else 562)
+            seq.extend([562, 96000])
+        else:
+            seq.extend([9000, 2250, 562, 96000])
+        return carrier_hz, seq
+
+    @staticmethod
+    def encode_sirc(command, address, bits_count=12):
+        cmd = int(command) & 0x7F
+        addr = int(address)
+        cmd_bits = [(cmd >> i) & 1 for i in range(7)]
+        addr_len = bits_count - 7
+        addr_bits = [(addr >> i) & 1 for i in range(addr_len)]
+        payload_bits = cmd_bits + addr_bits
+        frames = []
+        for _ in range(3):
+            p = [2400, 600]
+            for b in payload_bits:
+                p.append(1200 if b else 600)
+                p.append(600)
+            p[-1] = max(1, 45000 - sum(p[:-1]))
+            frames.extend(p)
+        return 40000, frames
+
+    @staticmethod
+    def encode_rc5(address, command, toggle=0):
+        addr = int(address) & 0x1F
+        cmd = int(command) & 0x7F
+        field = 0 if cmd >= 0x40 else 1
+        cmd_low = cmd & 0x3F
+        val = (1 << 13) | (field << 12) | ((toggle & 1) << 11) | (addr << 6) | cmd_low
+        half_bits = []
+        for i in range(13, -1, -1):
+            bit = (val >> i) & 1
+            half_bits.extend([0, 1] if bit else [1, 0])
+        pulses = []
+        curr = half_bits[0]
+        length = 889
+        for hb in half_bits[1:]:
+            if hb == curr:
+                length += 889
+            else:
+                pulses.append(length)
+                curr = hb
+                length = 889
+        pulses.append(length)
+        if half_bits[0] == 0:
+            pulses = pulses[1:]
+        used = sum(pulses)
+        gap = max(1, 114000 - used)
+        if len(pulses) % 2:
+            pulses.append(gap)
+        else:
+            pulses[-1] += gap
+        return 36000, pulses
+
+    @staticmethod
+    def encode_rc6(address, command, toggle=0):
+        t = 444
+        halves = [1] * 6 + [0] * 2
+
+        def add_bit(bit, double=False):
+            pair = [1, 0] if bit else [0, 1]
+            width = 2 if double else 1
+            halves.extend([pair[0]] * width + [pair[1]] * width)
+
+        add_bit(1)
+        for _ in range(3):
+            add_bit(0)
+        add_bit(toggle & 1, double=True)
+        payload = ((int(address) & 0xFF) << 8) | (int(command) & 0xFF)
+        for i in range(15, -1, -1):
+            add_bit((payload >> i) & 1)
+        pulses = []
+        cur, n = halves[0], 1
+        for h in halves[1:]:
+            if h == cur:
+                n += 1
+            else:
+                pulses.append(n * t)
+                cur, n = h, 1
+        pulses.append(n * t)
+        if halves[0] == 0:
+            pulses = pulses[1:]
+        gap = max(1, 108000 - sum(pulses))
+        if len(pulses) % 2:
+            pulses.append(gap)
+        else:
+            pulses[-1] += gap
+        return 36000, pulses
+
+    @staticmethod
+    def encode_recs80(address, command, extended=False, carrier_hz=38000):
+        addr = int(address) & (0x0F if extended else 0x07)
+        cmd = int(command) & (0x3F if extended else 0x1F)
+        val = (1 << (10 if extended else 8)) | (addr << (6 if extended else 5)) | cmd
+        bits_count = 11 if extended else 9
+        p = [158, 3500]
+        space_0 = 4800 if extended else 5060
+        space_1 = 7200 if extended else 7590
+        for i in range(bits_count - 1, -1, -1):
+            b = (val >> i) & 1
+            p.append(158)
+            p.append(space_1 if b else space_0)
+        p.extend([158, 45000])
+        return carrier_hz, p
+
+    @staticmethod
+    def encode_rca(address, command):
+        addr = int(address) & 0x0F
+        cmd = int(command) & 0xFF
+        val = (addr << 20) | (cmd << 12) | (((~addr) & 0x0F) << 8) | ((~cmd) & 0xFF)
+        p = [4000, 4000]
+        for i in range(23, -1, -1):
+            b = (val >> i) & 1
+            p.append(500)
+            p.append(2000 if b else 1000)
+        p.extend([500, 20000])
+        return 56000, p
+
+    @staticmethod
+    def encode_pioneer(hex_code):
+        val = int(str(hex_code).replace("0x", ""), 16) & 0xFFFFFFFF
+        bits = f"{val:032b}"
+        p = [8500, 4250]
+        for b in bits:
+            p.append(530)
+            p.append(1600 if b == '1' else 530)
+        p.extend([530, 25000])
+        return 40000, p
+
+    @staticmethod
+    def encode_proton(address, command):
+        addr = int(address) & 0xFF
+        cmd = int(command) & 0xFF
+        val = (addr << 8) | cmd
+        bits = f"{val:016b}"
+        p = [8000, 4000]
+        for b in bits:
+            p.append(500)
+            p.append(1500 if b == '1' else 500)
+        p.extend([500, 40000])
+        return 38000, p
+
+    @staticmethod
+    def encode_f12_relaxed(address, command):
+        addr = int(address) & 0x0F
+        cmd = int(command) & 0xFF
+        val = (addr << 8) | cmd
+        bits = f"{val:012b}"
+        p = [3200, 1600]
+        for b in bits:
+            p.append(400)
+            p.append(1200 if b == '1' else 400)
+        p.extend([400, 20000])
+        return 38000, p
+
+    @staticmethod
+    def encode_nrc17(address, command, subaddress=0):
+        val = ((int(address) & 0x0F) << 12) | ((int(subaddress) & 0x0F) << 8) | (int(command) & 0xFF)
+        p = [500, 2500]
+        for i in range(16, -1, -1):
+            b = (val >> i) & 1 if i < 16 else 1
+            if b:
+                p.extend([500, 500])
+            else:
+                p.extend([500, 1000])
+        p.extend([500, 30000])
+        return 38000, p
+
+    @staticmethod
+    def encode_rcc(address, command, is_2026=False):
+        addr = int(address) & 0xFF
+        cmd = int(command) & 0xFF
+        val = (addr << 8) | cmd
+        bits = f"{val:016b}"
+        header = [2000, 1000] if is_2026 else [1350, 450]
+        mark = 400 if is_2026 else 450
+        space_0 = 400 if is_2026 else 450
+        space_1 = 800 if is_2026 else 900
+        p = list(header)
+        for b in bits:
+            p.append(mark)
+            p.append(space_1 if b == '1' else space_0)
+        p.extend([mark, 25000])
+        return 38000, p
+
+    @staticmethod
+    def encode_thomson7(address, command):
+        val = ((int(address) & 0x0F) << 7) | (int(command) & 0x7F)
+        bits = f"{val:011b}"
+        p = [4500, 4500]
+        for b in bits:
+            p.append(500)
+            p.append(4500 if b == '1' else 2000)
+        p.extend([500, 35000])
+        return 38000, p
+
+    @staticmethod
+    def encode_xsat(address, command):
+        val = ((int(address) & 0xFF) << 8) | (int(command) & 0xFF)
+        bits = f"{val:016b}"
+        p = [8000, 4000]
+        for b in bits:
+            p.append(500)
+            p.append(2000 if b == '1' else 1000)
+        p.extend([500, 30000])
+        return 38000, p
+
+    @staticmethod
+    def encode_samsung32(address, command):
+        addr = int(address) & 0xFF
+        cmd = int(command) & 0xFF
+        bytes_to_send = [addr, addr, cmd, (~cmd) & 0xFF]
+        bits = []
+        for b in bytes_to_send:
+            for i in range(8):
+                bits.append((b >> i) & 1)
+        p = [4500, 4500]
+        for b in bits:
+            p.append(560)
+            p.append(1690 if b else 560)
+        p.extend([560, 40000])
+        return 38000, p
+
+    @staticmethod
+    def encode_samsung36(hex_code):
+        val = int(str(hex_code).replace("0x", ""), 16)
+        bits = f"{val:036b}"
+        p = [4500, 4500]
+        for b in bits[:16]:
+            p.append(500)
+            p.append(1500 if b == '1' else 500)
+        p.extend([500, 4500])
+        for b in bits[16:]:
+            p.append(500)
+            p.append(1500 if b == '1' else 500)
+        p.extend([500, 59000])
+        return 38000, p
+
+    @staticmethod
+    def encode_denon(hex_code):
+        val = int(str(hex_code).replace("0x", ""), 16) & 0x1FFF
+        frames = []
+        for invert in (False, True):
+            cur = (val ^ 0x03FF) if invert else val
+            bits = f"{cur:013b}"
+            p = []
+            for b in bits:
+                p.append(280)
+                p.append(1720 if b == '1' else 860)
+            p.extend([280, 43560])
+            frames.extend(p)
+        return 38000, frames
+
+    @staticmethod
+    def encode_sharp(hex_code):
+        val = int(str(hex_code).replace("0x", ""), 16) & 0x1FFF
+        frames = []
+        for invert in (False, True):
+            cur = (val ^ 0x03FF) if invert else val
+            bits = f"{cur:013b}"
+            p = []
+            for b in bits:
+                p.append(280)
+                p.append(1720 if b == '1' else 860)
+            p.extend([280, 40000])
+            frames.extend(p)
+        return 38000, frames
+
+    @staticmethod
+    def encode_jvc(hex_code):
+        val = int(str(hex_code).replace("0x", ""), 16) & 0xFFFF
+        bits = f"{val:016b}"
+        p = [8400, 4200]
+        for b in bits:
+            p.append(525)
+            p.append(1575 if b == '1' else 525)
+        p.extend([525, 21000])
+        return 38000, p
+
+    @staticmethod
+    def encode_kaseikyo(vendor_hex, data_hex):
+        # Legacy Panasonic API: the complete 16+32-bit MSB-first hex frame.
+        vendor = re.fullmatch(r"(?:0[xX])?([0-9a-fA-F]{4})", str(vendor_hex).strip())
+        data = re.fullmatch(r"(?:0[xX])?([0-9a-fA-F]{8})", str(data_hex).strip())
+        if not vendor or not data:
+            raise ValueError("Panasonic: нужны 4 hex символа производителя и 8 символов данных")
+        raw = bytes.fromhex(vendor[1] + data[1])
+        wire = [int(f"{value:08b}"[::-1], 2) for value in raw]
+        return IrProtocolEngine._kaseikyo_pattern(wire, 37000, 163296, 74736)
+
+    @staticmethod
+    def encode_kaseikyo_message(address, command):
+        # Flipper parsed fields: id2/vendor16/genre4/genre4 and command10.
+        if not 0 <= address < (1 << 26) or not 0 <= command < (1 << 10):
+            raise ValueError("Kaseikyo: адрес 26 бит, команда 10 бит")
+        vendor = (address >> 8) & 0xFFFF
+        b0, b1 = vendor & 255, vendor >> 8
+        parity = b0 ^ b1
+        b2 = ((parity & 15) ^ (parity >> 4)) | (((address >> 4) & 15) << 4)
+        b3 = (address & 15) | ((command & 15) << 4)
+        b4 = (((address >> 24) & 3) << 6) | (command >> 4)
+        return IrProtocolEngine._kaseikyo_pattern([b0, b1, b2, b3, b4, b2 ^ b3 ^ b4], 38000, 130000)
+
+    @staticmethod
+    def _kaseikyo_pattern(bytes_to_send, frequency, period, minimum_gap=1):
+        vendor_parity = bytes_to_send[0] ^ bytes_to_send[1]
+        vendor_parity = (vendor_parity & 15) ^ (vendor_parity >> 4)
+        if (bytes_to_send[2] & 15) != vendor_parity or bytes_to_send[5] != (bytes_to_send[2] ^ bytes_to_send[3] ^ bytes_to_send[4]):
+            raise ValueError("Kaseikyo/Panasonic: неверная контрольная сумма")
+        p = [3456, 1728]
+        for b in bytes_to_send:
+            for i in range(8):
+                bit = (b >> i) & 1
+                p.append(432)
+                p.append(1296 if bit else 432)
+        p.append(432)
+        p.append(max(1, minimum_gap, period - sum(p)))
+        return frequency, p
+
+    @staticmethod
+    def detect_protocol(pattern, freq_hz=38000):
+        if not pattern or len(pattern) < 6:
+            return "Raw signal", 0
+        p0, p1 = pattern[0], pattern[1]
+        length = len(pattern)
+        if 8000 <= p0 <= 9000 and 3800 <= p1 <= 4600 and length <= 40:
+            return "JVC", 88
+        if 8200 <= p0 <= 8800 and 4000 <= p1 <= 4500 and freq_hz >= 39500:
+            return "Pioneer", 88
+        if 8000 <= p0 <= 10000 and 4000 <= p1 <= 5000:
+            return "NEC", 95
+        if 3800 <= p0 <= 4300 and 3800 <= p1 <= 4300 and (freq_hz >= 50000 or length <= 54):
+            return "RCA", 88
+        if 4000 <= p0 <= 5000 and 4000 <= p1 <= 5000:
+            return "Samsung32", 90
+        if 2000 <= p0 <= 2800 and 400 <= p1 <= 800:
+            return "SONY12", 95
+        if 3000 <= p0 <= 4000 and 1500 <= p1 <= 2000:
+            return "Kaseikyo", 90
+        if 2400 <= p0 <= 2900 and 700 <= p1 <= 1000:
+            return "RC6", 85
+        units = [v for v in pattern if 700 <= v <= 1050]
+        if len(units) >= length * 0.4:
+            return "RC5", 80
+        return "Raw signal", 50
+
+
+class ProntoHexDecoder:
+    @staticmethod
+    def decode(pronto_str):
+        cleaned = str(pronto_str).strip()
+        tokens = cleaned.split()
+        if len(tokens) < 6 or any(not re.fullmatch(r"[0-9a-fA-F]{4}", token) for token in tokens):
+            return None
+        words = []
+        for t in tokens:
+            try:
+                words.append(int(t, 16))
+            except ValueError:
+                return None
+        code_type = words[0]
+        freq_word = words[1]
+        if code_type != 0x0000 or freq_word <= 0:
+            return None
+        carrier_period_us = freq_word * 0.241246
+        if carrier_period_us <= 0:
+            return None
+        freq_hz = int(round(1000000.0 / carrier_period_us))
+        seq1_len = words[2]
+        seq2_len = words[3]
+        total_words = 4 + (seq1_len + seq2_len) * 2
+        if len(words) != total_words or any(word == 0 for word in words[4:]):
+            return None
+        words_pool = words[4:total_words]
+        once_words = words_pool[:seq1_len * 2]
+        repeat_words = words_pool[seq1_len * 2:seq1_len * 2 + seq2_len * 2]
+        target_words = once_words + repeat_words
+        durations = []
+        for w in target_words:
+            us = int(round(w * carrier_period_us))
+            durations.append(max(1, us))
+        try:
+            return validate_signal(freq_hz, durations)
+        except ValueError:
+            return None
+
+
+class MultiFormatRemoteParser:
+    MAX_TEXT_BYTES = 2000000
+
+    @staticmethod
+    def analyze(text):
+        """Pure preview: accepted entries plus explicit per-entry warnings."""
+        text = str(text or "").strip()
+        result = {"format": "Неизвестный", "signals": [], "warnings": []}
+        if not text:
+            return result
+        if len(text.encode("utf-8")) > MultiFormatRemoteParser.MAX_TEXT_BYTES:
+            result["warnings"].append("Файл больше 2 МБ")
+            return result
+
+        def add(name, frequency, pattern, metadata=None):
+            try:
+                frequency, pattern = validate_signal(frequency, pattern)
+                entry = {"name": str(name or "Signal")[:120], "frequency": frequency, "pattern": pattern,
+                         "favorite": False, "group": ""}
+                if metadata:
+                    entry["favorite"] = metadata.get("favorite") is True
+                    entry["group"] = str(metadata.get("group", ""))[:120]
+                    if metadata.get("created"):
+                        entry["created"] = str(metadata["created"])[:80]
+                result["signals"].append(entry)
+            except (ValueError, TypeError) as error:
+                result["warnings"].append(f"{name}: {error}")
+
+        try:
+            if text.startswith(("{", "[")):
+                result["format"] = "JSON"
+                data = json.loads(text)
+                if isinstance(data, dict) and "signals" in data:
+                    if data.get("schema", "ir_transceiver") != "ir_transceiver" or data.get("version", 1) != 1:
+                        raise ValueError("Неподдерживаемая версия резервной копии")
+                    data = data["signals"]
+                items = data if isinstance(data, list) else [data]
+                for index, item in enumerate(items):
+                    if not isinstance(item, dict) or "pattern" not in item:
+                        result["warnings"].append(f"JSON #{index + 1}: нет массива pattern")
+                        continue
+                    add(item.get("name", "JSON_Signal"), item.get("frequency", 38000), item["pattern"], item)
+            elif text.lower().startswith("<"):
+                result["format"] = "IRPLUS XML"
+                if "<!doctype" in text.lower() or "<!entity" in text.lower():
+                    raise ValueError("XML с DTD/сущностями не поддерживается")
+                root = ET.fromstring(text)
+                if root.tag.lower() != "irplus":
+                    raise ValueError("Ожидался корневой элемент irplus")
+                for device in root.findall("device"):
+                    fmt = device.get("format", "").upper()
+                    for button in device.findall("button"):
+                        name = button.get("label") or button.get("alt") or "IRPLUS_Btn"
+                        payload = (button.text or "").strip()
+                        pronto = ProntoHexDecoder.decode(payload)
+                        if pronto:
+                            add(name, *pronto, {"group": device.get("model", "")})
+                        elif fmt == "RAW":
+                            try:
+                                pattern = [int(token) for token in payload.replace(",", " ").split()]
+                                add(name, int(device.get("frequency", "38000")), pattern,
+                                    {"group": device.get("model", "")})
+                            except ValueError as error:
+                                result["warnings"].append(f"{name}: {error}")
+                        else:
+                            result["warnings"].append(f"{name}: IRPLUS {fmt or 'без формата'} не поддерживается; нужен RAW или Pronto")
+            elif "begin remote" in text.lower():
+                result["format"] = "LIRC"
+                MultiFormatRemoteParser._parse_lirc(text, add, result["warnings"])
+            elif re.match(r"^name\s*:", text, re.M) or "Filetype: IR signals file" in text:
+                result["format"] = "Flipper .ir"
+                blocks = re.split(r"(?m)^\s*name\s*:", text)[1:]
+                for block in blocks:
+                    signal = {}
+                    for line in ("name:" + block).splitlines():
+                        if ":" in line and not line.lstrip().startswith("#"):
+                            key, value = line.split(":", 1)
+                            signal[key.strip().lower()] = value.strip()
+                    name = signal.get("name", "Signal")
+                    try:
+                        if signal.get("type", "").lower() == "raw":
+                            add(name, signal.get("frequency", "38000"),
+                                [int(token) for token in signal.get("data", "").replace(",", " ").split()])
+                        elif signal.get("type", "").lower() == "parsed":
+                            addr = MultiFormatRemoteParser._parse_flipper_hex(signal.get("address", ""))
+                            cmd = MultiFormatRemoteParser._parse_flipper_hex(signal.get("command", ""))
+                            proto = signal.get("protocol", "").upper().replace("_", "")
+                            if proto in ("NEC", "NEC2", "NECEXT", "NECX1", "NECX2"):
+                                extended = proto in ("NECEXT", "NECX1", "NECX2")
+                                command_limit = 65535 if proto == "NECEXT" else 255
+                                if addr > (65535 if extended else 255) or cmd > command_limit:
+                                    raise ValueError("Адрес/команда NEC вне диапазона")
+                                reverse = lambda byte: int(f"{byte:08b}"[::-1], 2)
+                                wire_addr = (reverse(addr & 255) << 8) | (reverse((addr >> 8) & 255) if extended else reverse((~addr) & 255))
+                                wire_cmd = (reverse(cmd & 255) << 8) | reverse((cmd >> 8) & 255) if proto == "NECEXT" else (reverse(cmd) << 8) | reverse((~cmd) & 255)
+                                code = (wire_addr << 16) | wire_cmd
+                                frequency, pattern = IrProtocolEngine.encode_nec(f"{code:08X}",
+                                    repeat_full_frame=proto in ("NEC2", "NECX2"))
+                                add(name, frequency, pattern)
+                            else:
+                                frequency, pattern = MultiFormatRemoteParser._encode_flipper_parsed(proto, addr, cmd)
+                                add(name, frequency, pattern)
+                        else:
+                            raise ValueError("Неизвестный type")
+                    except (ValueError, TypeError) as error:
+                        result["warnings"].append(f"{name}: {error}")
+            else:
+                result["format"] = "Pronto Hex"
+                pronto = ProntoHexDecoder.decode(text)
+                if pronto is None:
+                    raise ValueError("Нужен полный модулированный Pronto 0000 или поддерживаемый файл")
+                add("Pronto_Signal", *pronto)
+        except RecursionError:
+            result["signals"] = []
+            result["warnings"].append("JSON содержит слишком глубокую вложенность")
+        except (ValueError, TypeError, ET.ParseError) as error:
+            result["warnings"].append(str(error))
+        return result
+
+    @staticmethod
+    def parse(text):
+        return [(entry["name"], entry["frequency"], entry["pattern"])
+                for entry in MultiFormatRemoteParser.analyze(text)["signals"]]
+
+    @staticmethod
+    def _parse_lirc(text, add, warnings):
+        for block in re.findall(r"begin\s+remote\b(.*?)end\s+remote\b", text, re.I | re.S):
+            try:
+                config = {}
+                description = re.split(r"begin\s+(?:raw_codes|codes)\b", block, maxsplit=1, flags=re.I)[0]
+                for line in description.splitlines():
+                    parts = line.split("#", 1)[0].split()
+                    if len(parts) > 1:
+                        config[parts[0].lower()] = parts[1:]
+                frequency = int(config.get("frequency", ["38000"])[0], 0)
+                group = " ".join(config.get("name", []))
+                raw = re.search(r"begin\s+raw_codes\b(.*?)end\s+raw_codes\b", block, re.I | re.S)
+                if raw:
+                    name = None
+                    values = []
+                    def flush_raw():
+                        if name is not None:
+                            try:
+                                add(name, frequency, [int(token) for token in values], {"group": group})
+                            except ValueError as error:
+                                warnings.append(f"{name}: некорректные raw_codes ({error})")
+                    for line in raw.group(1).splitlines():
+                        tokens = line.split("#", 1)[0].split()
+                        if not tokens:
+                            continue
+                        if tokens[0].lower() == "name":
+                            flush_raw()
+                            name = " ".join(tokens[1:]) or "Signal"
+                            values = []
+                        elif name is None:
+                            warnings.append("LIRC raw_codes: интервалы без имени")
+                        else:
+                            values.extend(tokens)
+                    flush_raw()
+                    continue
+                flags = set("".join(config.get("flags", [])).upper().split("|")) - {""}
+                if flags - {"SPACE_ENC", "CONST_LENGTH"}:
+                    raise ValueError("LIRC flags не поддерживаются: " + "|".join(sorted(flags)))
+                unsupported = {"plead", "pre", "post", "foot", "toggle_bit", "toggle_bit_mask", "repeat_mask", "min_repeat"}
+                present = sorted(unsupported.intersection(config))
+                if present:
+                    raise ValueError("LIRC параметры не поддерживаются: " + ", ".join(present))
+                def number(key, default="0"):
+                    return int(config.get(key, [default])[0], 0)
+                def pair(key):
+                    values = config.get(key, [])
+                    if len(values) != 2:
+                        raise ValueError(f"LIRC: нужны два значения {key}")
+                    durations = [int(value, 0) for value in values]
+                    if any(value <= 0 for value in durations):
+                        raise ValueError(f"LIRC: {key} должен содержать положительные интервалы")
+                    return durations
+                bits = number("bits")
+                pre_bits, post_bits = number("pre_data_bits"), number("post_data_bits")
+                if not 1 <= bits <= 64 or not 0 <= pre_bits <= 64 or not 0 <= post_bits <= 64:
+                    raise ValueError("LIRC: некорректное число бит")
+                one, zero = pair("one"), pair("zero")
+                header = pair("header") if "header" in config else []
+                codes = re.search(r"begin\s+codes\b(.*?)end\s+codes\b", block, re.I | re.S)
+                if not codes:
+                    raise ValueError("LIRC: нет codes или raw_codes")
+                for line in codes.group(1).splitlines():
+                    parts = line.split("#", 1)[0].split()
+                    if not parts:
+                        continue
+                    if len(parts) != 2:
+                        warnings.append("LIRC: ожидались имя и один код")
+                        continue
+                    try:
+                        code = int(parts[1], 0)
+                        pre, post = number("pre_data"), number("post_data")
+                        if not 0 <= code < (1 << bits) or not 0 <= pre < (1 << pre_bits) or not 0 <= post < (1 << post_bits):
+                            raise ValueError("LIRC: код вне диапазона bits")
+                        value = (((pre << bits) | code) << post_bits) | post
+                        pattern = list(header)
+                        for bit in range(pre_bits + bits + post_bits - 1, -1, -1):
+                            pattern.extend(one if (value >> bit) & 1 else zero)
+                        trail = number("ptrail")
+                        if trail < 0:
+                            raise ValueError("LIRC: отрицательный ptrail")
+                        if trail:
+                            pattern.append(trail)
+                        gap = number("gap", "45000")
+                        if "CONST_LENGTH" in flags:
+                            gap -= sum(pattern)
+                        if gap < 0:
+                            raise ValueError("LIRC: отрицательный gap или период короче кадра")
+                        if len(pattern) % 2:
+                            pattern.append(max(1, gap))
+                        else:
+                            pattern[-1] += gap
+                        add(parts[0], frequency, pattern, {"group": group})
+                    except (ValueError, TypeError) as error:
+                        warnings.append(f"{parts[0]}: {error}")
+            except (ValueError, TypeError) as error:
+                warnings.append(str(error))
+
+    @staticmethod
+    def _parse_flipper_hex(hex_str):
+        s = str(hex_str or "").strip().replace(" ", "")
+        if not s or not re.fullmatch(r"(?:[0-9a-fA-F]{2}){1,4}", s):
+            raise ValueError("Некорректное hex поле Flipper")
+        try:
+            raw = bytes.fromhex(s)
+            return int.from_bytes(raw, byteorder="little")
+        except Exception:
+            try:
+                return int(s, 16)
+            except Exception:
+                raise ValueError("Некорректное hex поле Flipper")
+
+    @staticmethod
+    def _encode_flipper_parsed(protocol, address, command):
+        widths = {
+            "RC5": (5, 6), "RC5X": (5, 7), "RC6": (8, 8), "SAMSUNG32": (8, 8),
+            "SIRC": (5, 7), "SONY": (5, 7), "SONY12": (5, 7), "SIRC12": (5, 7),
+            "SONY15": (8, 7), "SIRC15": (8, 7), "SONY20": (13, 7), "SIRC20": (13, 7),
+            "KASEIKYO": (26, 10),
+        }
+        if protocol not in widths:
+            raise ValueError(f"Протокол {protocol} не поддерживается; используйте RAW")
+        address_bits, command_bits = widths[protocol]
+        if not 0 <= address < (1 << address_bits) or not 0 <= command < (1 << command_bits):
+            raise ValueError(f"Адрес/команда {protocol} вне диапазона")
+        if protocol in ("RC5", "RC5X"):
+            return IrProtocolEngine.encode_rc5(address, command)
+        if protocol == "RC6":
+            return IrProtocolEngine.encode_rc6(address, command)
+        if protocol == "SAMSUNG32":
+            return IrProtocolEngine.encode_samsung32(address, command)
+        if protocol == "KASEIKYO":
+            return IrProtocolEngine.encode_kaseikyo_message(address, command)
+        return IrProtocolEngine.encode_sirc(command, address, address_bits + 7)
+
+
+_UNIVERSAL_POWER_CODES = [
+    ("Samsung TV", 38000, IrProtocolEngine.encode_samsung32(0x07, 0x02)[1]),
+    ("LG TV", 38222, IrProtocolEngine.encode_nec("20DF10EF")[1]),
+    ("Sony TV", 40000, IrProtocolEngine.encode_sirc(0x15, 0x01, 12)[1]),
+    ("Philips TV", 36000, IrProtocolEngine.encode_rc5(0x00, 0x0C)[1]),
+    ("Panasonic TV", 37000, IrProtocolEngine.encode_kaseikyo("4004", "0100BCBD")[1]),
+    ("Sharp TV", 38000, IrProtocolEngine.encode_sharp("41A2")[1]),
+    ("Toshiba TV", 38222, IrProtocolEngine.encode_nec("02FD48B7")[1]),
+    ("TCL / Thomson", 38222, IrProtocolEngine.encode_nec("F10ED22D")[1]),
+    ("Hisense TV", 38222, IrProtocolEngine.encode_nec("00FD807F")[1]),
+]
+
+_GENERIC_UART_CHIPS = {
+    (0x1A86, 0x7523): "CH340",
+    (0x1A86, 0x5523): "CH341",
+    (0x10C4, 0xEA60): "CP2102",
+    (0x0403, 0x6001): "FT232R",
+    (0x067B, 0x2303): "PL2303",
+}
+
+SUPPORTED_DONGLES = {
+    (0x10C4, 0x8468): ("Tiqiaa / JOYROOM / ZaZa", LegacyBulkStEncoder),
+    (0x045E, 0x8468): ("Tiqiaa / JOYROOM / ZaZa", LegacyBulkStEncoder),
+    (0x045C, 0x0130): ("ElkSmart / Ocrustar", ElkSmartBulkEncoder),
+    (0x045C, 0x0131): ("ElkSmart / Ocrustar", ElkSmartBulkEncoder),
+    (0x045C, 0x0132): ("ElkSmart / Ocrustar", ElkSmartBulkEncoder),
+    (0x045C, 0x0133): ("ElkSmart / Ocrustar", ElkSmartBulkEncoder),
+    (0x045C, 0x0134): ("ElkSmart / Ocrustar", ElkSmartBulkEncoder),
+    (0x045C, 0x014A): ("ElkSmart / Ocrustar", ElkSmartBulkEncoder),
+    (0x045C, 0x0184): ("ElkSmart / Ocrustar", ElkSmartBulkEncoder),
+    (0x045C, 0x0189): ("ElkSmart / Ocrustar", ElkSmartBulkEncoder),
+    (0x045C, 0x018F): ("ElkSmart / Ocrustar", ElkSmartBulkEncoder),
+    (0x045C, 0x0195): ("ElkSmart / Ocrustar", ElkSmartBulkEncoder),
+    (0x045C, 0x02AA): ("ElkSmart / Ocrustar D226", ElkSmartBulkEncoder),
+    (0x045C, 0x02AB): ("ElkSmart / Ocrustar D226 v2", ElkSmartBulkEncoder),
+    (0x045C, 0x02AC): ("ElkSmart / Ocrustar D552", ElkSmartBulkEncoder),
+}
+KNOWN_DONGLE_IDS = set(SUPPORTED_DONGLES.keys())
+
+
+class UsbCIrBackend(BasePlugin):
+    _FINDER_PROTOS = [
+        "NEC", "NEC2", "NECx1", "NECx2", "Sony12", "Sony15", "Sony20",
+        "RC-5", "RC-6", "Samsung32", "Samsung36", "Denon", "Pioneer", "RCA", "Sharp"
+    ]
+
+    def __init__(self):
+        super().__init__()
+        self._usb_manager = None
+        self._context = None
+        self._device = None
+        self._connection = None
+        self._usb_interface = None
+        self._out_endpoint = None
+        self._in_endpoint = None
+        self._dongle_name = None
+        self._encoder = UnknownProtocolEncoder()
+        self._state = DongleState.DISCONNECTED
+        self._state_lock = threading.RLock()
+        self._session_id = 0
+        self._tx_lock = threading.RLock()
+        self._stop_event = threading.Event()
+        self._poll_thread = None
+        self._reader_thread = None
+        self._learning_thread = None
+        self._read_until_at = 0.0
+        self._reader_continuous = False
+        self._reply_cond = threading.Condition()
+        self._reply_queue = deque(maxlen=128)
+        self._reply_abort = threading.Event()
+        self._log_lines = deque(maxlen=80)
+        self._log_cache_text = ""
+        self._refresh_lock = threading.Lock()
+        self._last_refresh_at = 0.0
+        self._refresh_min_interval = 1.0
+        self._pending_refresh_timer = None
+        self._last_missing_log_at = 0.0
+        self._permission_request_at = {}
+        self._ignored_device_name = None
+        self._learned_timings = []
+        self._learned_frequency = 38000
+        self._learned_status = "Ожидание"
+        self._learned_protocol_guess = ""
+        self._signal_name_input = ""
+        self._learning_cancel_event = threading.Event()
+        self._stats_lock = threading.Lock()
+        self._tx_count = 0
+        self._tx_success_count = 0
+        self._tx_fail_streak = 0
+        self._last_tx_info = "Нет передач"
+        self._last_tx_at = 0.0
+        self._connected_at = 0.0
+        self._active_tab = 0
+        self._signal_library = []
+        self._library_lock = threading.RLock()
+        self._library_search = ""
+        self._favorites_only = False
+        self._library_page = 0
+        self._import_preview = None
+        self._import_text = ""
+        self._finder_running = False
+        self._finder_thread = None
+        self._finder_proto = "NEC"
+        self._finder_prefix = "20DF"
+        self._finder_current_code = 0
+        self._finder_max_code = 255
+        self._finder_delay_ms = 400
+        self._finder_status = "Готов к запуску"
+        self._finder_last_sent = ""
+        self._finder_last_code = 0
+        self._backoff_interval = 1.5
+        self._backoff_fast_retries = 0
+        self._confirm_delete_id = ""
+        self._confirm_delete_name = None
+        self._confirm_clear_all = False
+        self._adb_ip = ""
+        self._finder_cancel = threading.Event()
+        self._power_cancel = threading.Event()
+        self._power_thread = None
+        self._power_running = False
+        self._finder_hit = None
+        self._jobs = queue.Queue(maxsize=12)
+        self._job_lock = threading.Lock()
+        self._job_thread = None
+        self._adb_busy = False
+        self._adb_status = "Нужны ADB на телефоне и разрешённое подключение на ТВ"
+        self._remote_group = ""
+        self._remote_page = 0
+        self._edit_signal_id = None
+        self._edit_signal_name = ""
+        self._edit_signal_group = ""
+        self._burst_cancel = threading.Event()
+        self._burst_thread = None
+        self._burst_running = False
+        self._burst_status = "Готов к передаче"
+        # [FLIP_SCREEN_FEATURE] Состояние переворота экрана 180° (из android-ir-blaster) [TODO: REVIEW/FIX BUGS]
+        self._screen_flipped = False
+
+    def _load_signal_library(self):
+        try:
+            raw = self.get_setting("signal_library", "[]")
+            items = json.loads(raw) if isinstance(raw, str) else raw
+            if not isinstance(items, list):
+                raise ValueError("Ожидался список сигналов")
+            entries = []
+            ids = set()
+            for index, item in enumerate(items):
+                try:
+                    freq, pattern = validate_signal(item["frequency"], item["pattern"])
+                    entry = dict(item, frequency=freq, pattern=pattern)
+                    entry["name"] = str(item.get("name", "Signal"))[:120]
+                    ident = str(item.get("id", ""))
+                    if not ident or ident in ids:
+                        # Stable even when a damaged legacy store must stay untouched
+                        # or its migration cannot be persisted yet.
+                        legacy_key = f"ir_transceiver:{index}:" + json.dumps(item, sort_keys=True, ensure_ascii=False)
+                        ident = uuid.uuid5(uuid.NAMESPACE_URL, legacy_key).hex
+                    ids.add(ident)
+                    entry["id"] = ident
+                    entry["favorite"] = item.get("favorite") is True
+                    entry["group"] = str(item.get("group", ""))[:120]
+                    entries.append(entry)
+                except (ValueError, TypeError, KeyError) as error:
+                    self._log(f"Библиотека #{index + 1}: {error}", notify_ui=False)
+            self._signal_library = entries
+            # Keep the original store intact if it contains damaged entries.
+            if len(entries) == len(items) and entries != items:
+                self._commit_library(entries)
+        except (ValueError, TypeError, RecursionError) as error:
+            self._log(f"Не удалось прочитать библиотеку: {error}; исходные данные сохранены", notify_ui=False)
+
+    def _commit_library(self, entries):
+        with self._library_lock:
+            try:
+                data = json.dumps(entries, ensure_ascii=False, separators=(",", ":"))
+                if len(data.encode("utf-8")) > 900000:
+                    raise ValueError("Библиотека больше 900 КБ. Экспортируйте резервную копию")
+                self.set_setting("signal_library", data)
+                self._signal_library = entries
+                return True
+            except Exception as error:
+                self._log(f"Ошибка сохранения библиотеки: {error}")
+                return False
+
+    def _save_signal_library(self):
+        return self._commit_library(list(self._signal_library))
+
+    def _add_signal_to_library(self, name, frequency, pattern):
+        try:
+            frequency, pattern = validate_signal(frequency, pattern)
+        except ValueError as error:
+            self._log(str(error))
+            return False
+        return self._import_entries([{"name": name or "Signal", "frequency": frequency, "pattern": pattern}])[0] == 1
+
+    def _import_entries(self, signals):
+        with self._library_lock:
+            entries = list(self._signal_library)
+            fingerprints = {(item["frequency"], tuple(item["pattern"])) for item in entries}
+            names = {item["name"] for item in entries}
+            skipped = 0
+            for signal in signals:
+                fingerprint = (signal["frequency"], tuple(signal["pattern"]))
+                if fingerprint in fingerprints:
+                    skipped += 1
+                    continue
+                entry = dict(signal)
+                base = str(entry.get("name", "Signal")).strip()[:120] or "Signal"
+                name, suffix = base, 2
+                while name in names:
+                    tail = f"_{suffix}"
+                    name = base[:120 - len(tail)] + tail
+                    suffix += 1
+                entry.update(id=uuid.uuid4().hex, name=name, favorite=entry.get("favorite") is True,
+                             group=str(entry.get("group", ""))[:120],
+                             created=entry.get("created", time.strftime("%Y-%m-%d %H:%M")))
+                entries.append(entry)
+                fingerprints.add(fingerprint)
+                names.add(name)
+            count = len(entries) - len(self._signal_library)
+            if count and not self._commit_library(entries):
+                return 0, skipped
+            self._log(f"Сохранено {count}; дубликатов {skipped}")
+            return count, skipped
+
+    def _library_index(self, index):
+        if isinstance(index, str):
+            return next((i for i, item in enumerate(self._signal_library) if item["id"] == index), -1)
+        return index
+
+    def _library_view(self):
+        with self._library_lock:
+            query = self._library_search.casefold().strip()
+            return [entry for entry in self._signal_library
+                    if (not self._favorites_only or entry.get("favorite"))
+                    and (not query or query in (entry["name"] + " " + entry.get("group", "")).casefold())]
+
+    def _toggle_favorite(self, ident):
+        with self._library_lock:
+            index = self._library_index(ident)
+            if 0 <= index < len(self._signal_library):
+                entries = list(self._signal_library)
+                entries[index] = dict(entries[index], favorite=not entries[index].get("favorite", False))
+                self._commit_library(entries)
+        self._refresh_ui()
+
+    def _backup_json(self):
+        with self._library_lock:
+            return json.dumps({"schema": "ir_transceiver", "version": 1, "signals": self._signal_library},
+                              ensure_ascii=False, separators=(",", ":"))
+
+    def _export_backup(self):
+        self._save_to_downloads("IR_Transceiver_Backup.json", self._backup_json(), "Резервная копия")
+
+    def _remote_groups(self):
+        with self._library_lock:
+            return sorted({entry.get("group", "") for entry in self._signal_library}, key=str.casefold)
+
+    def _remote_entries(self, group=None):
+        selected = self._remote_group if group is None else group
+        with self._library_lock:
+            return [dict(entry, pattern=list(entry["pattern"])) for entry in self._signal_library
+                    if entry.get("group", "") == selected]
+
+    def _select_remote(self, group):
+        self._remote_group = str(group)
+        self._remote_page = 0
+        self.set_setting("remote_group", self._remote_group)
+        self._refresh_ui()
+
+    def _open_signal_editor(self, ident):
+        with self._library_lock:
+            index = self._library_index(ident)
+            if not 0 <= index < len(self._signal_library):
+                return
+            entry = self._signal_library[index]
+            self._edit_signal_id = entry["id"]
+            self._edit_signal_name = entry["name"]
+            self._edit_signal_group = entry.get("group", "")
+        self.navigate("edit_signal")
+
+    def _update_signal_metadata(self, ident, name, group):
+        name, group = str(name).strip(), str(group).strip()
+        if not name or len(name) > 120 or len(group) > 120 or "\n" in name + group or "\r" in name + group:
+            self.toast("Имя: 1–120 символов; группа: до 120. Без переносов строк")
+            return False
+        with self._library_lock:
+            index = self._library_index(ident)
+            if not 0 <= index < len(self._signal_library):
+                self.toast("Сигнал уже удалён")
+                return False
+            entries = list(self._signal_library)
+            entries[index] = dict(entries[index], name=name, group=group)
+            return self._commit_library(entries)
+
+    def _save_signal_editor(self):
+        if self._update_signal_metadata(self._edit_signal_id, self._edit_signal_name, self._edit_signal_group):
+            self._remote_group = self._edit_signal_group.strip()
+            self._remote_page = 0
+            self._active_tab = 7
+            self.navigate("main")
+            self._refresh_ui()
+
+    def _flipper_text(self, entries):
+        if not entries:
+            return ""
+        lines = ["Filetype: IR signals file", "Version: 1", "# Exported by IR Transceiver", ""]
+        names = set()
+        for entry in entries:
+            base = self._flipper_clean_name(entry["name"])
+            name, suffix = base, 2
+            while name in names:
+                name = f"{base}_{suffix}"
+                suffix += 1
+            names.add(name)
+            lines.extend([f"name: {name}", "type: raw", f"frequency: {entry['frequency']}",
+                          "duty_cycle: 0.330000", "data: " + " ".join(str(value) for value in entry["pattern"]), "#"])
+        return "\n".join(lines)
+
+    def _remote_flipper_text(self, group):
+        return self._flipper_text(self._remote_entries(group))
+
+    def _export_flipper_entries(self, entries, filename, label):
+        if not entries:
+            self._log("Нет сигналов для экспорта")
+            return
+        for entry in entries:
+            if len(entry["pattern"]) > 1024:
+                message = "Экспорт .ir отменён: лимит Flipper 1024 интервала на сигнал. Используйте JSON."
+                self._log(message)
+                try:
+                    self.toast(message)
+                except Exception:
+                    pass
+                return
+        text = self._flipper_text(entries)
+        if len(text.encode("utf-8")) > 900_000:
+            self._log("Слишком много данных для экспорта .ir; используйте JSON")
+            return
+        self._save_to_downloads(filename, text, label)
+
+    def _export_remote(self):
+        filename = self._flipper_clean_name(self._remote_group or "Ungrouped") + ".ir"
+        self._export_flipper_entries(self._remote_entries(self._remote_group), filename, "Пульт (.ir)")
+
+    def _burst_busy(self):
+        return self._burst_running or (self._burst_thread is not None and self._burst_thread.is_alive())
+
+    def _sequence_busy(self):
+        return self._burst_busy() or self._finder_running or self._power_running or any(
+            worker is not None and worker.is_alive() for worker in (self._finder_thread, self._power_thread))
+
+    def _send_remote_signal(self, ident):
+        with self._library_lock:
+            index = self._library_index(ident)
+            if not 0 <= index < len(self._signal_library):
+                return False
+            entry = self._signal_library[index]
+            payload = {"frequency": entry["frequency"], "pattern": list(entry["pattern"])}
+            name = entry["name"]
+        try:
+            repeats = int(self.get_setting("remote_repeat", 1))
+        except (ValueError, TypeError):
+            repeats = 1
+        if repeats not in (1, 3, 5):
+            repeats = 1
+        with self._state_lock:
+            if self._stop_event.is_set() or not self._can_transmit() or self._sequence_busy():
+                self.toast("Передатчик занят или недоступен. Остановите текущую последовательность")
+                return False
+            self._burst_cancel.clear()
+            self._burst_running = True
+            self._burst_status = f"{name}: 0/{repeats}"
+            self._burst_thread = threading.Thread(target=self._burst_worker, args=(payload, name, repeats),
+                                                  daemon=True, name="IrRepeatBurst")
+            self._burst_thread.start()
+        self._refresh_ui()
+        return True
+
+    def _burst_worker(self, payload, name, repeats):
+        sent = 0
+        try:
+            for index in range(repeats):
+                with self._tx_lock:
+                    if self._stop_event.is_set() or self._burst_cancel.is_set():
+                        break
+                    result = self.service_infrared_transmitter_transmit(payload)
+                if not result.get("ok"):
+                    self._burst_status = f"{name}: ошибка передачи ({sent}/{repeats})"
+                    return
+                sent += 1
+                self._burst_status = f"{name}: {sent}/{repeats}"
+                self._refresh_ui()
+                if index + 1 < repeats and self._burst_cancel.wait(0.15):
+                    break
+            stopped = self._stop_event.is_set() or self._burst_cancel.is_set()
+            self._burst_status = f"{name}: {'остановлено' if stopped else 'отправлено'} {sent}/{repeats}"
+        except Exception as error:
+            self._burst_status = f"{name}: ошибка {error}"
+            self._log(self._burst_status)
+        finally:
+            self._burst_running = False
+            self._refresh_ui()
+
+    def _stop_remote_repeat(self):
+        self._burst_cancel.set()
+        self._refresh_ui()
+
+    def screen_edit_signal(self, ui, api, state):
+        return ui.scaffold(
+            title="Кнопка пульта",
+            content=ui.column([
+                ui.card([
+                    ui.text("Имя и устройство", "titleMedium"),
+                    ui.text_field(value=self._edit_signal_name,
+                                  on_change=lambda value: setattr(self, "_edit_signal_name", str(value)), label="Имя кнопки"),
+                    ui.text_field(value=self._edit_signal_group,
+                                  on_change=lambda value: setattr(self, "_edit_signal_group", str(value)), label="Пульт / группа"),
+                    ui.text("Одинаковая группа объединяет кнопки в один пульт. Пустая группа — без устройства", "bodySmall", "muted"),
+                    ui.button("Сохранить кнопку", self._save_signal_editor),
+                    ui.button("Отмена", lambda: self.navigate("main"), style="text"),
+                ], padding=16),
+            ], padding=16),
+            # [FLIP_SCREEN_FEATURE] Кнопка переворота в верхней панели экрана редактирования [TODO: REVIEW/FIX BUGS]
+            actions=[
+                ui.top_action("screen_rotation", self._toggle_screen_flip),
+            ],
+        )
+
+    def _render_remote(self, ui):
+        groups = self._remote_groups()
+        if self._remote_group not in groups and groups:
+            self._remote_group = next((group for group in groups if group), groups[0])
+            self._remote_page = 0
+        entries = self._remote_entries()
+        controls = [ui.text("Мои пульты", "titleLarge"),
+                    ui.text("Кнопки создаются из вашей библиотеки. Назначьте им группу через «Изменить»", "bodySmall", "muted")]
+        if groups:
+            controls.extend([
+                ui.dropdown([(group, group or "Без группы") for group in groups], selected=self._remote_group,
+                            on_select=self._select_remote, label="Устройство"),
+                ui.text(f"{len(entries)} кнопок", "labelLarge"),
+                ui.dropdown([("1", "Одна отправка"), ("3", "Повторить 3 раза"), ("5", "Повторить 5 раз")],
+                            selected=str(self.get_setting("remote_repeat", 1)),
+                            on_select=lambda value: self._set_option("remote_repeat", int(value)), label="Повторы кнопки",
+                            enabled=not self._burst_busy()),
+                ui.text("Повторы удобны для громкости и каналов", "bodySmall", "muted"),
+                ui.text(self._burst_status, "bodySmall", "accent"),
+                ui.button("Остановить повторы", self._stop_remote_repeat, style="tonal", enabled=self._burst_busy()),
+                ui.button("Экспорт этого пульта (.ir)", self._export_remote, style="tonal", enabled=bool(entries)),
+            ])
+        else:
+            controls.append(ui.button("Открыть библиотеку", lambda: self._on_tab_select(2)))
+        pages = max(1, (len(entries) + 19) // 20)
+        self._remote_page = min(self._remote_page, pages - 1)
+        visible = entries[self._remote_page * 20:(self._remote_page + 1) * 20]
+        for index in range(0, len(visible), 2):
+            controls.append(ui.row([
+                ui.button(entry["name"],
+                          (lambda ident: lambda: self._send_remote_signal(ident))(entry["id"]),
+                          enabled=self._can_transmit() and not self._burst_busy() and not self._finder_running and not self._power_running)
+                for entry in visible[index:index + 2]
+            ], spacing=8))
+        if pages > 1:
+            controls.append(ui.row([
+                ui.button("Назад", lambda: self._change_remote_page(-1), enabled=self._remote_page > 0),
+                ui.text(f"{self._remote_page + 1} / {pages}", "labelLarge"),
+                ui.button("Далее", lambda: self._change_remote_page(1), enabled=self._remote_page + 1 < pages),
+            ]))
+        return [ui.card(controls, padding=16)]
+
+    def _change_remote_page(self, delta):
+        self._remote_page = max(0, self._remote_page + delta)
+        self._refresh_ui()
+
+    def _delete_signal_from_library(self, index):
+        with self._library_lock:
+            index = self._library_index(index)
+            if 0 <= index < len(self._signal_library):
+                entry = self._signal_library[index]
+                if self._confirm_delete_id and entry["id"] != self._confirm_delete_id:
+                    return
+                if self._confirm_delete_name is None or entry.get("name") == self._confirm_delete_name:
+                    name = entry.get("name", "?")
+                    entries = self._signal_library[:index] + self._signal_library[index + 1:]
+                    if self._commit_library(entries):
+                        self._log(f"Сигнал '{name}' удалён из библиотеки")
+        self._confirm_delete_id = ""
+        self._confirm_delete_name = None
+        self._refresh_ui()
+
+    def _clear_all_library(self):
+        self._commit_library([])
+        self._confirm_clear_all = False
+        self._log("Библиотека сигналов очищена" if not self._signal_library else "Библиотека не очищена: ошибка сохранения")
+        self._refresh_ui()
+
+    def _send_library_signal(self, index):
+        if not self._can_transmit():
+            self._log("Ошибка: нет доступного передатчика")
+            return
+        with self._library_lock:
+            index = self._library_index(index)
+            if not 0 <= index < len(self._signal_library):
+                return
+            entry = self._signal_library[index]
+            payload = {
+                "frequency": entry.get("frequency", 38000),
+                "pattern": list(entry.get("pattern", [])),
+            }
+        self._enqueue_tx(payload)
+
+    def _export_library_signal_json(self, index):
+        with self._library_lock:
+            index = self._library_index(index)
+            if not 0 <= index < len(self._signal_library):
+                return
+            entry = dict(self._signal_library[index])
+        self._clipboard_copy("IR_Signal_JSON", json.dumps(entry, ensure_ascii=False), "JSON скопирован")
+
+    def _save_to_downloads(self, filename, content, label="Файл"):
+        saved = False
+        stream = None
+        uri = None
+        resolver = None
+        try:
+            if jclass and self._context:
+                ContentValues = jclass("android.content.ContentValues")
+                MediaStoreDownloads = jclass("android.provider.MediaStore$Downloads")
+                resolver = self._context.getContentResolver()
+                cv = ContentValues()
+                cv.put("_display_name", filename)
+                cv.put("mime_type", "application/octet-stream")
+                cv.put("relative_path", "Download/Dolphy")
+                cv.put("is_pending", 1)
+                uri = resolver.insert(MediaStoreDownloads.EXTERNAL_CONTENT_URI, cv)
+                if uri is not None:
+                    raw_bytes = content.encode("utf-8")
+                    signed = [(b - 256) if b > 127 else b for b in raw_bytes]
+                    stream = resolver.openOutputStream(uri, "wt")
+                    stream.write(jarray(jbyte)(signed))
+                    stream.flush()
+                    stream.close()
+                    stream = None
+                    completed = ContentValues()
+                    completed.put("is_pending", 0)
+                    resolver.update(uri, completed, None, None)
+                    saved = True
+                    self._log(f"💾 {label} сохранён в Download/Dolphy/{filename}")
+                    try:
+                        self.toast(f"Сохранено: Download/Dolphy/{filename}")
+                    except Exception:
+                        pass
+        except Exception as e:
+            self._log(f"MediaStore fallback: {e}")
+        finally:
+            if stream is not None:
+                try:
+                    stream.close()
+                except Exception:
+                    pass
+            if not saved and uri is not None and resolver is not None:
+                try:
+                    resolver.delete(uri, None, None)
+                except Exception:
+                    pass
+
+        toast_text = f"{filename} скопирован в буфер" + (" и сохранён в Download/Dolphy" if saved else "")
+        self._clipboard_copy("Flipper_IR", content, toast_text)
+
+    def _export_library_signal_flipper(self, index):
+        with self._library_lock:
+            index = self._library_index(index)
+            if not 0 <= index < len(self._signal_library):
+                return
+            entry = dict(self._signal_library[index], pattern=list(self._signal_library[index]["pattern"]))
+        filename = self._flipper_clean_name(entry["name"]) + ".ir"
+        self._export_flipper_entries([entry], filename, "Сигнал .ir")
+
+    def _export_all_library_flipper(self):
+        with self._library_lock:
+            entries = [dict(entry, pattern=list(entry["pattern"])) for entry in self._signal_library]
+        self._export_flipper_entries(entries, "Remote_Export.ir", "Дамп библиотеки (.ir)")
+
+    @staticmethod
+    def _flipper_clean_name(name):
+        s = str(name or "").strip()
+        res = "".join(_CYRILLIC_TO_LATIN.get(c, c) for c in s)
+        res = re.sub(r"[^A-Za-z0-9_-]", "_", res)
+        res = re.sub(r"_+", "_", res).strip("_")
+        return res or "Signal"
+
+    def _on_import_text_change(self, value):
+        self._import_text = str(value)
+        self._import_preview = None
+
+    def _preview_import(self):
+        self._import_preview = MultiFormatRemoteParser.analyze(self._import_text)
+        self._refresh_ui()
+
+    def _do_import_parsed(self):
+        preview = self._import_preview or MultiFormatRemoteParser.analyze(self._import_text)
+        self._import_preview = preview
+        signals = preview["signals"]
+        if not signals:
+            self._log("Не удалось распознать формат (Flipper .ir, IRPLUS, LIRC, Pronto, JSON)")
+            try:
+                self.toast("Формат не распознан")
+            except Exception:
+                pass
+            return
+        count, skipped = self._import_entries(signals)
+        if count:
+            self._learned_timings = list(signals[-1]["pattern"])
+            self._learned_frequency = signals[-1]["frequency"]
+        msg = f"Импортировано {count} сигналов"
+        if skipped:
+            msg += f" (дубликатов {skipped})"
+        self._log(msg)
+        try:
+            self.toast(msg)
+        except Exception:
+            pass
+        if count or skipped == len(signals):
+            self._import_text = ""
+            self._import_preview = None
+            self._active_tab = 2
+        self._refresh_ui()
+
+    def _on_signal_name_change(self, value):
+        self._signal_name_input = str(value)
+
+    def _clipboard_copy(self, label, text, toast_msg):
+        android = getattr(self.api, "getAndroid", lambda: None)()
+        if android is not None and hasattr(android, "clipboardSet"):
+            try:
+                android.clipboardSet(text)
+                self._log(f"📋 {toast_msg}")
+                try:
+                    self.toast(toast_msg)
+                except Exception:
+                    pass
+                return
+            except Exception:
+                pass
+        try:
+            Context = jclass("android.content.Context")
+            ClipData = jclass("android.content.ClipData")
+            ctx = self._context or self.api.getContext()
+            cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE)
+            clip = ClipData.newPlainText(label, text)
+            cm.setPrimaryClip(clip)
+            self._log(f"📋 {toast_msg}")
+            try:
+                self.toast(toast_msg)
+            except Exception:
+                pass
+        except Exception as e:
+            self._log(f"Ошибка копирования: {e}")
+
+    def _inc_tx(self, success, freq, pattern_len):
+        with self._stats_lock:
+            self._tx_count += 1
+            if success:
+                self._tx_success_count += 1
+                self._tx_fail_streak = 0
+            else:
+                self._tx_fail_streak += 1
+            self._last_tx_info = f"{'OK' if success else 'FAIL'} {freq // 1000}k ({pattern_len}p)"
+            self._last_tx_at = time.monotonic()
+
+    def _get_tx_stats(self):
+        with self._stats_lock:
+            return self._tx_count, self._tx_success_count, self._tx_fail_streak, self._last_tx_info, self._last_tx_at
+
+    def _has_builtin_ir(self):
+        try:
+            android = getattr(self.api, "getAndroid", lambda: None)()
+            if android is not None and hasattr(android, "irHasEmitter"):
+                return bool(android.irHasEmitter())
+        except Exception:
+            pass
+        return False
+
+    def _transmit_builtin_ir(self, freq, pattern):
+        try:
+            android = getattr(self.api, "getAndroid", lambda: None)()
+            if android is not None and hasattr(android, "irTransmit"):
+                values = jarray(jint)(pattern) if jarray and jint else pattern
+                return bool(android.irTransmit(int(freq), values))
+        except Exception as e:
+            self._log(f"Ошибка встроенного ИК: {e}")
+        return False
+
+    def _can_transmit(self):
+        return not self._stop_event.is_set() and self._selected_backend() is not None
+
+    def _selected_backend(self):
+        mode = self.get_setting("transmitter_mode", "auto")
+        ready = {
+            "usb": self._get_state() == DongleState.CONNECTED and self._connection is not None,
+            "builtin": bool(self.get_setting("builtin_ir_fallback", True)) and self._has_builtin_ir(),
+            "audio": bool(self.get_setting("audio_ir_fallback", False)) and jclass is not None,
+        }
+        if mode != "auto":
+            return mode if ready.get(mode, False) else None
+        return next((key for key in ("usb", "builtin", "audio") if ready[key]), None)
+
+    # ==============================================================================
+    # >>> START [FLIP_SCREEN_FEATURE] (Ported from iodn/android-ir-blaster) [TODO: REVIEW/FIX BUGS]
+    # ==============================================================================
+    def _get_activity(self):
+        """
+        Возвращает текущую Activity Android для управления ориентацией окна,
+        распаковывая ContextWrapper при необходимости.
+        """
+        candidates = []
+        try:
+            if hasattr(self, "api") and self.api is not None:
+                for getter in ("getActivity", "getCurrentActivity", "getContext"):
+                    fn = getattr(self.api, getter, None)
+                    if callable(fn):
+                        obj = fn()
+                        if obj is not None:
+                            candidates.append(obj)
+        except Exception:
+            pass
+        if getattr(self, "_context", None) is not None:
+            candidates.append(self._context)
+
+        for candidate in candidates:
+            curr = candidate
+            for _ in range(8):
+                if curr is None:
+                    break
+                if hasattr(curr, "setRequestedOrientation"):
+                    return curr
+                get_base = getattr(curr, "getBaseContext", None)
+                if callable(get_base):
+                    try:
+                        nxt = get_base()
+                        if nxt is None or nxt is curr:
+                            break
+                        curr = nxt
+                        continue
+                    except Exception:
+                        break
+                break
+        return None
+
+    def _set_activity_orientation(self, target_orientation):
+        """
+        Безопасно вызывает setRequestedOrientation на UI-потоке Android.
+        9 = SCREEN_ORIENTATION_REVERSE_PORTRAIT (180°),
+        -1 = SCREEN_ORIENTATION_UNSPECIFIED (стандартная ориентация).
+        """
+        act = self._get_activity()
+        if act is None:
+            return False
+        try:
+            if jclass is not None and dynamic_proxy is not None and hasattr(act, "runOnUiThread"):
+                Runnable = jclass("java.lang.Runnable")
+
+                class _OrientationTask(dynamic_proxy(Runnable)):
+                    def __init__(self, activity, orientation):
+                        super().__init__()
+                        self._activity = activity
+                        self._orientation = orientation
+
+                    def run(self):
+                        try:
+                            self._activity.setRequestedOrientation(self._orientation)
+                        except Exception:
+                            pass
+
+                act.runOnUiThread(_OrientationTask(act, int(target_orientation)))
+                return True
+        except Exception:
+            pass
+        try:
+            act.setRequestedOrientation(int(target_orientation))
+            return True
+        except Exception:
+            return False
+
+    def _apply_screen_orientation(self):
+        """
+        Применяет поворот экрана:
+        9 (SCREEN_ORIENTATION_REVERSE_PORTRAIT) при self._screen_flipped == True,
+        -1 (SCREEN_ORIENTATION_UNSPECIFIED) при self._screen_flipped == False.
+        """
+        target = 9 if self._screen_flipped else -1
+        self._set_activity_orientation(target)
+
+    def _restore_screen_orientation(self):
+        """
+        Восстанавливает стандартную системную ориентацию экрана (-1 / UNSPECIFIED).
+        """
+        self._set_activity_orientation(-1)
+
+    def _set_screen_flip(self, flipped, persist=True):
+        """
+        Устанавливает и сохраняет состояние переворота экрана без зацикливания настроек.
+        """
+        new_state = bool(flipped)
+        changed = (self._screen_flipped != new_state)
+        self._screen_flipped = new_state
+        if persist:
+            self.set_setting("remote_view_flipped", self._screen_flipped)
+        self._apply_screen_orientation()
+        if changed or persist:
+            try:
+                self.toast("Экран: 180°" if self._screen_flipped else "Экран: 0°")
+            except Exception:
+                pass
+        self._refresh_ui()
+
+    def _toggle_screen_flip(self):
+        """
+        Переключает состояние переворота экрана (0° <-> 180°).
+        Аналог кнопки Icons.screen_rotation_rounded в android-ir-blaster.
+        """
+        self._set_screen_flip(not self._screen_flipped, persist=True)
+    # ==============================================================================
+    # <<< END [FLIP_SCREEN_FEATURE]
+    # ==============================================================================
+
+    def on_plugin_load(self):
+        self.add_module(
+            title="IR Transceiver",
+            description="ИК-лаборатория: передатчики, обучение, библиотека пультов и импорт",
+            icon="settings_remote",
+            screen="main",
+            section="INFRARED",
+            order=1,
+        )
+        try:
+            self.hook_action("infrared.transmit", 100)
+            self.provide_service("infrared.transmitter", 100)
+            self.hook_screen("ir_*", "usb_status_badge", "fab", 50)
+            self.hook_screen("other/ir_*", "usb_status_badge", "fab", 50)
+        except Exception as e:
+            self._log(f"Сбой регистрации хуков: {e}")
+        try:
+            self.api.registerSettings("IR Transceiver", json.dumps([
+                {"type": "switch", "key": "builtin_ir_fallback", "title": "Встроенный ИК-порт",
+                 "subtitle": "Использовать встроенный ИК передатчик телефона (Xiaomi, Poco, Vivo) при отсутствии USB", "default": True},
+                {"type": "switch", "key": "audio_ir_fallback", "title": "Audio IR (3.5мм адаптеры)",
+                 "subtitle": "Использовать аудиовыход смартфона при отсутствии USB-донгла (установите громкость на 100%)", "default": False},
+                # [FLIP_SCREEN_FEATURE] Настройка переворота в списке настроек Dolphy [TODO: REVIEW/FIX BUGS]
+                {"type": "switch", "key": "remote_view_flipped", "title": "Переворот экрана (180°)",
+                 "subtitle": "Поворот экрана на 180° для ИК-донглов (USB / Audio), подключенных снизу", "default": False},
+                {"type": "slider", "key": "learn_timeout", "title": "Таймаут обучения (сек)",
+                 "min": 3, "max": 20, "default": 8, "steps": 17},
+                {"type": "switch", "key": "auto_save_learned", "title": "Автосохранение захваченных сигналов",
+                 "subtitle": "Сразу добавлять принятый сигнал в Библиотеку", "default": False},
+                {"type": "switch", "key": "elksmart_v15_compat", "title": "ElkSmart режим Ocrustar v1.5",
+                 "subtitle": "Совместимость с редкими ревизиями D226", "default": False},
+            ]), 10)
+        except Exception:
+            pass
+        self._adb_ip = self.get_setting("adb_ip", "")
+        self._remote_group = str(self.get_setting("remote_group", ""))
+        try:
+            self._finder_delay_ms = max(150, min(2000, int(self.get_setting("finder_delay_ms", 400))))
+        except (ValueError, TypeError):
+            self._finder_delay_ms = 400
+        # [FLIP_SCREEN_FEATURE] Загрузка сохранённого состояния переворота [TODO: REVIEW/FIX BUGS]
+        self._screen_flipped = bool(self.get_setting("remote_view_flipped", False))
+        if self._screen_flipped:
+            self._apply_screen_orientation()
+        self._load_signal_library()
+        self._init_usb_context()
+
+    def on_setting_changed(self, payload):
+        try:
+            k = payload.get("key")
+            v = payload.get("value")
+            self._log(f"Настройка изменена: {k} = {v}")
+            if k == "elksmart_v15_compat" and isinstance(self._encoder, ElkSmartBulkEncoder):
+                self._encoder.compat_mode = "ocrustar_v15" if bool(v) else "android"
+            elif k == "audio_ir_fallback" and bool(v):
+                try:
+                    self.toast("Для Audio IR установите громкость медиа на 100%")
+                except Exception:
+                    pass
+            elif k == "remote_view_flipped":
+                # [FLIP_SCREEN_FEATURE] Реакция на изменение настройки (без рекурсии) [TODO: REVIEW/FIX BUGS]
+                self._set_screen_flip(bool(v), persist=False)
+            self._refresh_ui()
+        except Exception:
+            pass
+
+    def on_plugin_enable(self):
+        if any(worker is not None and worker.is_alive() for worker in
+               (self._finder_thread, self._power_thread, self._burst_thread, self._job_thread, self._learning_thread,
+                self._poll_thread, self._reader_thread)) and self._stop_event.is_set():
+            self._log("Предыдущая передача завершается. Повторите включение после её завершения", notify_ui=False)
+            return
+        with self._state_lock:
+            if self._state == DongleState.CLOSING:
+                self._state = DongleState.DISCONNECTED
+        self._ignored_device_name = None
+        self._stop_event.clear()
+        if self._usb_manager is not None:
+            self._start_polling()
+        # [FLIP_SCREEN_FEATURE] Применение ориентации при включении [TODO: REVIEW/FIX BUGS]
+        if self._screen_flipped:
+            self._apply_screen_orientation()
+        self._log("Плагин включен")
+        self._refresh_ui()
+
+    def on_plugin_disable(self):
+        self._shutdown()
+        self._log("Плагин выключен", notify_ui=False)
+
+    def _shutdown(self):
+        self._stop_event.set()
+        self._power_cancel.set()
+        self._burst_cancel.set()
+        self._stop_polling()
+        self._stop_finder()
+        self._join_worker(self._finder_thread, 2.5)
+        self.stop_learning()
+        self._join_worker(self._power_thread, 2.5)
+        self._join_worker(self._burst_thread, 2.5)
+        self._join_worker(self._job_thread, 2.5)
+        while True:
+            try:
+                self._jobs.get_nowait()
+                self._jobs.task_done()
+            except queue.Empty:
+                break
+        with self._refresh_lock:
+            if self._pending_refresh_timer is not None:
+                self._pending_refresh_timer.cancel()
+                self._pending_refresh_timer = None
+        # [FLIP_SCREEN_FEATURE] Восстановление нормальной ориентации при выходе [TODO: REVIEW/FIX BUGS]
+        if self._screen_flipped:
+            self._restore_screen_orientation()
+        self._release_usb()
+
+    def on_plugin_unload(self):
+        self._shutdown()
+        self._log("Плагин выгружен", notify_ui=False)
+
+    def _get_state(self):
+        with self._state_lock:
+            return self._state
+
+    def _set_state(self, new_state):
+        with self._state_lock:
+            self._state = new_state
+
+    def _is_connected(self):
+        with self._state_lock:
+            return self._state in (DongleState.CONNECTED, DongleState.LEARNING) and self._connection is not None
+
+    def _init_usb_context(self):
+        if not jclass:
+            return
+        try:
+            Context = jclass("android.content.Context")
+            self._context = self.api.getContext()
+            self._usb_manager = self._context.getSystemService(Context.USB_SERVICE)
+        except Exception as e:
+            self._log(f"Ошибка доступа к USB сервису: {e}")
+
+    def _start_polling(self):
+        with self._state_lock:
+            if self._poll_thread is not None and self._poll_thread.is_alive():
+                return
+            self._stop_event.clear()
+            self._poll_thread = threading.Thread(target=self._poll_loop, name="UsbIrOTG-Poller", daemon=True)
+            self._poll_thread.start()
+
+    def _stop_polling(self):
+        self._stop_event.set()
+        self._reply_abort.set()
+        with self._reply_cond:
+            self._reply_cond.notify_all()
+        worker = self._poll_thread
+        self._join_worker(worker, 1.8)
+        if worker is None or not worker.is_alive():
+            with self._state_lock:
+                if self._poll_thread is worker:
+                    self._poll_thread = None
+
+    @staticmethod
+    def _join_worker(worker, timeout):
+        if worker is not None and worker.is_alive() and worker is not threading.current_thread():
+            try:
+                worker.join(timeout)
+            except Exception:
+                pass
+
+    def _poll_loop(self):
+        while not self._stop_event.is_set():
+            try:
+                state = self._get_state()
+                if state in (DongleState.DISCONNECTED, DongleState.CONNECTED):
+                    self._scan_once()
+            except Exception as e:
+                self._log(f"Сбой сканирования USB: {e}", notify_ui=False)
+            with self._state_lock:
+                if self._is_connected():
+                    sleep_time = 2.5
+                else:
+                    sleep_time = self._backoff_interval
+            self._stop_event.wait(sleep_time)
+
+    def _safe_usb_string(self, obj, method_name):
+        try:
+            m = getattr(obj, method_name, None)
+            res = m() if callable(m) else None
+            return str(res).strip() if res else ""
+        except Exception:
+            return ""
+
+    def _interface_bulk_pair_info(self, intf):
+        if not jclass:
+            return None
+        try:
+            UsbConstants = jclass("android.hardware.usb.UsbConstants")
+            out_ep, in_ep = None, None
+            for e in range(intf.getEndpointCount()):
+                ep = intf.getEndpoint(e)
+                if int(ep.getType()) == UsbConstants.USB_ENDPOINT_XFER_BULK:
+                    if int(ep.getDirection()) == UsbConstants.USB_DIR_OUT and out_ep is None:
+                        out_ep = ep
+                    elif int(ep.getDirection()) == UsbConstants.USB_DIR_IN and in_ep is None:
+                        in_ep = ep
+            if out_ep is None or in_ep is None:
+                return None
+            return {
+                "out": out_ep,
+                "in": in_ep,
+                "class": int(intf.getInterfaceClass()),
+                "subclass": int(intf.getInterfaceSubclass()),
+                "protocol": int(intf.getInterfaceProtocol()),
+            }
+        except Exception:
+            return None
+
+    def _resolve_device_profile(self, dev):
+        vid, pid = int(dev.getVendorId()), int(dev.getProductId())
+        known = SUPPORTED_DONGLES.get((vid, pid))
+        if known is not None:
+            return known
+        manufacturer = self._safe_usb_string(dev, "getManufacturerName")
+        product = self._safe_usb_string(dev, "getProductName")
+        labels = (manufacturer + " " + product).lower()
+        if (vid, pid) in _GENERIC_UART_CHIPS:
+            # A serial bridge VID/PID does not identify its IR firmware.
+            return None
+        has_bulk_pair = False
+        elk_vendor_interface = False
+        for i in range(dev.getInterfaceCount()):
+            intf = dev.getInterface(i)
+            info = self._interface_bulk_pair_info(intf)
+            if info is not None:
+                has_bulk_pair = True
+                if info["class"] == 255 and info["subclass"] == 240 and info["protocol"] == 0:
+                    elk_vendor_interface = True
+        if not has_bulk_pair:
+            return None
+        elk_tokens = ("elksmart", "ocrustar", "smart ir blaster", "baseus")
+        if any(token in labels for token in elk_tokens):
+            return ("ElkSmart / Ocrustar (descriptor)", ElkSmartBulkEncoder)
+        if elk_vendor_interface and any(token in labels for token in ("ir", "remote", "blaster")):
+            return ("USB IR / ElkSmart-compatible", ElkSmartBulkEncoder)
+        if any(token in labels for token in ("tiqiaa", "zaza", "joyroom", "tview")):
+            return ("Tiqiaa / ZaZa / JOYROOM (descriptor)", LegacyBulkStEncoder)
+        return None
+
+    def _scan_once(self, missing_log_force=False):
+        if self._stop_event.is_set() or self._usb_manager is None or self._get_state() == DongleState.CLOSING:
+            return
+        device_list = self._usb_manager.getDeviceList()
+        devices = self._java_collection_to_list(device_list.values())
+        if self._ignored_device_name is not None:
+            if not any(d.getDeviceName() == self._ignored_device_name for d in devices):
+                self._ignored_device_name = None
+        curr_dev = self._device
+        if curr_dev is not None:
+            if not any(d.getDeviceName() == curr_dev.getDeviceName() for d in devices):
+                self._log(f"Адаптер отключен: {curr_dev.getDeviceName()}")
+                self._release_usb()
+                with self._state_lock:
+                    self._backoff_fast_retries = 3
+                    self._backoff_interval = 0.5
+        if self._is_connected():
+            return
+        for dev in devices:
+            profile = self._resolve_device_profile(dev)
+            if profile is None:
+                continue
+            if dev.getDeviceName() == self._ignored_device_name:
+                continue
+            if self._usb_manager.hasPermission(dev):
+                self._open_device(dev, profile)
+            else:
+                self._request_permission(dev, profile)
+            return
+        with self._state_lock:
+            if self._backoff_fast_retries > 0:
+                self._backoff_fast_retries -= 1
+            else:
+                self._backoff_interval = min(self._backoff_interval * 1.5, 5.0)
+        if missing_log_force or (time.monotonic() - self._last_missing_log_at > 20.0):
+            self._log_dongle_missing(force=missing_log_force)
+
+    def _java_collection_to_list(self, java_collection):
+        if java_collection is None:
+            return []
+        try:
+            return list(java_collection.toArray())
+        except Exception:
+            try:
+                result = []
+                it = java_collection.iterator()
+                while it.hasNext():
+                    result.append(it.next())
+                return result
+            except Exception:
+                return []
+
+    def _request_permission(self, dev, profile=None):
+        name = dev.getDeviceName()
+        now = time.monotonic()
+        if now - self._permission_request_at.get(name, 0.0) < 5.0:
+            return
+        self._permission_request_at[name] = now
+        try:
+            Intent = jclass("android.content.Intent")
+            PendingIntent = jclass("android.app.PendingIntent")
+            BuildVersion = jclass("android.os.Build$VERSION")
+            intent = Intent("com.droid.dolphy.USB_PERMISSION")
+            intent.setPackage(self._context.getPackageName())
+            flags = 0x08000000
+            if int(BuildVersion.SDK_INT) >= 31:
+                flags |= 0x02000000
+            pi = PendingIntent.getBroadcast(self._context, 0, intent, flags)
+            self._log(f"Запрос прав USB для {dev.getDeviceName()}...")
+            self._usb_manager.requestPermission(dev, pi)
+        except Exception as e:
+            self._log(f"Ошибка запроса прав USB: {e}")
+
+    def _open_device(self, dev, profile=None):
+        should_refresh = False
+        with self._tx_lock:
+            if self._stop_event.is_set():
+                return
+            with self._state_lock:
+                if self._state in (DongleState.CONNECTED, DongleState.LEARNING, DongleState.CLOSING):
+                    return
+                self._state = DongleState.CONNECTING
+                self._session_id += 1
+                current_session = self._session_id
+                self._reply_abort.clear()
+            UsbConstants = jclass("android.hardware.usb.UsbConstants")
+            key = (int(dev.getVendorId()), int(dev.getProductId()))
+            resolved_profile = profile or self._resolve_device_profile(dev)
+            if resolved_profile is None:
+                self._log(f"Нет профиля протокола для VID:PID {key[0]:04X}:{key[1]:04X}")
+                self._set_state(DongleState.DISCONNECTED)
+                return
+            dongle_name, encoder_class = resolved_profile
+            candidates = []
+            for i in range(dev.getInterfaceCount()):
+                intf = dev.getInterface(i)
+                pairs = self._find_bulk_endpoint_pairs(intf, UsbConstants)
+                transport_bonus = 1000
+                if not pairs:
+                    pairs = self._find_interrupt_endpoint_pairs(intf, UsbConstants)
+                    transport_bonus = 0
+                for out_ep, in_ep in pairs:
+                    score = transport_bonus + min(int(out_ep.getMaxPacketSize()), int(in_ep.getMaxPacketSize()))
+                    if (int(out_ep.getAddress()) & 0x0F) == (int(in_ep.getAddress()) & 0x0F):
+                        score += 256
+                    try:
+                        if int(intf.getInterfaceClass()) == 255:
+                            score += 64
+                        if int(intf.getInterfaceSubclass()) == 240:
+                            score += 32
+                        if int(intf.getInterfaceProtocol()) == 0:
+                            score += 8
+                        if int(intf.getAlternateSetting()) == 0:
+                            score += 4
+                    except Exception:
+                        pass
+                    candidates.append((score, i, intf, out_ep, in_ep))
+            if not candidates:
+                self._log(f"Каналы USB не найдены: {dev.getDeviceName()}")
+                self._set_state(DongleState.DISCONNECTED)
+                return
+            candidates.sort(key=lambda item: item[0], reverse=True)
+            last_error = None
+            for score, if_index, intf, out_ep, in_ep in candidates:
+                conn = None
+                try:
+                    encoder = encoder_class()
+                    if isinstance(encoder, ElkSmartBulkEncoder):
+                        try:
+                            encoder.compat_mode = (
+                                "ocrustar_v15" if bool(self.get_setting("elksmart_v15_compat", False)) else "android"
+                            )
+                        except Exception:
+                            encoder.compat_mode = "android"
+                    packet_size = min(int(out_ep.getMaxPacketSize()), int(in_ep.getMaxPacketSize()))
+                    if hasattr(encoder, "can_support_packet_size") and not encoder.can_support_packet_size(packet_size):
+                        last_error = f"packet={packet_size}"
+                        continue
+                    conn = self._usb_manager.openDevice(dev)
+                    if conn is None:
+                        last_error = "openDevice=null"
+                        continue
+                    if not conn.claimInterface(intf, True):
+                        last_error = f"claim IF{if_index} failed"
+                        try:
+                            conn.close()
+                        except Exception:
+                            pass
+                        continue
+                    handshake_ok = self._run_open_handshake(conn, in_ep, out_ep, encoder)
+                    if not handshake_ok and getattr(encoder, "strict_handshake", False):
+                        last_error = f"handshake IF{if_index} failed"
+                        try:
+                            conn.releaseInterface(intf)
+                            conn.close()
+                        except Exception:
+                            pass
+                        continue
+                    with self._state_lock:
+                        if self._session_id != current_session or self._state == DongleState.CLOSING:
+                            try:
+                                conn.releaseInterface(intf)
+                                conn.close()
+                            except Exception:
+                                pass
+                            return
+                        self._device = dev
+                        self._connection = conn
+                        self._usb_interface = intf
+                        self._out_endpoint = out_ep
+                        self._in_endpoint = in_ep
+                        details = getattr(encoder, "_subtype", None)
+                        compat = getattr(encoder, "compat_mode", None)
+                        suffix = "/".join(x for x in (details, compat) if x)
+                        self._dongle_name = f"{dongle_name} [{suffix}]" if suffix else dongle_name
+                        self._encoder = encoder
+                        self._state = DongleState.CONNECTED
+                        self._connected_at = time.monotonic()
+                        should_refresh = True
+                    out_addr = int(out_ep.getAddress()) & 0xFF
+                    in_addr = int(in_ep.getAddress()) & 0xFF
+                    ep_type = "BULK" if int(out_ep.getType()) == UsbConstants.USB_ENDPOINT_XFER_BULK else "INT"
+                    self._log(
+                        f"🟢 Подключен: {self._dongle_name} "
+                        f"(VID: 0x{dev.getVendorId():04X}, PID: 0x{dev.getProductId():04X}, "
+                        f"IF{if_index} {ep_type} 0x{out_addr:02X}/0x{in_addr:02X})"
+                    )
+                    break
+                except Exception as e:
+                    last_error = str(e)
+                    if conn is not None:
+                        try:
+                            conn.releaseInterface(intf)
+                            conn.close()
+                        except Exception:
+                            pass
+                    continue
+            if not should_refresh:
+                self._set_state(DongleState.DISCONNECTED)
+                self._log(f"Не удалось открыть {dongle_name}" + (f": {last_error}" if last_error else ""))
+                return
+        if should_refresh:
+            self._refresh_ui()
+
+    def _find_bulk_endpoint_pairs(self, intf, UsbConstants):
+        outs, ins = [], []
+        for i in range(intf.getEndpointCount()):
+            ep = intf.getEndpoint(i)
+            if int(ep.getType()) == UsbConstants.USB_ENDPOINT_XFER_BULK:
+                if int(ep.getDirection()) == UsbConstants.USB_DIR_OUT:
+                    outs.append(ep)
+                else:
+                    ins.append(ep)
+        return self._rank_endpoint_pairs(outs, ins)
+
+    def _find_interrupt_endpoint_pairs(self, intf, UsbConstants):
+        outs, ins = [], []
+        for i in range(intf.getEndpointCount()):
+            ep = intf.getEndpoint(i)
+            if int(ep.getType()) == UsbConstants.USB_ENDPOINT_XFER_INT:
+                if int(ep.getDirection()) == UsbConstants.USB_DIR_OUT:
+                    outs.append(ep)
+                else:
+                    ins.append(ep)
+        return self._rank_endpoint_pairs(outs, ins)
+
+    @staticmethod
+    def _rank_endpoint_pairs(outs, ins):
+        if not outs or not ins:
+            return []
+        same, fallback, seen = [], [], set()
+        for out_ep in outs:
+            out_num = int(out_ep.getAddress()) & 0x0F
+            for in_ep in ins:
+                in_num = int(in_ep.getAddress()) & 0x0F
+                key = (int(out_ep.getAddress()) & 0xFF, int(in_ep.getAddress()) & 0xFF)
+                if key in seen:
+                    continue
+                seen.add(key)
+                item = (out_ep, in_ep)
+                if out_num == in_num:
+                    same.append(item)
+                else:
+                    fallback.append(item)
+        same.sort(key=lambda pair: ((int(pair[0].getAddress()) & 0x0F),
+                                    -min(int(pair[0].getMaxPacketSize()), int(pair[1].getMaxPacketSize()))))
+        fallback.sort(key=lambda pair: min(int(pair[0].getMaxPacketSize()), int(pair[1].getMaxPacketSize())), reverse=True)
+        return same + fallback
+
+    def _run_open_handshake(self, conn, in_endpoint, out_endpoint, encoder):
+        if not hasattr(encoder, "open_handshake"):
+            return True
+        try:
+            return encoder.open_handshake(
+                conn, in_endpoint, out_endpoint,
+                self._write_chunk,
+                self._drain_in_endpoint,
+                self._read_one_reply,
+            )
+        except Exception:
+            return False
+
+    def _read_one_reply(self, conn, in_endpoint, timeout_ms):
+        if not jarray or not jbyte:
+            return None
+        size = max(64, int(in_endpoint.getMaxPacketSize()))
+        buf = jarray(jbyte)([0] * size)
+        try:
+            n = conn.bulkTransfer(in_endpoint, buf, size, max(1, int(timeout_ms)))
+            if n > 0:
+                return bytes(int(x) & 0xFF for x in buf[:n])
+        except Exception:
+            pass
+        return None
+
+    def _drain_in_endpoint(self, conn, in_endpoint, timeout_ms):
+        if not jarray or not jbyte:
+            return
+        size = max(64, int(in_endpoint.getMaxPacketSize()))
+        buf = jarray(jbyte)([0] * size)
+        deadline = time.monotonic() + timeout_ms / 1000.0
+        while time.monotonic() < deadline:
+            try:
+                n = conn.bulkTransfer(in_endpoint, buf, size, 15)
+                if n <= 0:
+                    break
+            except Exception:
+                break
+
+    def _ensure_reader(self, session_id, continuous=False):
+        with self._state_lock:
+            if continuous:
+                self._reader_continuous = True
+            else:
+                self._read_until_at = max(self._read_until_at, time.monotonic() + 1.2)
+        if self._reader_thread is not None and self._reader_thread.is_alive():
+            return
+        self._reader_thread = threading.Thread(target=self._reader_loop, args=(session_id,), daemon=True)
+        self._reader_thread.start()
+
+    def _reader_loop(self, session_id):
+        conn = self._connection
+        endpoint = self._in_endpoint
+        if conn is None or endpoint is None:
+            return
+        size = max(64, endpoint.getMaxPacketSize())
+        buf = jarray(jbyte)([0] * size)
+        while True:
+            with self._state_lock:
+                if self._session_id != session_id or self._state not in (DongleState.CONNECTED, DongleState.LEARNING):
+                    break
+                if not self._reader_continuous and time.monotonic() >= self._read_until_at:
+                    break
+            try:
+                n = conn.bulkTransfer(endpoint, buf, size, 80)
+                if n > 0:
+                    data = bytes(int(x) & 0xFF for x in buf[:n])
+                    with self._reply_cond:
+                        self._reply_queue.append(data)
+                        self._reply_cond.notify_all()
+            except Exception:
+                time.sleep(0.005)
+            time.sleep(0.001)
+
+    def _release_usb(self, target_session=None):
+        reader = None
+        learner = None
+        with self._state_lock:
+            if target_session is not None and self._session_id != target_session:
+                return
+            if self._state == DongleState.DISCONNECTED:
+                return
+            self._state = DongleState.CLOSING
+            self._session_id += 1
+            self._read_until_at = 0.0
+            self._reader_continuous = False
+            self._reply_abort.set()
+            self._learning_cancel_event.set()
+            pending = self._pending_refresh_timer
+            self._pending_refresh_timer = None
+            with self._reply_cond:
+                self._reply_queue.clear()
+                self._reply_cond.notify_all()
+            reader = self._reader_thread
+            learner = self._learning_thread
+        if pending is not None:
+            try:
+                pending.cancel()
+            except Exception:
+                pass
+        if learner is not None and learner.is_alive():
+            self._join_worker(learner, 2.0)
+        if reader is not None and reader.is_alive():
+            self._join_worker(reader, 0.5)
+        with self._state_lock:
+            if (learner is None or not learner.is_alive()) and self._learning_thread is learner:
+                self._learning_thread = None
+            if (reader is None or not reader.is_alive()) and self._reader_thread is reader:
+                self._reader_thread = None
+        with self._tx_lock:
+            conn = self._connection
+            intf = self._usb_interface
+            try:
+                if conn is not None and intf is not None:
+                    try:
+                        conn.releaseInterface(intf)
+                    except Exception:
+                        pass
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+            finally:
+                self._device = None
+                self._connection = None
+                self._usb_interface = None
+                self._out_endpoint = None
+                self._in_endpoint = None
+                self._dongle_name = None
+                self._encoder = UnknownProtocolEncoder()
+                self._connected_at = 0.0
+                self._set_state(DongleState.DISCONNECTED)
+        self._refresh_ui()
+
+    def _write_chunk(self, conn, endpoint, data_bytes, timeout_ms=400):
+        if not jarray or not jbyte:
+            return False
+        total_sent = 0
+        raw = bytes(data_bytes)
+        while total_sent < len(raw):
+            if self._stop_event.is_set():
+                return False
+            chunk = raw[total_sent:total_sent + 64]
+            arr = jarray(jbyte)([int(b) if b < 128 else int(b) - 256 for b in chunk])
+            try:
+                sent = conn.bulkTransfer(endpoint, arr, len(chunk), timeout_ms)
+            except Exception:
+                sent = -1
+            if sent <= 0:
+                return False
+            total_sent += sent
+        return True
+
+    def _usb_write(self, encoded, session_id, pattern=None):
+        chunks_sent = 0
+        try:
+            chunks = [encoded] if isinstance(encoded[0], int) else list(encoded)
+            delay = getattr(self._encoder, "inter_frame_delay_ms", 0) / 1000.0
+            if getattr(self._encoder, "wants_background_reader", False):
+                self._ensure_reader(session_id, continuous=getattr(self._encoder, "continuous_reader", False))
+            for index, chunk in enumerate(chunks):
+                if self._stop_event.is_set() or self._session_id != session_id:
+                    return False, chunks_sent
+                if not self._write_chunk(self._connection, self._out_endpoint, chunk):
+                    return False, chunks_sent
+                chunks_sent += 1
+                if delay > 0 and index + 1 < len(chunks):
+                    time.sleep(delay)
+            if hasattr(self._encoder, "drain_after_transmit"):
+                self._encoder.drain_after_transmit(self._connection, self._in_endpoint, self._drain_in_endpoint)
+            return True, chunks_sent
+        except Exception as e:
+            self._log(f"Ошибка передачи USB: {e}")
+            return False, chunks_sent
+
+    def hook_infrared_transmit(self, payload):
+        if not self._can_transmit():
+            return None
+        res = self.service_infrared_transmitter_transmit(payload)
+        if res.get("handled"):
+            return {"handled": True, "result": res}
+        return None
+
+    def service_infrared_transmitter_available(self, payload=None):
+        return {"available": self._can_transmit()}
+
+    def service_infrared_transmitter_transmit(self, payload=None):
+        # Serialize all paths, including the inter-command USB settling time.
+        with self._tx_lock:
+            if self._stop_event.is_set():
+                return {"handled": True, "ok": False, "error": "plugin_stopped"}
+            return self._transmit_payload(payload)
+
+    def _transmit_payload(self, payload=None):
+        payload = payload or {}
+        try:
+            freq, pattern = validate_signal(payload.get("frequency", 38000), payload.get("pattern", []))
+        except Exception as e:
+            return {"handled": True, "ok": False, "error": "invalid_payload", "message": str(e)}
+
+        backend = self._selected_backend()
+        if backend != "usb":
+            if backend == "builtin":
+                ok = self._transmit_builtin_ir(freq, pattern)
+                self._inc_tx(ok, freq, len(pattern))
+                self._log(f"Встроенный ИК TX: {'OK' if ok else 'FAIL'} ({freq}Hz, {len(pattern)} имп.)")
+                return {"handled": True, "ok": ok}
+            if backend == "audio":
+                ok = AudioIrTransmitter.transmit(freq, pattern, stereo=bool(self.get_setting("audio_stereo", True)))
+                self._inc_tx(ok, freq, len(pattern))
+                self._log(f"Audio IR TX: {'OK' if ok else 'FAIL'} ({freq}Hz, {len(pattern)} имп.)")
+                return {"handled": True, "ok": ok}
+            return {"handled": False, "ok": False, "error": "dongle_disconnected"}
+
+        with self._state_lock:
+            if self._state != DongleState.CONNECTED:
+                return {"handled": False, "ok": False, "error": "dongle_disconnected"}
+            if self._learning_thread and self._learning_thread.is_alive():
+                return {"handled": False, "ok": False, "error": "busy_learning"}
+
+        need_release = False
+        release_session = None
+        ok = False
+        with self._tx_lock:
+            with self._state_lock:
+                if self._state != DongleState.CONNECTED:
+                    return {"handled": False, "ok": False, "error": "dongle_disconnected"}
+                session_id = self._session_id
+            try:
+                encoded = self._encoder.encode(freq, pattern)
+            except Exception as e:
+                self._log(f"Ошибка кодирования: {e}")
+                return {"handled": False, "ok": False, "error": "encode_failed", "message": str(e)}
+            if encoded is None:
+                return {"handled": False, "ok": False, "error": "unsupported_protocol"}
+            ok, sent_count = self._usb_write(encoded, session_id, pattern)
+            # A failed chunk may have reached the device partially; do not replay it.
+            delay_ms = getattr(self._encoder, "post_transmit_delay_ms", lambda p: 50)(pattern)
+            self._log(f"TX: {'OK' if ok else 'FAIL'} ({freq}Hz, {len(pattern)} имп.)")
+            if not ok:
+                need_release = True
+                release_session = session_id
+
+        self._inc_tx(ok, freq, len(pattern))
+        if ok:
+            time.sleep(delay_ms / 1000.0)
+            return {"handled": True, "ok": True}
+        with self._stats_lock:
+            streak = self._tx_fail_streak
+        if streak >= 3:
+            self._log("⚠ 3 ошибки подряд — сброс адаптера")
+            need_release = True
+        if need_release:
+            self._release_usb(release_session)
+        return {"handled": True, "ok": False, "error": "usb_write_failed"}
+
+    def start_learning_async(self):
+        action = None
+        session_id = None
+        with self._state_lock:
+            if self._state == DongleState.LEARNING:
+                action = "stop"
+            elif self._connection is None or self._state != DongleState.CONNECTED:
+                self._learned_status = "Адаптер не подключен"
+                action = "error_not_connected"
+            elif not getattr(self._encoder, "supports_learning", False):
+                self._learned_status = "Запись не поддерживается устройством"
+                action = "error_not_supported"
+            else:
+                self._state = DongleState.LEARNING
+                session_id = self._session_id
+                self._learning_cancel_event.clear()
+                action = "start"
+        if action == "stop":
+            self.stop_learning()
+            self._refresh_ui()
+            return
+        if action == "error_not_connected":
+            self._log("Ошибка записи: адаптер не подключен")
+            self._refresh_ui()
+            return
+        if action == "error_not_supported":
+            self._log("Запись не поддерживается текущим адаптером")
+            self._refresh_ui()
+            return
+        self._learned_status = "Направьте пульт на адаптер и нажмите кнопку..."
+        self._learned_protocol_guess = ""
+        self._refresh_ui()
+        self._learning_thread = threading.Thread(target=self._learning_worker, args=(session_id,), daemon=True)
+        self._learning_thread.start()
+
+    def stop_learning(self):
+        self._learning_cancel_event.set()
+        worker = None
+        with self._state_lock:
+            worker = self._learning_thread
+        if worker is not None:
+            self._join_worker(worker, 2.0)
+        with self._state_lock:
+            finished = worker is None or not worker.is_alive()
+            if finished and self._state == DongleState.LEARNING:
+                self._state = DongleState.CONNECTED
+            if finished and self._learning_thread is worker:
+                self._learning_thread = None
+
+    def _learning_worker(self, session_id):
+        # Learning owns the same USB transfer lock as TX, including its handshake.
+        with self._tx_lock:
+            try:
+                with self._state_lock:
+                    current = self._session_id == session_id and self._state == DongleState.LEARNING
+                if current and not self._learning_cancel_event.is_set() and not self._stop_event.is_set():
+                    self._learning_session(session_id)
+            finally:
+                with self._state_lock:
+                    if self._session_id == session_id and self._state == DongleState.LEARNING:
+                        self._state = DongleState.CONNECTED
+                self._refresh_ui()
+
+    def _learning_session(self, session_id):
+        conn = self._connection
+        in_ep = self._in_endpoint
+        out_ep = self._out_endpoint
+        encoder = self._encoder
+        if conn is None or in_ep is None or out_ep is None:
+            with self._state_lock:
+                if self._session_id == session_id and self._state == DongleState.LEARNING:
+                    self._state = DongleState.CONNECTED
+            self._refresh_ui()
+            return
+        with self._state_lock:
+            self._read_until_at = 0.0
+            self._reader_continuous = False
+        reader = self._reader_thread
+        self._join_worker(reader, 0.35)
+        if reader is None or not reader.is_alive():
+            with self._state_lock:
+                if self._reader_thread is reader:
+                    self._reader_thread = None
+
+        def cancelled():
+            if self._learning_cancel_event.is_set() or self._stop_event.is_set():
+                return True
+            with self._state_lock:
+                return self._session_id != session_id or self._state != DongleState.LEARNING
+
+        learn_mode_started = False
+        try:
+            learn_timeout = max(3.0, min(20.0, float(self.get_setting("learn_timeout", 8))))
+            if hasattr(encoder, "learn_signal"):
+                res = encoder.learn_signal(
+                    conn, in_ep, out_ep,
+                    self._write_chunk,
+                    self._drain_in_endpoint,
+                    cancelled,
+                    learn_timeout,
+                )
+                if res:
+                    raw_timings = res.get("pattern", []) if isinstance(res, dict) else res
+                    frequency = res.get("frequency", 38000) if isinstance(res, dict) else 38000
+                    self._learned_frequency, self._learned_timings = validate_signal(frequency, raw_timings)
+                    proto, _ = IrProtocolEngine.detect_protocol(self._learned_timings, self._learned_frequency)
+                    self._learned_protocol_guess = proto
+                    self._learned_status = f"Записано {len(self._learned_timings)} имп. [{proto}]"
+                    self._log(f"Запись Tiqiaa завершена: {len(self._learned_timings)} имп. ({proto})")
+                    self._auto_save_learned("Learned (Tiqiaa USB)")
+                elif cancelled():
+                    self._learned_status = "Запись остановлена"
+                else:
+                    self._learned_status = "Таймаут или сигнал не распознан"
+                return
+            if hasattr(encoder, "authorize_for_learning"):
+                with self._tx_lock:
+                    if cancelled():
+                        return
+                    ok = encoder.authorize_for_learning(
+                        conn, in_ep, out_ep,
+                        self._write_chunk,
+                        self._drain_in_endpoint,
+                        self._read_one_reply,
+                    )
+                    if not ok:
+                        raise RuntimeError("ElkSmart авторизация не подтверждена")
+                    if not self._write_chunk(conn, out_ep, bytes([0xFE] * 4), 300):
+                        raise RuntimeError("Команда записи отвергнута")
+                    learn_mode_started = True
+            else:
+                with self._tx_lock:
+                    self._drain_in_endpoint(conn, in_ep, 100)
+                    if not self._write_chunk(conn, out_ep, bytes([0xFE] * 4), 250):
+                        raise RuntimeError("Команда записи отвергнута")
+                    learn_mode_started = True
+            self._log("Режим записи ElkSmart включен")
+            size = max(64, int(in_ep.getMaxPacketSize()))
+            resp_buf = jarray(jbyte)([0] * size)
+            header = bytes([0xFE] * 4)
+            stream = bytearray()
+            expected_len = None
+            deadline = time.monotonic() + learn_timeout
+            while time.monotonic() < deadline and not cancelled():
+                try:
+                    n = conn.bulkTransfer(in_ep, resp_buf, size, 40)
+                except Exception:
+                    n = -1
+                if n <= 0:
+                    continue
+                stream.extend(bytes(int(x) & 0xFF for x in resp_buf[:n]))
+                if expected_len is None:
+                    idx = stream.find(header)
+                    if idx >= 0:
+                        if idx > 0:
+                            del stream[:idx]
+                        if len(stream) >= 6:
+                            expected_len = (stream[4] << 8) | stream[5]
+                            del stream[:6]
+                            if expected_len <= 0 or expected_len > 0x10000:
+                                raise RuntimeError("Некорректная длина learn payload")
+                if expected_len is not None and len(stream) >= expected_len:
+                    break
+            if cancelled():
+                self._learned_status = "Запись остановлена"
+                return
+            if expected_len is not None and len(stream) >= expected_len:
+                timings = encoder.decode_learned_signal(stream[:expected_len])
+                self._learned_frequency, self._learned_timings = validate_signal(38000, timings)
+                proto, _ = IrProtocolEngine.detect_protocol(self._learned_timings, self._learned_frequency)
+                self._learned_protocol_guess = proto
+                self._learned_status = f"Записано {len(self._learned_timings)} имп. [{proto}]"
+                self._log(f"Запись ElkSmart завершена: {len(self._learned_timings)} имп. ({proto})")
+                self._auto_save_learned("Learned (ElkSmart USB)")
+            else:
+                self._learned_status = "Запись остановлена или таймаут"
+        except Exception as e:
+            self._learned_status = f"Ошибка записи: {e}"
+            self._log(f"Сбой обучения: {e}")
+        finally:
+            if learn_mode_started:
+                with self._tx_lock:
+                    with self._state_lock:
+                        same_session = self._session_id == session_id
+                    if same_session:
+                        try:
+                            self._write_chunk(conn, out_ep, bytes([0xFD] * 4), 250)
+                        except Exception:
+                            pass
+            with self._state_lock:
+                if self._session_id == session_id and self._state == DongleState.LEARNING:
+                    self._state = DongleState.CONNECTED
+            self._refresh_ui()
+
+    def _auto_save_learned(self, default_tag="Learned_Signal"):
+        try:
+            if not bool(self.get_setting("auto_save_learned", False)):
+                return
+        except Exception:
+            return
+        if not self._learned_timings:
+            return
+        name = self._signal_name_input.strip() or f"{default_tag}_{len(self._signal_library) + 1}"
+        if self._add_signal_to_library(name, self._learned_frequency, self._learned_timings):
+            self._signal_name_input = ""
+
+    def _replay_learned(self):
+        if not self._learned_timings:
+            return
+        self._enqueue_tx({"frequency": self._learned_frequency, "pattern": list(self._learned_timings)})
+
+    def _copy_learned_json(self):
+        if not self._learned_timings:
+            self._log("Буфер пуст: сначала запишите сигнал")
+            return
+        self._clipboard_copy("IR_Signal_JSON", json.dumps({
+            "frequency": self._learned_frequency,
+            "pattern": self._learned_timings,
+        }), "JSON скопирован")
+
+    def _copy_learned_flipper(self):
+        if not self._learned_timings:
+            self._log("Буфер пуст: сначала запишите сигнал")
+            return
+        name = self._signal_name_input.strip() or "Learned_Signal"
+        entry = {"name": name, "frequency": self._learned_frequency, "pattern": list(self._learned_timings)}
+        self._export_flipper_entries([entry], self._flipper_clean_name(name) + ".ir", "Записанный .ir")
+
+    def _save_learned_to_library(self):
+        if not self._learned_timings:
+            self._log("Нет записанного сигнала для сохранения")
+            return
+        name = self._signal_name_input.strip() or f"Signal_{len(self._signal_library) + 1}"
+        if self._add_signal_to_library(name, self._learned_frequency, self._learned_timings):
+            self._signal_name_input = ""
+        self._refresh_ui()
+
+    def _start_finder(self):
+        with self._state_lock:
+            stop = self._finder_running
+            if not stop:
+                if self._sequence_busy() or self._stop_event.is_set():
+                    return
+                if not self._can_transmit():
+                    self._log("IR Finder: нет доступного передатчика")
+                    try:
+                        self.toast("Подключите адаптер или включите Audio/Встроенный ИК")
+                    except Exception:
+                        pass
+                    return
+                self._finder_running = True
+                self._finder_cancel.clear()
+                self._finder_status = "Сканирование..."
+                self._finder_thread = threading.Thread(target=self._finder_worker, daemon=True)
+                self._finder_thread.start()
+        if stop:
+            self._stop_finder()
+            return
+        self._refresh_ui()
+
+    def _stop_finder(self):
+        self._finder_cancel.set()
+        self._finder_running = False
+        self._finder_status = "Остановлен"
+        self._refresh_ui()
+
+    def _finder_step_forward(self):
+        self._finder_current_code = (self._finder_current_code + 1) & 0xFF
+        code = self._finder_current_code
+        self._submit_job(lambda: self._send_finder_code(code))
+        self._refresh_ui()
+
+    def _finder_step_backward(self):
+        self._finder_current_code = (self._finder_current_code - 1) & 0xFF
+        code = self._finder_current_code
+        self._submit_job(lambda: self._send_finder_code(code))
+        self._refresh_ui()
+
+    def _cycle_finder_proto(self):
+        if self._finder_running:
+            return
+        defaults = {
+            "NEC": "20DF",
+            "NEC2": "20DF",
+            "NECx1": "20DF",
+            "NECx2": "20DF",
+            "Sony12": "01",
+            "Sony15": "01",
+            "Sony20": "01",
+            "RC-5": "00",
+            "RC-6": "00",
+            "Samsung32": "07",
+            "Samsung36": "07",
+            "Denon": "02A0",
+            "Pioneer": "A55A",
+            "RCA": "0F",
+            "Sharp": "0041",
+        }
+        try:
+            i = self._FINDER_PROTOS.index(self._finder_proto)
+        except ValueError:
+            i = -1
+        self._finder_proto = self._FINDER_PROTOS[(i + 1) % len(self._FINDER_PROTOS)]
+        self._finder_prefix = defaults.get(self._finder_proto, "00")
+        self._refresh_ui()
+
+    def _encode_finder_signal(self, proto, prefix, code_val):
+        pattern = None
+        freq = 38000
+        sent_label = ""
+        try:
+            p_clean = prefix.replace("0x", "").strip()
+            if proto in ("NEC", "NEC2", "NECx1", "NECx2"):
+                is_ext = proto in ("NECx1", "NECx2")
+                repeat_full = proto in ("NEC2", "NECx2")
+                if len(p_clean) == 4 and not is_ext:
+                    inv_cmd = (~code_val) & 0xFF
+                    full_hex = f"{p_clean}{code_val:02X}{inv_cmd:02X}"
+                    freq, pattern = IrProtocolEngine.encode_nec(full_hex, extended=False, repeat_full_frame=repeat_full)
+                    sent_label = full_hex
+                elif is_ext:
+                    inv_cmd = (~code_val) & 0xFF
+                    full_hex = f"{p_clean:0>4}{code_val:02X}{inv_cmd:02X}"
+                    freq, pattern = IrProtocolEngine.encode_nec(full_hex, extended=True, repeat_full_frame=repeat_full)
+                    sent_label = full_hex
+                elif len(p_clean) <= 2:
+                    full_hex = f"{p_clean:0>2}{code_val:02X}"
+                    freq, pattern = IrProtocolEngine.encode_nec(full_hex, extended=False, repeat_full_frame=repeat_full)
+                    sent_label = full_hex
+                else:
+                    full_hex = f"{p_clean}{code_val:02X}"
+                    freq, pattern = IrProtocolEngine.encode_nec(full_hex, extended=True, repeat_full_frame=repeat_full)
+                    sent_label = full_hex
+            elif proto == "Sony12":
+                addr = int(prefix, 16) & 0x1F if prefix else 1
+                freq, pattern = IrProtocolEngine.encode_sirc(code_val, addr, 12)
+                sent_label = f"A:{addr:02X}_C:{code_val:02X}"
+            elif proto == "Sony15":
+                addr = int(prefix, 16) & 0xFF if prefix else 1
+                freq, pattern = IrProtocolEngine.encode_sirc(code_val, addr, 15)
+                sent_label = f"A:{addr:02X}_C:{code_val:02X}"
+            elif proto == "Sony20":
+                addr = int(prefix, 16) & 0x1FFF if prefix else 1
+                freq, pattern = IrProtocolEngine.encode_sirc(code_val, addr, 20)
+                sent_label = f"A:{addr:04X}_C:{code_val:02X}"
+            elif proto == "RC-5":
+                addr = int(prefix, 16) & 0x1F if prefix else 0
+                freq, pattern = IrProtocolEngine.encode_rc5(addr, code_val)
+                sent_label = f"A:{addr:02X}_C:{code_val:02X}"
+            elif proto == "RC-6":
+                addr = int(prefix, 16) & 0xFF if prefix else 0
+                freq, pattern = IrProtocolEngine.encode_rc6(addr, code_val)
+                sent_label = f"A:{addr:02X}_C:{code_val:02X}"
+            elif proto == "Samsung32":
+                addr = int(prefix, 16) & 0xFF if prefix else 7
+                freq, pattern = IrProtocolEngine.encode_samsung32(addr, code_val)
+                sent_label = f"A:{addr:02X}_C:{code_val:02X}"
+            elif proto == "Samsung36":
+                addr = int(prefix, 16) & 0xFFFF if prefix else 7
+                full_hex = f"{addr:04X}{code_val:05X}"
+                freq, pattern = IrProtocolEngine.encode_samsung36(full_hex)
+                sent_label = full_hex
+            elif proto == "Denon":
+                full_hex = f"{p_clean:0>2}{code_val:02X}"
+                freq, pattern = IrProtocolEngine.encode_denon(full_hex)
+                sent_label = full_hex
+            elif proto == "Pioneer":
+                full_hex = f"{p_clean:0>4}{code_val:02X}{((~code_val) & 0xFF):02X}"
+                freq, pattern = IrProtocolEngine.encode_pioneer(full_hex)
+                sent_label = full_hex
+            elif proto == "RCA":
+                addr = int(prefix, 16) & 0x0F if prefix else 0
+                freq, pattern = IrProtocolEngine.encode_rca(addr, code_val)
+                sent_label = f"A:{addr:01X}_C:{code_val:02X}"
+            elif proto == "Sharp":
+                full_hex = f"{p_clean:0>2}{code_val:02X}"
+                freq, pattern = IrProtocolEngine.encode_sharp(full_hex)
+                sent_label = full_hex
+        except Exception as e:
+            self._log(f"Ошибка брутфорс кодирования: {e}")
+            return None, freq, ""
+        return pattern, freq, sent_label
+
+    def _send_finder_code(self, code_val):
+        prefix = self._finder_prefix.strip().upper() or "00"
+        proto = self._finder_proto
+        pattern, freq, sent_label = self._encode_finder_signal(proto, prefix, code_val)
+        if pattern:
+            result = self.service_infrared_transmitter_transmit({"frequency": freq, "pattern": pattern})
+            if result.get("ok"):
+                self._finder_last_sent = sent_label
+                self._finder_last_code = code_val
+                self._finder_hit = {"name": f"Finder_{proto}_{sent_label}", "frequency": freq, "pattern": list(pattern)}
+                return True
+        return False
+
+    def _finder_worker(self):
+        while self._finder_running and self._can_transmit() and not self._stop_event.is_set():
+            if self._finder_cancel.is_set():
+                break
+            with self._tx_lock:
+                if self._finder_cancel.is_set() or self._stop_event.is_set():
+                    break
+                sent = self._send_finder_code(self._finder_current_code)
+            if self._finder_cancel.is_set() or self._stop_event.is_set():
+                break
+            if not sent:
+                self._finder_status = "Остановлен: ошибка передачи"
+                break
+            self._finder_status = f"Код: 0x{self._finder_current_code:02X} ({self._finder_current_code}/{self._finder_max_code})"
+            self._refresh_ui()
+            if self._finder_current_code >= self._finder_max_code:
+                self._finder_status = "Сканирование завершено"
+                self._finder_running = False
+                break
+            self._finder_current_code += 1
+            if self._finder_cancel.wait(max(0.15, self._finder_delay_ms / 1000.0)):
+                break
+        self._finder_running = False
+        self._refresh_ui()
+
+    def _save_finder_hit(self):
+        self._stop_finder()
+        if not self._finder_hit:
+            return
+        hit = dict(self._finder_hit)
+        if self._add_signal_to_library(hit["name"], hit["frequency"], hit["pattern"]):
+            try:
+                self.toast(f"Сохранён код: {self._finder_last_sent}")
+            except Exception:
+                pass
+
+    def _send_power_code(self, index):
+        if 0 <= index < len(_UNIVERSAL_POWER_CODES):
+            name, freq, pattern = _UNIVERSAL_POWER_CODES[index]
+            self._log(f"Power blast: {name}")
+            self._enqueue_tx({"frequency": freq, "pattern": pattern})
+
+    def _sweep_universal_power(self):
+        def sweep():
+            try:
+                self._log("Запуск Universal Power Sweep")
+                for name, freq, pattern in _UNIVERSAL_POWER_CODES:
+                    if self._stop_event.is_set() or self._power_cancel.is_set() or not self._can_transmit():
+                        break
+                    self._log(f"Power: {name}")
+                    with self._tx_lock:
+                        if self._stop_event.is_set() or self._power_cancel.is_set():
+                            break
+                        result = self.service_infrared_transmitter_transmit({"frequency": freq, "pattern": pattern})
+                    if not result.get("ok"):
+                        self._log("Power Sweep: ошибка передачи")
+                        break
+                    if self._power_cancel.wait(0.35):
+                        break
+            finally:
+                self._power_running = False
+                self._log("Universal Power Sweep остановлен" if self._power_cancel.is_set() else "Universal Power Sweep завершён")
+                self._refresh_ui()
+        with self._state_lock:
+            if self._power_running:
+                self._power_cancel.set()
+                self._refresh_ui()
+                return
+            if self._sequence_busy() or self._stop_event.is_set():
+                self._log("Перебор: передатчик занят")
+                return
+            self._power_cancel.clear()
+            self._power_running = True
+            self._power_thread = threading.Thread(target=sweep, daemon=True, name="PowerSweep")
+            self._power_thread.start()
+        self._refresh_ui()
+
+    def _send_nec_test(self):
+        f, p = IrProtocolEngine.encode_nec("00FFE01F", carrier_hz=38222)
+        self._enqueue_tx({"frequency": f, "pattern": p})
+
+    def _send_rc5_test(self):
+        f, p = IrProtocolEngine.encode_rc5(0, 12)
+        self._enqueue_tx({"frequency": f, "pattern": p})
+
+    def _send_sony_test(self):
+        f, p = IrProtocolEngine.encode_sirc(0x15, 0x01, 12)
+        self._enqueue_tx({"frequency": f, "pattern": p})
+
+    def _manual_disconnect(self):
+        if not self._is_connected():
+            self._log("Адаптер уже отключен")
+            return
+        self._log("Ручное отключение")
+        if self._device is not None:
+            try:
+                self._ignored_device_name = self._device.getDeviceName()
+            except Exception:
+                self._ignored_device_name = None
+        self.stop_learning()
+        self._release_usb()
+
+    def _manual_rescan(self):
+        self._log("Ручной поиск USB-адаптера...")
+        self._ignored_device_name = None
+        with self._state_lock:
+            self._backoff_interval = 0.5
+            self._backoff_fast_retries = 3
+        self._scan_once(missing_log_force=True)
+        self._refresh_ui()
+
+    def _dump_usb_devices(self):
+        if self._usb_manager is None:
+            self._log("USB сервис недоступен")
+            return
+        devices = self._java_collection_to_list(self._usb_manager.getDeviceList().values())
+        if not devices:
+            self._log("USB-устройства не обнаружены в системе")
+            return
+        self._log(f"--- Найдено USB устройств: {len(devices)} ---")
+        for d in devices:
+            vid = d.getVendorId()
+            pid = d.getProductId()
+            name = d.getDeviceName()
+            prod = self._safe_usb_string(d, "getProductName")
+            perm = "ДА" if self._usb_manager.hasPermission(d) else "НЕТ"
+            self._log(f"VID: 0x{vid:04X}, PID: 0x{pid:04X} | Права: {perm} | {prod or name}")
+
+    def _clear_log(self):
+        with self._refresh_lock:
+            self._log_lines.clear()
+            self._log_cache_text = ""
+        self._refresh_ui()
+
+    def _copy_log(self):
+        if not self._log_cache_text:
+            return
+        self._clipboard_copy("IR_Log", self._log_cache_text, "Журнал скопирован")
+
+    def _log_dongle_missing(self, force=False):
+        now = time.monotonic()
+        if force or (now - self._last_missing_log_at > 15.0):
+            self._last_missing_log_at = now
+            self._log("ИК-адаптер не найден (вставьте OTG-донгл)", notify_ui=False)
+
+    def _log(self, line, notify_ui=True):
+        entry = f"[{time.strftime('%H:%M:%S')}] {line}"
+        with self._refresh_lock:
+            self._log_lines.append(entry)
+            self._log_cache_text = "\n".join(self._log_lines)
+        if notify_ui:
+            self._refresh_ui()
+
+    def _refresh_ui(self):
+        if self._stop_event.is_set():
+            return
+        do_refresh = False
+        timer_to_start = None
+        with self._refresh_lock:
+            now = time.monotonic()
+            elapsed = now - self._last_refresh_at
+            if elapsed >= self._refresh_min_interval:
+                self._last_refresh_at = now
+                do_refresh = True
+                if self._pending_refresh_timer is not None:
+                    try:
+                        self._pending_refresh_timer.cancel()
+                    except Exception:
+                        pass
+                    self._pending_refresh_timer = None
+            else:
+                wait = self._refresh_min_interval - elapsed
+                if self._pending_refresh_timer is None:
+                    t = threading.Timer(wait, self._do_deferred_refresh)
+                    t.daemon = True
+                    self._pending_refresh_timer = t
+                    timer_to_start = t
+        if do_refresh:
+            try:
+                self.refresh()
+            except Exception:
+                pass
+        elif timer_to_start is not None:
+            try:
+                timer_to_start.start()
+            except Exception:
+                with self._refresh_lock:
+                    self._pending_refresh_timer = None
+
+    def _do_deferred_refresh(self):
+        if self._stop_event.is_set():
+            return
+        with self._refresh_lock:
+            self._pending_refresh_timer = None
+            self._last_refresh_at = time.monotonic()
+        try:
+            self.refresh()
+        except Exception:
+            pass
+
+    def screen_usb_status_badge(self, ui, api, state):
+        connected = self._is_connected()
+        icon = "rounded:usb" if connected else "rounded:usb_off"
+
+        def _go():
+            try:
+                self.navigate_app("plugin/ir_transceiver/main")
+            except Exception:
+                self.navigate("main")
+
+        return ui.icon_button(icon, _go)
+
+    def _on_tab_select(self, index):
+        self._active_tab = int(index)
+        self._refresh_ui()
+
+    def _request_delete(self, index):
+        with self._library_lock:
+            idx = self._library_index(index)
+            entry = self._signal_library[idx] if 0 <= idx < len(self._signal_library) else None
+            self._confirm_delete_id = entry["id"] if entry else ""
+            self._confirm_delete_name = entry["name"] if entry else None
+        self._confirm_clear_all = False
+        self._refresh_ui()
+
+    def _request_clear_all(self):
+        self._confirm_clear_all = True
+        self._confirm_delete_id = ""
+        self._confirm_delete_name = None
+        self._refresh_ui()
+
+    def _cancel_dialog(self):
+        self._confirm_delete_id = ""
+        self._confirm_delete_name = None
+        self._confirm_clear_all = False
+        self._refresh_ui()
+
+    def _format_uptime(self):
+        if self._connected_at <= 0:
+            return ""
+        elapsed = int(time.monotonic() - self._connected_at)
+        if elapsed < 60:
+            return f"{elapsed}с"
+        if elapsed < 3600:
+            return f"{elapsed // 60}м {elapsed % 60}с"
+        return f"{elapsed // 3600}ч {(elapsed % 3600) // 60}м"
+
+    def _on_adb_ip_change(self, value):
+        self._adb_ip = str(value).strip()
+        self.set_setting("adb_ip", self._adb_ip)
+
+    def _submit_job(self, job):
+        with self._job_lock:
+            if self._stop_event.is_set():
+                return False
+            try:
+                self._jobs.put_nowait(job)
+            except queue.Full:
+                self.toast("Очередь заполнена. Дождитесь окончания передачи")
+                return False
+            if self._job_thread is None or not self._job_thread.is_alive():
+                self._job_thread = threading.Thread(target=self._job_worker, daemon=True, name="IrCommands")
+                self._job_thread.start()
+            return True
+
+    def _job_worker(self):
+        while not self._stop_event.is_set():
+            try:
+                job = self._jobs.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            try:
+                if not self._stop_event.is_set():
+                    job()
+            except Exception as error:
+                self._log(f"Ошибка команды: {error}")
+            finally:
+                self._jobs.task_done()
+
+    def _enqueue_tx(self, payload):
+        snapshot = dict(payload, pattern=list(payload.get("pattern", [])))
+        return self._submit_job(lambda: self.service_infrared_transmitter_transmit(snapshot))
+
+    def _set_option(self, key, value):
+        self.set_setting(key, value)
+        self._refresh_ui()
+
+    def _on_library_search(self, value):
+        self._library_search = str(value)
+        self._library_page = 0
+        self._refresh_ui()
+
+    def _set_favorites_only(self, value):
+        self._favorites_only = bool(value)
+        self._library_page = 0
+        self._refresh_ui()
+
+    def _change_library_page(self, delta):
+        self._library_page = max(0, self._library_page + delta)
+        self._refresh_ui()
+
+    def _set_finder_delay(self, value):
+        self._finder_delay_ms = max(150, min(2000, int(value)))
+        self.set_setting("finder_delay_ms", self._finder_delay_ms)
+        self._refresh_ui()
+
+    def _adb_command(self, cmd_args):
+        host = str(self._adb_ip).strip()
+        port = 5555
+        if host.startswith("["):
+            match = re.fullmatch(r"\[([^\]]+)\](?::([0-9]{1,5}))?", host)
+            if not match:
+                raise ValueError("Некорректный IPv6 адрес")
+            host, raw_port = match.groups()
+            port = int(raw_port or 5555)
+        elif host.count(":") == 1:
+            host, raw_port = host.split(":")
+            if not raw_port.isdigit():
+                raise ValueError("Некорректный порт")
+            port = int(raw_port)
+        if "%" in host:
+            raise ValueError("IPv6 scope не поддерживается; используйте обычный IP адрес")
+        address = ipaddress.ip_address(host)
+        if not 1 <= port <= 65535:
+            raise ValueError("Порт должен быть 1–65535")
+        target = shlex.quote((f"[{address}]" if address.version == 6 else str(address)) + f":{port}")
+        if cmd_args == "connect":
+            return f"adb connect {target}"
+        if cmd_args == "disconnect":
+            return f"adb disconnect {target}"
+        allowed_keys = {3, 4, 19, 20, 21, 22, 23, 24, 25, 26, 66, 82, 164}
+        match = re.fullmatch(r"shell input keyevent ([0-9]+)", cmd_args)
+        packages = {"com.google.android.youtube.tv", "com.liskovsoft.smarttubetv.beta", "org.xbmc.kodi"}
+        package = re.fullmatch(r"shell monkey -p ([a-zA-Z0-9_.]+) 1", cmd_args)
+        if not ((match and int(match[1]) in allowed_keys) or (package and package[1] in packages)):
+            raise ValueError("Неизвестная команда ADB")
+        return f"adb -s {target} {cmd_args}"
+
+    def _adb_shell_async(self, cmd_args):
+        try:
+            full_cmd = self._adb_command(cmd_args)
+        except ValueError as error:
+            self._adb_status = str(error)
+            self.toast(self._adb_status)
+            self._refresh_ui()
+            return
+        with self._state_lock:
+            if self._adb_busy or self._stop_event.is_set():
+                return
+            self._adb_busy = True
+        self._adb_status = "Выполняется…"
+        self._refresh_ui()
+
+        def _worker():
+            try:
+                if self._stop_event.is_set():
+                    return
+                res = self.shell(full_cmd)
+                if not isinstance(res, dict):
+                    raise ValueError("Dolphy не вернул результат shell")
+                output = (str(res.get("out", "")) + " " + str(res.get("err", ""))).strip()
+                ok = bool(res.get("ok")) and not re.search(r"failed|unable|not found|error|unauthorized", output, re.I)
+                self._adb_status = ("OK: " if ok else "Ошибка: ") + (output[:240] or f"код {res.get('code', '?')}")
+                self._log(f"ADB {cmd_args}: {self._adb_status}")
+            except Exception as e:
+                self._adb_status = f"Ошибка ADB: {e}"
+                self._log(self._adb_status)
+            finally:
+                with self._state_lock:
+                    self._adb_busy = False
+                self._refresh_ui()
+        threading.Thread(target=_worker, daemon=True, name="AdbWorker").start()
+
+    def screen_main(self, ui, api, state):
+        if self._screen_flipped:
+            self._apply_screen_orientation()
+        dev = self._device
+        connected = self._is_connected() and dev is not None
+        can_tx = self._can_transmit()
+        is_learning = (self._get_state() == DongleState.LEARNING)
+        tab = self._active_tab
+        tx_count, tx_ok, tx_streak, last_tx, last_tx_at = self._get_tx_stats()
+        tab_content = []
+        if tab == 0:
+            builtin_ir_str = "Есть" if self._has_builtin_ir() else "Нет"
+            audio_ir_str = "Вкл" if bool(self.get_setting("audio_ir_fallback", False)) else "Выкл"
+            if connected:
+                try:
+                    vid = dev.getVendorId()
+                    pid = dev.getProductId()
+                    subtype = getattr(self._encoder, "_subtype", None) or getattr(self._encoder, "name", "USB")
+                    rate = f"{tx_ok * 100 // tx_count}%" if tx_count > 0 else "—"
+                    uptime = self._format_uptime()
+                    status_sub = f"0x{vid:04X}:0x{pid:04X} ({subtype}) • TX: {tx_ok}/{tx_count} ({rate})"
+                    if uptime:
+                        status_sub += f" • {uptime}"
+                except Exception:
+                    status_sub = f"{self._get_state()} • TX: {tx_count}"
+                status_title = f"🟢 {self._dongle_name}"
+            else:
+                status_title = "🔴 Адаптер не подключен"
+                status_sub = f"Встроенный ИК: {builtin_ir_str} | Audio IR: {audio_ir_str}"
+            tab_content = [
+                ui.card([
+                    ui.text("Передатчик", "titleMedium"),
+                    ui.dropdown([("auto", "Авто: USB → встроенный → Audio"), ("usb", "Только USB OTG"),
+                                 ("builtin", "Только встроенный ИК"), ("audio", "Только Audio IR")],
+                                selected=self.get_setting("transmitter_mode", "auto"),
+                                on_select=lambda value: self._set_option("transmitter_mode", value),
+                                label="Способ передачи"),
+                    ui.text("Активен: " + {"usb": "USB OTG", "builtin": "Встроенный ИК", "audio": "Audio IR"}.get(self._selected_backend(), "нет доступного передатчика"),
+                            "bodyMedium", "accent" if can_tx else "muted"),
+                    ui.switch(checked=bool(self.get_setting("builtin_ir_fallback", True)),
+                              on_change=lambda value: self._set_option("builtin_ir_fallback", value), title="Разрешить встроенный ИК"),
+                    ui.switch(checked=bool(self.get_setting("audio_ir_fallback", False)),
+                              on_change=lambda value: self._set_option("audio_ir_fallback", value), title="Разрешить Audio IR",
+                              subtitle="Нужен ИК LED-адаптер и проводной аудиовыход"),
+                    ui.switch(checked=bool(self.get_setting("audio_stereo", True)),
+                              on_change=lambda value: self._set_option("audio_stereo", value), title="Стерео Audio IR",
+                              subtitle="Выключите для моноадаптера"),
+                ], padding=16),
+                ui.card([
+                    ui.row([
+                        ui.text(status_title, "titleMedium"),
+                        ui.button("Откл." if connected else "Найти адаптер",
+                                  self._manual_disconnect if connected else self._manual_rescan),
+                    ], spacing=6),
+                    ui.text(status_sub, "bodySmall", "muted"),
+                    ui.row([
+                        ui.button("Тест NEC", self._send_nec_test, enabled=can_tx),
+                        ui.button("Тест RC-5", self._send_rc5_test, enabled=can_tx),
+                    ], spacing=6),
+                    ui.row([
+                        ui.button("Тест Sony", self._send_sony_test, enabled=can_tx),
+                        ui.button("Диагностика USB", self._dump_usb_devices),
+                    ], spacing=6),
+                    ui.row([
+                        ui.text("Перехват ИК Dolphy:", "bodyMedium"),
+                        ui.text("Готов" if can_tx else "Нет передатчика", "bodyMedium", "accent" if can_tx else "muted"),
+                    ], spacing=6),
+                ], padding=10),
+                ui.row([
+                    ui.text("Журнал", "labelLarge"),
+                    ui.row([
+                        ui.button("Копировать", self._copy_log),
+                        ui.button("Очистить", self._clear_log),
+                    ], spacing=4),
+                ], spacing=6),
+                ui.log_panel(self._log_cache_text or "Журнал пуст", max_height=120),
+            ]
+        elif tab == 1:
+            if is_learning:
+                tab_content = [
+                    ui.card([
+                        ui.row([
+                            ui.text("Запись сигнала...", "titleSmall", "warning"),
+                            ui.button("Стоп", self.start_learning_async),
+                        ], spacing=6),
+                        ui.linear_progress(),
+                        ui.text("Направьте пульт на адаптер и зажмите кнопку на 1-2 сек", "bodySmall", "muted"),
+                    ], padding=10),
+                ]
+            else:
+                pulse_stat = ""
+                if self._learned_timings:
+                    guess = f" [{self._learned_protocol_guess}]" if self._learned_protocol_guess else ""
+                    pulse_stat = f"{guess} • {len(self._learned_timings)} имп., ~{sum(self._learned_timings) // 1000} мс"
+                learn_items = [
+                    ui.row([
+                        ui.text("Приёмник ИК", "titleSmall"),
+                        ui.button("Запись", self.start_learning_async),
+                        ui.button("Повтор", self._replay_learned, enabled=bool(self._learned_timings)),
+                    ], spacing=6),
+                ]
+                if self._learned_timings:
+                    learn_items.append(ui.text(pulse_stat, "bodySmall", "accent"))
+                    learn_items.append(
+                        ui.text_field(
+                            value=self._signal_name_input,
+                            on_change=self._on_signal_name_change,
+                            label="Имя для сохранения",
+                            single_line=True,
+                        )
+                    )
+                    learn_items.append(
+                        ui.row([
+                            ui.button("В библиотеку", self._save_learned_to_library),
+                            ui.button("JSON", self._copy_learned_json),
+                            ui.button(".ir", self._copy_learned_flipper),
+                        ], spacing=4)
+                    )
+                else:
+                    learn_items.append(ui.text(f"Статус: {self._learned_status}", "bodySmall", "muted"))
+                tab_content = [ui.card(learn_items, padding=10)]
+        elif tab == 2:
+            lib = self._library_view()
+            library_tools = ui.card([
+                ui.text(f"Библиотека · {len(self._signal_library)} сигналов", "titleMedium"),
+                ui.text_field(value=self._library_search, on_change=self._on_library_search,
+                              label="Поиск по имени или группе"),
+                ui.switch(checked=self._favorites_only, on_change=self._set_favorites_only, title="Только избранное"),
+                ui.button("Резервная копия JSON", self._export_backup, style="tonal", enabled=bool(self._signal_library)),
+            ], padding=16)
+            if not lib:
+                tab_content = [
+                    library_tools,
+                    ui.card([
+                        ui.text("Нет сигналов по этому фильтру" if self._signal_library else "Библиотека пуста", "titleSmall", "muted"),
+                        ui.text("Запишите или импортируйте сигналы во вкладках 'Приёмник' или 'Импорт'", "bodySmall", "muted"),
+                    ], padding=10),
+                ]
+            else:
+                lib_items = [
+                    library_tools,
+                    ui.row([
+                        ui.text(f"Сохранено сигналов: {len(lib)}", "titleSmall"),
+                        ui.row([
+                            ui.button("Экспорт всех (.ir)", self._export_all_library_flipper),
+                            ui.button("Очистить всё", self._request_clear_all),
+                        ], spacing=4),
+                    ], spacing=6),
+                ]
+                pages = max(1, (len(lib) + 19) // 20)
+                self._library_page = min(self._library_page, pages - 1)
+                for entry in lib[self._library_page * 20:(self._library_page + 1) * 20]:
+                    idx = entry["id"]
+                    p = entry.get("pattern", [])
+                    freq = entry.get("frequency", 38000)
+                    name = entry.get("name", "Signal")
+                    dur_ms = sum(p) // 1000 if p else 0
+                    created = entry.get("created", "")
+                    subtitle = f"{freq // 1000}kHz • {len(p)} имп. • ~{dur_ms}мс"
+                    if created:
+                        subtitle += f" • {created}"
+                    if entry.get("group"):
+                        subtitle += f" • {entry['group']}"
+                    send_fn = (lambda i: lambda: self._send_library_signal(i))(idx)
+                    json_fn = (lambda i: lambda: self._export_library_signal_json(i))(idx)
+                    ir_fn = (lambda i: lambda: self._export_library_signal_flipper(i))(idx)
+                    del_fn = (lambda i: lambda: self._request_delete(i))(idx)
+                    edit_fn = (lambda i: lambda: self._open_signal_editor(i))(idx)
+                    lib_items.append(ui.card([
+                        ui.row([
+                            ui.text(name, "titleSmall"),
+                            ui.icon_button("star" if entry.get("favorite") else "star_border",
+                                           (lambda i: lambda: self._toggle_favorite(i))(idx)),
+                            ui.button("TX", send_fn, enabled=can_tx),
+                        ], spacing=4),
+                        ui.text(subtitle, "bodySmall", "muted"),
+                        ui.row([
+                            ui.button("JSON", json_fn),
+                            ui.button(".ir", ir_fn),
+                            ui.button("Удалить", del_fn),
+                        ], spacing=4),
+                        ui.button("Изменить имя / пульт", edit_fn, style="text"),
+                    ], padding=8))
+                if pages > 1:
+                    lib_items.append(ui.row([
+                        ui.button("Назад", lambda: self._change_library_page(-1), enabled=self._library_page > 0),
+                        ui.text(f"{self._library_page + 1} / {pages}", "labelLarge"),
+                        ui.button("Далее", lambda: self._change_library_page(1), enabled=self._library_page + 1 < pages),
+                    ]))
+                tab_content = lib_items
+        elif tab == 3:
+            tab_content = [
+                ui.card([
+                    ui.text("Универсальный импорт пультов", "titleSmall"),
+                    ui.text("Поддерживает Flipper Zero .ir (raw + parsed), IRPLUS XML, LIRC, Pronto Hex, JSON", "bodySmall", "muted"),
+                    ui.text_field(
+                        value=self._import_text,
+                        on_change=self._on_import_text_change,
+                        label="Вставьте содержимое файла или Pronto Hex код",
+                        single_line=False,
+                    ),
+                    ui.text("Имена сохраняются. Дубликаты пропускаются. Импорт ничего не передаёт", "bodySmall", "muted"),
+                    ui.button("Предпросмотр", self._preview_import, enabled=bool(self._import_text.strip())),
+                ], padding=10),
+            ]
+            if self._import_preview is not None:
+                preview = self._import_preview
+                entries = preview["signals"]
+                known = {(item["frequency"], tuple(item["pattern"])) for item in self._signal_library}
+                unique = {(item["frequency"], tuple(item["pattern"])) for item in entries}
+                new_count = len(unique - known)
+                details = [ui.text(f"{preview['format']} · {len(entries)} сигналов", "titleMedium"),
+                           ui.text(f"Новых: {new_count} · Повторных: {len(entries) - new_count}", "bodySmall", "muted")]
+                for entry in entries[:8]:
+                    details.append(ui.text(f"{entry['name']} · {entry['frequency']} Гц · {len(entry['pattern'])} имп.", "bodySmall"))
+                if preview["warnings"]:
+                    details.append(ui.log_panel("\n".join(preview["warnings"][:20]), max_height=160))
+                details.append(ui.button("Добавить в библиотеку", self._do_import_parsed, enabled=bool(entries)))
+                tab_content.append(ui.card(details, padding=16))
+        elif tab == 4:
+            finder_controls = [
+                ui.text("IR Finder (Инфракрасный брутфорсер)", "titleSmall"),
+                ui.text("Поиск неизвестных кодов и команд для целевого устройства", "bodySmall", "muted"),
+                ui.row([
+                    ui.text(f"Протокол: {self._finder_proto}", "labelMedium"),
+                    ui.button("Сменить протокол", self._cycle_finder_proto, enabled=not self._finder_running),
+                ], spacing=6),
+                ui.text_field(
+                    value=self._finder_prefix,
+                    on_change=lambda v: setattr(self, "_finder_prefix", str(v).strip().upper()),
+                    label="Hex префикс адреса",
+                    single_line=True,
+                ),
+                ui.slider(value=self._finder_delay_ms, on_change=self._set_finder_delay,
+                          minimum=150, maximum=2000, title=f"Пауза между кодами: {self._finder_delay_ms} мс"),
+                ui.linear_progress(progress=min(1.0, self._finder_current_code / max(1, self._finder_max_code))),
+                ui.row([
+                    ui.button("Стоп" if self._finder_running else "Запуск",
+                              self._stop_finder if self._finder_running else self._start_finder),
+                    ui.button("-1", self._finder_step_backward, enabled=not self._finder_running),
+                    ui.button("+1", self._finder_step_forward, enabled=not self._finder_running),
+                ], spacing=6),
+                ui.text(f"Статус: {self._finder_status}", "bodySmall", "accent" if self._finder_running else "muted"),
+            ]
+            if self._finder_last_sent:
+                finder_controls.append(
+                    ui.row([
+                        ui.text(f"Посл. код: {self._finder_last_sent}", "labelMedium"),
+                        ui.button("Сохранить код в библиотеку", self._save_finder_hit),
+                    ], spacing=6)
+                )
+            tab_content = [ui.card(finder_controls, padding=10)]
+        elif tab == 5:
+            power_items = [
+                ui.text("Universal Power (TV-B-Gone)", "titleSmall"),
+                ui.text("Быстрая отправка команд питания мировых брендов через адаптер", "bodySmall", "muted"),
+                ui.button("Остановить Power Sweep" if self._power_running else "Power Sweep: все бренды",
+                          self._sweep_universal_power, enabled=self._power_running or (can_tx and not self._finder_running)),
+                ui.divider(),
+            ]
+            for idx, (brand_name, freq, pat) in enumerate(_UNIVERSAL_POWER_CODES):
+                btn_fn = (lambda i: lambda: self._send_power_code(i))(idx)
+                power_items.append(
+                    ui.row([
+                        ui.text(brand_name, "bodyMedium"),
+                        ui.button("Power TX", btn_fn, enabled=can_tx),
+                    ], spacing=6)
+                )
+            tab_content = [ui.card(power_items, padding=10)]
+        elif tab == 6:
+            adb_ready = not self._adb_busy
+            tab_content = [
+                ui.card([
+                    ui.text("Wi-Fi пульт (ADB Android TV)", "titleSmall"),
+                    ui.text("Сетевое управление ТВ и приставками по TCP/IP", "bodySmall", "muted"),
+                    ui.text("ADB должен быть установлен на телефоне; на ТВ нужны отладка и разрешение подключения", "bodySmall", "muted"),
+                    ui.text(self._adb_status, "bodySmall", "accent"),
+                    ui.text_field(
+                        value=self._adb_ip,
+                        on_change=self._on_adb_ip_change,
+                        label="IP ТВ и порт (192.168.1.50:5555)",
+                        single_line=True,
+                    ),
+                    ui.row([
+                        ui.button("Подключить", lambda: self._adb_shell_async("connect"), enabled=adb_ready),
+                        ui.button("Power", lambda: self._adb_shell_async("shell input keyevent 26"), enabled=adb_ready),
+                    ], spacing=6),
+                    ui.button("Отключить ADB", lambda: self._adb_shell_async("disconnect"), enabled=adb_ready),
+                    ui.divider(),
+                    ui.text("Крестовина D-Pad", "labelMedium"),
+                    ui.row([
+                        ui.button("▲ Вверх", lambda: self._adb_shell_async("shell input keyevent 19"), enabled=adb_ready),
+                    ], spacing=6),
+                    ui.row([
+                        ui.button("◀ Влево", lambda: self._adb_shell_async("shell input keyevent 21"), enabled=adb_ready),
+                        ui.button("OK", lambda: self._adb_shell_async("shell input keyevent 66"), enabled=adb_ready),
+                        ui.button("Вправо ▶", lambda: self._adb_shell_async("shell input keyevent 22"), enabled=adb_ready),
+                    ], spacing=6),
+                    ui.row([
+                        ui.button("▼ Вниз", lambda: self._adb_shell_async("shell input keyevent 20"), enabled=adb_ready),
+                    ], spacing=6),
+                    ui.divider(),
+                    ui.row([
+                        ui.button("Vol +", lambda: self._adb_shell_async("shell input keyevent 24"), enabled=adb_ready),
+                        ui.button("Vol -", lambda: self._adb_shell_async("shell input keyevent 25"), enabled=adb_ready),
+                        ui.button("Mute", lambda: self._adb_shell_async("shell input keyevent 164"), enabled=adb_ready),
+                    ], spacing=6),
+                    ui.row([
+                        ui.button("Назад", lambda: self._adb_shell_async("shell input keyevent 4"), enabled=adb_ready),
+                        ui.button("Домой", lambda: self._adb_shell_async("shell input keyevent 3"), enabled=adb_ready),
+                        ui.button("Меню", lambda: self._adb_shell_async("shell input keyevent 82"), enabled=adb_ready),
+                    ], spacing=6),
+                    ui.divider(),
+                    ui.text("Запуск приложений", "labelMedium"),
+                    ui.row([
+                        ui.button("YouTube", lambda: self._adb_shell_async("shell monkey -p com.google.android.youtube.tv 1"), enabled=adb_ready),
+                        ui.button("SmartTube", lambda: self._adb_shell_async("shell monkey -p com.liskovsoft.smarttubetv.beta 1"), enabled=adb_ready),
+                        ui.button("Kodi", lambda: self._adb_shell_async("shell monkey -p org.xbmc.kodi 1"), enabled=adb_ready),
+                    ], spacing=6),
+                ], padding=10),
+            ]
+
+        elif tab == 7:
+            tab_content = self._render_remote(ui)
+
+        def _tab_button(label, index):
+            is_active = (tab == index)
+            prefix = "● " if is_active else ""
+            return ui.button(f"{prefix}{label}", lambda: self._on_tab_select(index))
+
+        navigation_menu = ui.card([
+            ui.row([
+                _tab_button("Адаптер", 0),
+                _tab_button("Приёмник", 1),
+                _tab_button("Библиотека", 2),
+            ], spacing=6),
+            ui.row([
+                _tab_button("Импорт", 3),
+                _tab_button("IR Finder", 4),
+                _tab_button("Power", 5),
+            ], spacing=6),
+            ui.row([
+                _tab_button("Мои пульты", 7),
+                _tab_button("Wi-Fi ADB", 6),
+            ], spacing=6),
+        ], padding=8)
+        all_items = [navigation_menu]
+        all_items.extend(tab_content)
+        all_items.append(ui.text(f"IR Transceiver v{__version__} by {__author__}", "labelSmall", "muted"))
+        with self._library_lock:
+            delete_index = self._library_index(self._confirm_delete_id)
+            show_single_del = 0 <= delete_index < len(self._signal_library)
+            delete_name = self._signal_library[delete_index].get("name", "?") if show_single_del else ""
+            confirm_del_fn = (lambda ident: lambda: self._delete_signal_from_library(ident))(self._confirm_delete_id)
+        show_clear_all = self._confirm_clear_all
+        all_items.append(
+            ui.alert_dialog(
+                show=show_single_del,
+                title="Удалить сигнал?",
+                message=f"Удалить '{delete_name}' из библиотеки?",
+                confirm_text="Удалить",
+                dismiss_text="Отмена",
+                on_confirm=confirm_del_fn,
+                on_dismiss=self._cancel_dialog,
+            )
+        )
+        all_items.append(
+            ui.alert_dialog(
+                show=show_clear_all,
+                title="Очистить библиотеку?",
+                message=f"Удалить все {len(self._signal_library)} сигналов?",
+                confirm_text="Очистить всё",
+                dismiss_text="Отмена",
+                on_confirm=self._clear_all_library,
+                on_dismiss=self._cancel_dialog,
+            )
+        )
+        return ui.scaffold(
+            title="IR Transceiver",
+            content=ui.lazy_column(all_items, padding=8, spacing=6, fill_max_size=True),
+            # [FLIP_SCREEN_FEATURE] Кнопка переворота в панели действий (TopBar Action) [TODO: REVIEW/FIX BUGS]
+            actions=[
+                ui.top_action("screen_rotation", self._toggle_screen_flip),
+                ui.top_action("refresh", self._manual_rescan),
+            ],
+        )
