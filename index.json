@@ -1,6 +1,6 @@
 {
   "format": "dolphy-plugins-v1",
-  "count": 5,
+  "count": 6,
   "plugins": [
     {
       "id": 1,
@@ -29,6 +29,20 @@
       "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/cortex/cortex.dolphyplugin",
       "post_url": "https://t.me/c/3966541757/23031",
       "updated_at": "2026-09-10 15:11:53"
+    },
+    {
+      "id": 7,
+      "name": "Module Checker",
+      "version": "1.0.0",
+      "author": "Topzi",
+      "description": {
+        "ru": "Чекер возможностей вашего устройства. Проверка работоспособности функций.",
+        "en": "Your device's capabilities checker. Check the functionality of its functions."
+      },
+      "file": "plugins/module_checker/module_checker.dolphyplugin",
+      "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/module_checker/module_checker.dolphyplugin",
+      "post_url": "https://t.me/c/3966541757/23510",
+      "updated_at": "2026-09-14 15:25:55"
     },
     {
       "id": 2,
