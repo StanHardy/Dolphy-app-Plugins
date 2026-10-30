@@ -1,6 +1,6 @@
 {
   "format": "dolphy-plugins-v1",
-  "count": 21,
+  "count": 22,
   "plugins": [
     {
       "id": 16,
@@ -113,6 +113,20 @@
       "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/dolphy_performance_booster/dolphy_performance_booster.dolphyplugin",
       "post_url": "https://t.me/c/3966541757/27000",
       "updated_at": "2026-09-27 06:03:04"
+    },
+    {
+      "id": 9,
+      "name": "Fast WiFi Bruteforce",
+      "version": "10.5.0",
+      "author": "@Da_koroche",
+      "description": {
+        "ru": "Плагин Dolphy для перебора WPA2-PSK паролей через Shizuku. Сканирует сети, распознаёт Enterprise, поддерживает свои словари и сохраняет прогресс. Требует Dolphy 2.5+, Shizuku с правами и Android 11+",
+        "en": "Dolphy plugin for WPA2-PSK password brute-force via Shizuku. Scans networks, detects Enterprise, supports custom dictionaries, keeps color-coded logs and saves progress. Requires Dolphy 2.5+, Shizuku with permissions and Android 11+."
+      },
+      "file": "plugins/fast_wifi_bruteforce/fast_wifi_bruteforce.dolphyplugin",
+      "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/fast_wifi_bruteforce/fast_wifi_bruteforce.dolphyplugin",
+      "post_url": "https://t.me/c/3966541757/33088",
+      "updated_at": "2026-10-12 20:20:39"
     },
     {
       "id": 14,
