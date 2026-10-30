@@ -1,6 +1,6 @@
 {
   "format": "dolphy-plugins-v1",
-  "count": 8,
+  "count": 9,
   "plugins": [
     {
       "id": 8,
@@ -85,6 +85,20 @@
       "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/usb_c_ir_backend/usb_c_ir_backend.dolphyplugin",
       "post_url": "https://t.me/c/3966541757/20533",
       "updated_at": "2026-08-28 08:53:03"
+    },
+    {
+      "id": 11,
+      "name": "USB-C IR Combo (TX+RX)",
+      "version": "1.0.0",
+      "author": "@squezze21",
+      "description": {
+        "ru": "Объединённый backend для внешнего USB-C IR-донгла: приём (запись сигналов, виртуальные пульты) и передача через ОДНО и то же USB-соединение, без конфликта интерфейса между двумя отдельными плагинами. ТХ-протоколы (кодировщики ElkSmart/ZaZa) основаны на usb_c_ir_backend.",
+        "en": "Unified backend for an external USB-C IR dongle: receive (signal recording, virtual remotes) and transmit over the same USB connection, with no interface conflicts between two separate plugins. TX protocols (ElkSmart/ZaZa encoders) are based on usb_c_ir_backend."
+      },
+      "file": "plugins/usb_c_ir_combo_tx_rx/usb_c_ir_combo_tx_rx.dolphyplugin",
+      "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/usb_c_ir_combo_tx_rx/usb_c_ir_combo_tx_rx.dolphyplugin",
+      "post_url": "https://t.me/c/3966541757/26925",
+      "updated_at": "2026-09-26 10:38:01"
     },
     {
       "id": 5,
