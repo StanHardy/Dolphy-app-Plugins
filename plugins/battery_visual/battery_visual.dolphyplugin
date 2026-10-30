@@ -1,0 +1,254 @@
+__id__ = "battery_visual"
+__name__ = "Battery Visual"
+__version__ = "1.1"
+__author__ = "DCA"
+__description__ = "Визуальная установка уровня батареи через Shizuku"
+__icon__ = "battery_full"
+
+
+class BatteryVisualPlugin(BasePlugin):
+
+    def __init__(self):
+        super().__init__()
+
+        # ВАЖНО:
+        # здесь нельзя вызывать self.get_setting(),
+        # потому что API плагина ещё может быть не подключён.
+        self._ready = False
+        self._running = False
+        self.level = 50
+
+    def on_plugin_load(self):
+        try:
+            self.add_module(
+                title="Battery Visual",
+                description="Визуальное изменение процента батареи",
+                icon="battery_full",
+                screen="main",
+                section="PLUGINS",
+                order=0
+            )
+
+            # API уже должен быть доступен после загрузки.
+            try:
+                saved = self.get_setting("level", 50)
+                self.level = max(0, min(100, int(saved)))
+            except Exception:
+                self.level = 50
+
+            self._ready = True
+
+        except Exception as e:
+            self._ready = False
+
+            try:
+                self.toast("Ошибка загрузки: " + str(e))
+            except Exception:
+                pass
+
+    def _run_shizuku(self, command):
+        if not self._ready:
+            return False, "Плагин ещё не готов"
+
+        if self._running:
+            return False, "Операция уже выполняется"
+
+        self._running = True
+
+        try:
+            result = self.shizuku(command)
+
+            if not isinstance(result, dict):
+                return False, "Shizuku вернул неизвестный результат"
+
+            if result.get("ok") is True:
+                return True, str(result.get("out") or "OK")
+
+            error = result.get("err")
+            if not error:
+                error = result.get("out")
+
+            if not error:
+                error = "Команда завершилась с ошибкой"
+
+            return False, str(error)
+
+        except Exception as e:
+            return False, str(e)
+
+        finally:
+            self._running = False
+
+    def _set_level(self):
+        try:
+            level = int(self.level)
+        except Exception:
+            level = 50
+
+        level = max(0, min(100, level))
+        self.level = level
+
+        try:
+            self.set_setting("level", level)
+        except Exception:
+            pass
+
+        ok, message = self._run_shizuku(
+            "cmd battery set level " + str(level)
+        )
+
+        try:
+            if ok:
+                self.toast(
+                    "Установлено визуально: " +
+                    str(level) +
+                    "%"
+                )
+            else:
+                self.toast(
+                    "Ошибка Shizuku: " +
+                    str(message)
+                )
+        except Exception:
+            pass
+
+        try:
+            self.refresh()
+        except Exception:
+            pass
+
+    def _reset_battery(self):
+        ok, message = self._run_shizuku(
+            "cmd battery reset"
+        )
+
+        try:
+            if ok:
+                self.toast(
+                    "Восстановлен реальный уровень батареи"
+                )
+            else:
+                self.toast(
+                    "Ошибка Shizuku: " +
+                    str(message)
+                )
+        except Exception:
+            pass
+
+        try:
+            self.refresh()
+        except Exception:
+            pass
+
+    def _on_slider(self, value):
+        try:
+            value = int(float(value))
+        except Exception:
+            value = self.level
+
+        self.level = max(0, min(100, value))
+
+        try:
+            self.set_setting("level", self.level)
+        except Exception:
+            pass
+
+        try:
+            self.refresh()
+        except Exception:
+            pass
+
+    def screen_main(self, ui, api, state):
+        try:
+            level = max(
+                0,
+                min(
+                    100,
+                    int(self.level)
+                )
+            )
+
+            return ui.scaffold(
+                title="Battery Visual",
+                content=ui.column(
+                    [
+                        ui.card(
+                            [
+                                ui.text(
+                                    str(level) + "%",
+                                    "headlineLarge"
+                                ),
+                                ui.text(
+                                    "Визуальный уровень батареи",
+                                    "bodyMedium"
+                                )
+                            ],
+                            padding=20
+                        ),
+
+                        ui.slider(
+                            value=level,
+                            on_change=self._on_slider,
+                            minimum=0,
+                            maximum=100,
+                            title="Процент батареи",
+                            steps=100
+                        ),
+
+                        ui.button(
+                            "Установить " + str(level) + "%",
+                            on_click=self._set_level,
+                            style="filled",
+                            enabled=(
+                                self._ready and
+                                not self._running
+                            ),
+                            fill_max_width=True
+                        ),
+
+                        ui.button(
+                            "Сбросить на реальный уровень",
+                            on_click=self._reset_battery,
+                            style="outlined",
+                            enabled=(
+                                self._ready and
+                                not self._running
+                            ),
+                            fill_max_width=True
+                        ),
+
+                        ui.divider(),
+
+                        ui.text(
+                            "Изменяется только системное "
+                            "отображаемое значение батареи. "
+                            "Физический заряд аккумулятора "
+                            "не изменяется.",
+                            "bodySmall"
+                        )
+                    ],
+                    padding=16,
+                    spacing=12
+                )
+            )
+
+        except Exception as e:
+            return ui.scaffold(
+                title="Ошибка",
+                content=ui.column(
+                    [
+                        ui.text(
+                            "Ошибка экрана: " + str(e),
+                            "bodyMedium"
+                        )
+                    ],
+                    padding=16
+                )
+            )
+
+    def on_plugin_unload(self):
+        try:
+            self._ready = False
+            self._running = False
+        except Exception:
+            pass
