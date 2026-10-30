@@ -1,0 +1,1722 @@
+__id__ = "MANUAL-IR"
+__name__ = "USB-C & BUILD-IN IR"
+__version__ = "1.0.0"
+__author__ = "CLAUDE & bsfwl"
+__description__ = "Форк плагина @squezze21 с ручным перебором. Поддержка usb c свистков и встроенных модулей"
+__icon__ = "rounded:usb"
+__permissions__ = ["usb", "ir"]
+
+import heapq
+import json
+import os
+import threading
+import time
+
+from java import jclass, jarray, jbyte
+
+# ---------------------------------------------------------------------------
+# TX: USB IR wire-protocol encoders (без изменений -- рабочий код).
+# ---------------------------------------------------------------------------
+class UnknownProtocolEncoder:
+    name = "unknown"
+
+    def encode(self, freq_hz, pattern):
+        return None
+
+
+class LegacyBulkStEncoder:
+    name = "legacy_bulk_st"
+
+    def __init__(self):
+        self._e = 1
+        self._f = 0
+
+    def _next_e(self):
+        self._e = self._e + 1 if self._e < 0x0F else 0x01
+        return self._e
+
+    def _next_f(self):
+        self._f = self._f + 1 if self._f < 0x7F else 0x01
+        return self._f
+
+    def handshake_frames(self):
+        return [bytes([0x02, 0x09, self._next_e(), 0x01, 0x01, 0x53, 0x54, self._next_f(), 0x53, 0x45, 0x4E])]
+
+    def encode(self, freq_hz, pattern):
+        if not pattern:
+            return None
+
+        normalized = [max(1, int(v)) for v in pattern]
+        if len(normalized) % 2 == 0:
+            tail = normalized[-1]
+            normalized[-1] = tail - 3000 if tail > 3000 else 10
+
+        payload = bytearray([0x53, 0x54, self._next_f(), 0x44, 0x00])
+        for i, duration in enumerate(normalized):
+            units = duration // 16
+            if units <= 0:
+                units = 1
+            is_mark = i % 2 == 0
+            while units > 0:
+                chunk = min(units, 0x7F)
+                units -= chunk
+                payload.append(chunk | (0x80 if is_mark else 0x00))
+        payload.extend([0x45, 0x4E])
+
+        max_payload_per_frame = 0x38
+        total = max(1, (len(payload) + max_payload_per_frame - 1) // max_payload_per_frame)
+        e_value = self._next_e()
+        frames = []
+        offset = 0
+        index = 1
+        while offset < len(payload):
+            take = min(max_payload_per_frame, len(payload) - offset)
+            frame = bytearray([0x02, take + 3, e_value, total, index])
+            frame.extend(payload[offset:offset + take])
+            frames.append(bytes(frame))
+            offset += take
+            index += 1
+        return frames
+
+
+class ElkSmartBulkEncoder:
+    name = "elksmart_bulk"
+    strict_handshake = True
+    wants_background_reader = False
+    inter_frame_delay_ms = 2
+
+    _IDENT_PREFIX = 0xFC
+    _TYPE_D552 = (0x70, 0x01)
+    _TYPE_D226 = (0x02, 0xAA)
+    _ODD_PATTERN_TRAILING_GAP_US = 10000
+
+    def __init__(self):
+        self._subtype = None
+
+    def open_handshake(self, connection, in_endpoint, out_endpoint, write_chunk, drain_in):
+        drain_in(connection, in_endpoint, 80)
+        identify = bytes([self._IDENT_PREFIX, self._IDENT_PREFIX, self._IDENT_PREFIX, self._IDENT_PREFIX])
+        if not write_chunk(connection, out_endpoint, identify, 200):
+            return False
+
+        size = max(64, in_endpoint.getMaxPacketSize())
+        resp = jarray(jbyte)([0] * size)
+        deadline = time.time() + 0.45
+        got = -1
+        while time.time() < deadline:
+            n = connection.bulkTransfer(in_endpoint, resp, size, 150)
+            if n > 0:
+                got = n
+                break
+        subtype = self._identify_subtype(resp, got)
+        if subtype is None:
+            return False
+        self._subtype = subtype
+        return True
+
+    def _identify_subtype(self, resp, size):
+        if size < 6:
+            return None
+        vals = [(int(resp[i]) & 0xFF) for i in range(6)]
+        if vals[:4] != [self._IDENT_PREFIX] * 4:
+            return None
+        type_pair = (vals[4], vals[5])
+        if type_pair == self._TYPE_D552:
+            return "D552"
+        if type_pair == self._TYPE_D226:
+            return "D226"
+        return None
+
+    def encode(self, freq_hz, pattern):
+        pulses = self._to_pulses(pattern)
+        raw = self._compress_pulses(pulses)
+        payload = self._encode_d226_payload(raw) if (self._subtype or "D552") == "D226" else raw
+
+        f = int(freq_hz) + 0x7FFFF
+        msg = bytearray([0xFF, 0xFF, 0xFF, 0xFF])
+        msg.append(self._mangle_byte(f >> 8))
+        msg.append(self._mangle_byte(f >> 16))
+        msg.append(self._mangle_byte(f))
+        msg.append(self._mangle_byte(len(payload) >> 8))
+        msg.append(self._mangle_byte(len(payload)))
+        msg.extend(payload)
+
+        frames = []
+        offset = 0
+        while offset < len(msg):
+            chunk = min(62, len(msg) - offset)
+            frame = bytearray(msg[offset:offset + chunk])
+            if chunk == 62:
+                frame.append(self._checksum62(frame))
+            frames.append(bytes(frame))
+            offset += chunk
+        return frames
+
+    def post_transmit_delay_ms(self, pattern):
+        total_us = 0
+        for value in pattern:
+            total_us += max(0, int(value))
+        return max(80, int((total_us + 500) / 1000) + 25)
+
+    def drain_after_transmit(self, connection, in_endpoint, drain_in):
+        drain_in(connection, in_endpoint, 120)
+
+    def _to_pulses(self, pattern):
+        pulses = []
+        i = 0
+        while i < len(pattern):
+            on_us = max(0, int(pattern[i]))
+            off_us = max(0, int(pattern[i + 1])) if i + 1 < len(pattern) else self._ODD_PATTERN_TRAILING_GAP_US
+            pulses.append((on_us, off_us))
+            i += 2
+        return pulses
+
+    def _compress_pulses(self, pulses):
+        if not pulses:
+            return bytes()
+        freq = {}
+        for pulse in pulses:
+            freq[pulse] = freq.get(pulse, 0) + 1
+        sorted_pulses = sorted(freq.items(), key=lambda item: item[1], reverse=True)
+        p1 = sorted_pulses[0][0]
+        p2 = sorted_pulses[1][0] if len(sorted_pulses) > 1 else p1
+
+        out = bytearray()
+        self._compress_value_us(p2[0], out)
+        self._compress_value_us(p2[1], out)
+        self._compress_value_us(p1[0], out)
+        self._compress_value_us(p1[1], out)
+        out.extend([0xFF, 0xFF, 0xFF])
+        for pulse in pulses:
+            if pulse == p1:
+                out.append(0x00)
+            elif pulse == p2:
+                out.append(0x01)
+            else:
+                self._compress_value_us(pulse[0], out)
+                self._compress_value_us(pulse[1], out)
+        return bytes(out)
+
+    def _encode_d226_payload(self, raw):
+        if not raw:
+            return raw
+        freq = [0] * 256
+        for b in raw:
+            freq[int(b) & 0xFF] += 1
+
+        heap = []
+        seq = 0
+        for symbol, weight in enumerate(freq):
+            if weight > 0:
+                heapq.heappush(heap, (weight, seq, symbol, None, None))
+                seq += 1
+        if not heap:
+            return raw
+        while len(heap) > 1:
+            left = heapq.heappop(heap)
+            right = heapq.heappop(heap)
+            heapq.heappush(heap, (left[0] + right[0], seq, None, left, right))
+            seq += 1
+
+        codes = []
+        self._build_codes(heap[0], "", codes)
+        codes.sort(key=lambda item: item[0])
+        code_by_symbol = {symbol: bits for symbol, weight, bits in codes}
+
+        out = bytearray()
+        out.extend([(len(codes) >> 8) & 0xFF, len(codes) & 0xFF])
+        for symbol, weight, bits in codes:
+            out.extend([symbol & 0xFF, (weight >> 8) & 0xFF, weight & 0xFF])
+
+        bit_string = "".join(code_by_symbol[int(b) & 0xFF] for b in raw)
+        tail_bits = len(bit_string) % 8
+        if tail_bits > 0:
+            bit_string += "0" * (8 - tail_bits)
+        out.append(tail_bits & 0xFF)
+        for i in range(0, len(bit_string), 8):
+            out.append(int(bit_string[i:i + 8], 2) & 0xFF)
+        return bytes(out)
+
+    def _build_codes(self, node, prefix, out):
+        weight, seq, symbol, left, right = node
+        if symbol is not None:
+            out.append((symbol, weight, prefix or "0"))
+            return
+        self._build_codes(left, prefix + "0", out)
+        self._build_codes(right, prefix + "1", out)
+
+    def _compress_value_us(self, value_us, out):
+        value_us = int(value_us)
+        if value_us <= 2032:
+            if value_us == 0 or value_us == 1:
+                q = value_us
+            else:
+                q = int((value_us / 16.0) + 0.5)
+            out.append(q & 0xFF)
+            return
+        v = value_us
+        while True:
+            b = v & 0x7F
+            v >>= 7
+            if v != 0:
+                b |= 0x80
+            if (b & 0xFF) == 0xFF:
+                b = 0xFE
+            out.append(b & 0xFF)
+            if v == 0:
+                break
+
+    def _mangle_byte(self, v):
+        value = int(v) & 0xFF
+        reversed_bits = 0
+        for _ in range(8):
+            reversed_bits = (reversed_bits << 1) | (value & 1)
+            value >>= 1
+        return (~reversed_bits) & 0xFF
+
+    def _checksum62(self, buf):
+        total = 0
+        for i in range(62):
+            total += int(buf[i]) & 0xFF
+        x = (total & 0xF0) | ((total >> 8) & 0x0F)
+        return self._mangle_byte(x)
+
+
+# ---------------------------------------------------------------------------
+# RX: приёмные (learn-mode) декодеры. Интерфейс:
+#   receiver.capture(conn, out_ep, in_ep, write_chunk, read_chunk, log, deadline_s)
+#   -> {"freq": int, "pattern": [us, ...]}  либо исключение с текстом ошибки.
+# ---------------------------------------------------------------------------
+class UnknownReceiveProtocol:
+    name = "unknown"
+    supports_receive = False
+
+    def capture(self, conn, out_ep, in_ep, write_chunk, read_chunk, log, deadline_s):
+        raise NotImplementedError("Протокол устройства не определён")
+
+
+class LegacyBulkStReceiver:
+    """
+    TODO: протокол приёма для ZaZa Remote / Tiqiaa TView (VID 0x10C4 / 0x045E,
+    PID 0x8468) ещё не реверснут. См. deadboy18/Tiqiaa-USB-IR-Windows.
+    """
+    name = "legacy_bulk_st"
+    supports_receive = False
+
+    def capture(self, conn, out_ep, in_ep, write_chunk, read_chunk, log, deadline_s):
+        raise NotImplementedError(
+            "Протокол learn-mode для ZaZa/Tiqiaa (chipset D552) пока не перенесён"
+        )
+
+
+class ElkSmartBulkReceiver:
+    """
+    Протокол чипсета ElkSmart (Ocrustar / ZaZa Remote / Tiqiaa TView), D226/D552.
+    Источник: реверс-инжиниринг deadboy18/Ocrustar-USB-IR (MIT).
+
+        Host  -> Device: FC FC FC FC
+        Device-> Host:   FC FC FC FC XX YY
+        Host  -> Device: FA FA FA FA
+        Host  -> Device: FE FE FE FE                 (войти в learn mode)
+        Device-> Host:   FE FE FE FE [len_hi][len_lo][raw_data...]
+        Host  -> Device: FD FD FD FD                 (выйти из learn mode)
+
+    raw_data -> тайминги (мкс): b*16 + carry, где 0xFF добавляет carry += 0xFF0.
+    """
+    name = "elksmart_bulk"
+    supports_receive = True
+
+    HANDSHAKE_TIMEOUT_MS = 500
+    HANDSHAKE_RETRIES = 5
+    DEFAULT_FREQ_HZ = 38000
+
+    def _flush_stale_data(self, read_chunk, log):
+        flushed = 0
+        for _ in range(8):
+            chunk = read_chunk(64, timeout_ms=30)
+            if not chunk:
+                break
+            flushed += len(chunk)
+        if flushed:
+            log("Flushed %d stale bytes from IN endpoint" % flushed)
+
+    @staticmethod
+    def _hex(data):
+        return " ".join("%02X" % b for b in data) if data else "(empty)"
+
+    def _read_exact_prefixed(self, read_chunk, expect_prefix, deadline_s):
+        buf = bytearray()
+        prefix_len = len(expect_prefix)
+
+        while time.time() < deadline_s:
+            chunk = read_chunk(64, timeout_ms=200)
+            if chunk:
+                buf.extend(chunk)
+
+            if len(buf) >= prefix_len + 2:
+                if bytes(buf[:prefix_len]) != expect_prefix:
+                    del buf[:1]
+                    continue
+
+                total_len = (buf[prefix_len] << 8) | buf[prefix_len + 1]
+                header_len = prefix_len + 2
+                while len(buf) < header_len + total_len and time.time() < deadline_s:
+                    more = read_chunk(64, timeout_ms=200)
+                    if more:
+                        buf.extend(more)
+
+                if len(buf) >= header_len + total_len:
+                    return bytes(buf[header_len:header_len + total_len])
+                return None
+
+        return None
+
+    def capture(self, conn, out_ep, in_ep, write_chunk, read_chunk, log, deadline_s):
+        self._flush_stale_data(read_chunk, log)
+
+        device_kind = None
+        for attempt in range(self.HANDSHAKE_RETRIES):
+            sent_ok = write_chunk(bytes([0xFC, 0xFC, 0xFC, 0xFC]), timeout_ms=self.HANDSHAKE_TIMEOUT_MS)
+            resp = read_chunk(64, timeout_ms=self.HANDSHAKE_TIMEOUT_MS)
+            log(
+                "handshake attempt %d/%d: sent_ok=%s resp=%s"
+                % (attempt + 1, self.HANDSHAKE_RETRIES, sent_ok, self._hex(resp))
+            )
+            if resp and len(resp) >= 6 and bytes(resp[:4]) == b"\xFC\xFC\xFC\xFC":
+                device_kind = (resp[4], resp[5])
+                break
+            time.sleep(0.15)
+
+        if device_kind is None:
+            raise RuntimeError(
+                "Устройство не ответило на handshake (FC FC FC FC) -- см. hex-дамп выше"
+            )
+
+        write_chunk(bytes([0xFA, 0xFA, 0xFA, 0xFA]), timeout_ms=self.HANDSHAKE_TIMEOUT_MS)
+        log("Handshake OK, device_kind=0x%02X%02X" % device_kind)
+
+        write_chunk(bytes([0xFE, 0xFE, 0xFE, 0xFE]), timeout_ms=self.HANDSHAKE_TIMEOUT_MS)
+
+        try:
+            raw = self._read_exact_prefixed(read_chunk, b"\xFE\xFE\xFE\xFE", deadline_s)
+        finally:
+            try:
+                write_chunk(bytes([0xFD, 0xFD, 0xFD, 0xFD]), timeout_ms=self.HANDSHAKE_TIMEOUT_MS)
+            except Exception:
+                pass
+
+        if raw is None:
+            raise RuntimeError("Таймаут: сигнал от пульта не получен")
+
+        timings = []
+        carry = 0
+        for b in raw:
+            if b == 0xFF:
+                carry += 0xFF0
+            else:
+                timings.append(b * 16 + carry)
+                carry = 0
+
+        if not timings:
+            raise RuntimeError("Донгл вернул пустой сигнал")
+
+        return {"freq": self.DEFAULT_FREQ_HZ, "pattern": timings}
+
+
+# ---------------------------------------------------------------------------
+# Общая таблица устройств: имя, TX-кодировщик, RX-декодер.
+# ---------------------------------------------------------------------------
+SUPPORTED_DONGLES = {
+    (0x10C4, 0x8468): ("ZaZa Remote / Tiqiaa / Tview", LegacyBulkStEncoder, LegacyBulkStReceiver),
+    (0x045E, 0x8468): ("ZaZa Remote / Tiqiaa / Tview", LegacyBulkStEncoder, LegacyBulkStReceiver),
+    (0x045C, 0x0131): ("ElkSmart D552/D226 family", ElkSmartBulkEncoder, ElkSmartBulkReceiver),
+    (0x045C, 0x0132): ("ElkSmart D552/D226 family", ElkSmartBulkEncoder, ElkSmartBulkReceiver),
+    (0x045C, 0x0134): ("Ocrustar / ElkSmart D552/D226 family", ElkSmartBulkEncoder, ElkSmartBulkReceiver),
+    (0x045C, 0x014A): ("ElkSmart D552/D226 family", ElkSmartBulkEncoder, ElkSmartBulkReceiver),
+    (0x045C, 0x0184): ("ElkSmart D552/D226 family", ElkSmartBulkEncoder, ElkSmartBulkReceiver),
+    (0x045C, 0x0195): ("ElkSmart D552/D226 family", ElkSmartBulkEncoder, ElkSmartBulkReceiver),
+    (0x045C, 0x02AA): ("ElkSmart old model", ElkSmartBulkEncoder, ElkSmartBulkReceiver),
+}
+
+KNOWN_DONGLE_IDS = set(SUPPORTED_DONGLES.keys())
+
+REMOTE_NAME_PRESETS = ["Телевизор", "Кондиционер", "Аудиосистема", "Проектор", "Свет", "Другое устройство"]
+
+# Подпапка под Download/, куда экспортируются .ir файлы. Пользователь может
+# сменить её в разделе "Виртуальные пульты"; значение хранится в library.json.
+DEFAULT_EXPORT_ROOT = "Dolphy"
+
+
+def _nec_pattern(address, command):
+    """NEC: 9000/4500 мкс лидер, затем address, ~address, command, ~command
+    (младший бит вперёд, каждый бит -- 560 мкс метка + 560/1690 мкс пауза)."""
+    try:
+        address = int(address) & 0xFF
+        command = int(command) & 0xFF
+        addr_inv = (~address) & 0xFF
+        cmd_inv = (~command) & 0xFF
+        bits = []
+        for byte in (address, addr_inv, command, cmd_inv):
+            for i in range(8):
+                bits.append((byte >> i) & 1)
+        pattern = [9000, 4500]
+        for bit in bits:
+            pattern.append(560)
+            pattern.append(1690 if bit else 560)
+        pattern.append(560)
+        return pattern
+    except Exception:
+        return None
+
+
+# Ручной перебор (brute-force): заглушки, НЕ проверенные реальные коды --
+# только чтобы было через что перебирать. Для настоящего списка возьми .ir
+# файлы из github.com/Lucaslhm/Flipper-IRDB (тот же формат
+# protocol/address/command) и добавь пары (address, command) сюда.
+BRUTEFORCE_CODES = {
+    "TV power": [
+        (0x00, 0x02), (0x01, 0x0C), (0x04, 0x08), (0x07, 0x15),
+        (0x20, 0x10), (0x08, 0x1C), (0x0B, 0x36),
+    ],
+}
+
+# Канонические имена кнопок -- подтверждены реальным .ir-файлом, экспортированным
+# самим приложением из "Универсальные пульты" (модель AWA MSDV3268O5D0). Именно
+# при таких именах ("Vol_up", а не "VOLUMEUP"!) кнопки встают в общий блок с
+# питанием/стрелками/OK, а не проваливаются в "Прочие" без реального действия.
+BUTTON_NAME_PRESETS = [
+    ("Power", "⏻ Питание"),
+    ("Up", "▲ Вверх"),
+    ("Down", "▼ Вниз"),
+    ("Left", "◀ Влево"),
+    ("Right", "▶ Вправо"),
+    ("Ok", "OK / Выбор"),
+    ("Mute", "🔇 Mute"),
+    ("Back", "⬅ Back"),
+    ("Menu", "☰ Menu"),
+    ("Input", "🔀 Источник (Input)"),
+    ("Vol_up", "🔊 Громкость +"),
+    ("Vol_dn", "🔉 Громкость -"),
+    ("Ch_next", "📺 Канал +"),
+    ("Ch_prev", "📺 Канал -"),
+    ("Play", "▶ Play"),
+    ("Pause", "⏸ Pause"),
+    ("Stop", "⏹ Stop"),
+    ("Fast_fo", "⏩ Перемотка вперёд"),
+    ("Fast_ba", "⏪ Перемотка назад"),
+    ("Eject", "⏏ Eject"),
+    ("List", "📋 List"),
+    ("Info", "ℹ Info"),
+    ("Display", "🖥 Display"),
+    ("Audio", "🔈 Audio"),
+    ("Exit", "🚪 Exit"),
+    ("EPG", "📅 EPG"),
+]
+BUTTON_NAME_LABELS = dict(BUTTON_NAME_PRESETS)
+
+
+def _unique_name(existing_names, base_name):
+    if base_name not in existing_names:
+        return base_name
+    n = 2
+    while "%s (%d)" % (base_name, n) in existing_names:
+        n += 1
+    return "%s (%d)" % (base_name, n)
+
+
+def _slugify_filename(name):
+    keep = [c if (c.isalnum() or c in "-_") else "_" for c in name]
+    slug = "".join(keep).strip("_")
+    return slug or "remote"
+
+
+def _build_ir_file_content(remote):
+    lines = ["Filetype: IR signals file", "Version: 1"]
+    for b in remote["buttons"]:
+        freq = b.get("freq") or 38000
+        pattern = b.get("pattern", [])
+        lines.append("#")
+        lines.append("name: %s" % b["name"])
+        lines.append("type: raw")
+        lines.append("frequency: %d" % int(freq))
+        lines.append("duty_cycle: 0.330000")
+        lines.append("data: %s" % " ".join(str(int(v)) for v in pattern))
+    lines.append("#")
+    return "\n".join(lines) + "\n"
+
+
+class UsbCIrCombo(BasePlugin):
+    def on_plugin_load(self):
+        self.add_module(
+            title="USB-C & BUILD-IN IR Combo",
+            description="Ручной перебор IR через встроенный ИК модуль или через USB-C свисток",
+            icon="usb",
+            screen="main",
+            section="INFRARED",
+        )
+
+        self._usb_manager = None
+        self._context = None
+        self._device = None
+        self._connection = None
+        self._usb_interface = None
+        self._out_endpoint = None
+        self._in_endpoint = None
+        self._endpoint_type = None
+        self._dongle_name = None
+
+        self._encoder = UnknownProtocolEncoder()
+        self._receiver = UnknownReceiveProtocol()
+
+        # Общая блокировка: TX и RX используют один и тот же физический
+        # провод/устройство, поэтому передача и запись не должны идти
+        # одновременно -- иначе команды перемешаются на устройстве.
+        self._usb_op_lock = threading.Lock()
+        self._tx_count = 0
+        self._reader_lock = threading.Lock()
+        self._reader_thread = None
+        self._read_until_at = 0
+
+        self._log_lines = []
+        self._stop_flag = threading.Event()
+        self._last_missing_log_at = 0
+        self._permission_request_at = {}
+
+        self._capturing = False
+        self._last_capture = None  # {"freq": int, "pattern": [us,...]}
+
+        self._context = self.api.getContext()
+        self._usb_manager = self._context.getSystemService("usb")
+
+        # Регистрируем сервис передачи ИК для всего приложения (в т.ч. для
+        # наших виртуальных пультов после импорта) -- как в исходном
+        # usb_c_ir_backend.
+        self.provide_service("infrared.transmitter", 100)
+
+        ir_status_routes = [
+            "ir_*", "other/ir_*",
+            "tv_remote/*", "other/tv_remote/*",
+            "universal_remote/*", "other/universal_remote/*",
+            "user_ir_remote*", "other/user_ir_remote*",
+            "flipper_remote/*", "other/flipper_remote/*",
+        ]
+        for route in ir_status_routes:
+            self.hook_screen(route, "usb_status_badge", "fab", 50)
+
+        # -- Виртуальные пульты (навигация внутри одного экрана) --
+        self._view = "recorder"  # recorder | remotes | remote_detail | new_remote | add_button | bruteforce
+        self._selected_remote_id = None
+        self._export_root_draft = None
+
+        self._bf_category = "TV power"
+        self._bf_transmit_via = "builtin"  # "builtin" (телефон) | "dongle" (USB)
+        self._bf_index = -1
+        self._bf_running = False
+        self._bf_delay_ms = 900
+        self._bf_stop_flag = False
+        self._bf_thread = None
+
+        self._library = self._load_library()
+
+        # Незавершённая запись переживает kill процесса/сворачивание: если
+        # сигнал был записан, но ещё не привязан к кнопке пульта, подхватываем
+        # его обратно как self._last_capture (см. _capture_worker).
+        pending = self._library.get("pending_capture")
+        if isinstance(pending, dict) and pending.get("pattern"):
+            self._last_capture = pending
+
+        self._save_library()
+
+        self._poll_thread = threading.Thread(target=self._poll_loop, daemon=True)
+        self._poll_thread.start()
+
+        self._log("Combo plugin loaded (TX+RX on one connection)")
+
+    def on_plugin_unload(self):
+        self._stop_flag.set()
+        self._bf_stop_flag = True
+        self._bf_running = False
+        self._release_usb()
+        self._log("Plugin unloaded")
+
+    # -- service provider: infrared.transmitter -----------------------------
+
+    def service_infrared_transmitter_available(self, payload):
+        return {"available": self._is_connected()}
+
+    def service_infrared_transmitter_transmit(self, payload):
+        if not self._is_connected():
+            return {"handled": False}
+
+        freq = int(payload["frequency"])
+        pattern = [int(v) for v in payload["pattern"]]
+
+        total_us = sum(max(0, v) for v in pattern)
+        self._log(
+            "TX request: freq=%d, samples=%d, total=%.3fs%s"
+            % (
+                freq, len(pattern), total_us / 1_000_000.0,
+                " [ПОДОЗРИТЕЛЬНО ДЛИННЫЙ, обычно пульты <0.3s]" if total_us > 300_000 else "",
+            )
+        )
+
+        with self._usb_op_lock:
+            if not self._is_connected():
+                return {"handled": False}
+
+            self._tx_count += 1
+            encoded = self._encoder.encode(freq, pattern)
+            if encoded is None:
+                self._log(
+                    "encoder '%s' could not encode signal (freq=%d, len=%d)"
+                    % (self._encoder.name, freq, len(pattern))
+                )
+                return {"handled": False}
+
+            ok = self._usb_write(encoded)
+            delay_ms = self._post_transmit_delay_ms(pattern)
+            self._log(
+                "USB TX %s (freq=%d, patLen=%d, frames=%d, bytes=%d, waitMs=%d)"
+                % (
+                    "ok" if ok else "FAILED",
+                    freq,
+                    len(pattern),
+                    len(self._encoded_chunks(encoded)),
+                    self._encoded_size(encoded),
+                    delay_ms,
+                )
+            )
+            if ok:
+                time.sleep(delay_ms / 1000.0)
+            else:
+                self._release_usb()
+                return {"handled": False, "ok": False}
+            return {"handled": True, "ok": True}
+
+    # -- USB lifecycle --------------------------------------------------------
+
+    def _is_connected(self):
+        return self._device is not None and self._connection is not None and self._out_endpoint is not None
+
+    def _poll_loop(self):
+        while not self._stop_flag.is_set():
+            try:
+                self._scan_once()
+            except Exception as e:
+                self._log("poll error: %s" % e)
+            self._stop_flag.wait(1.5)
+
+    def _java_collection_to_list(self, java_collection):
+        try:
+            return list(java_collection.toArray())
+        except Exception:
+            result = []
+            it = java_collection.iterator()
+            while it.hasNext():
+                result.append(it.next())
+            return result
+
+    def _scan_once(self, missing_log_force=False):
+        device_list = self._usb_manager.getDeviceList()
+        devices = self._java_collection_to_list(device_list.values())
+
+        if self._device is not None:
+            still_attached = any(d.getDeviceName() == self._device.getDeviceName() for d in devices)
+            if not still_attached:
+                self._log("Dongle detached: %s" % self._device.getDeviceName())
+                self._release_usb()
+
+        if self._device is not None:
+            return
+
+        for dev in devices:
+            key = (dev.getVendorId(), dev.getProductId())
+            if key not in KNOWN_DONGLE_IDS:
+                continue
+
+            if self._usb_manager.hasPermission(dev):
+                self._open_device(dev)
+                return
+            else:
+                self._request_permission(dev)
+                return
+
+        self._log_dongle_missing(force=missing_log_force)
+
+    def _request_permission(self, dev):
+        device_key = dev.getDeviceName()
+        now = time.time()
+        if now - self._permission_request_at.get(device_key, 0) < 15:
+            return
+        self._permission_request_at[device_key] = now
+
+        try:
+            Intent = jclass("android.content.Intent")
+            PendingIntent = jclass("android.app.PendingIntent")
+            Build = jclass("android.os.Build")
+
+            intent = Intent("com.dolphy.plugin.usb_c_ir_combo.USB_PERMISSION")
+            intent.setPackage(self._context.getPackageName())
+            flags = 0x08000000
+            if Build.VERSION.SDK_INT >= 31:
+                flags = flags | 0x02000000
+            pi = PendingIntent.getBroadcast(self._context, 0, intent, flags)
+            self._usb_manager.requestPermission(dev, pi)
+            self._log(
+                "Requesting USB permission for %s vid=0x%04X pid=0x%04X"
+                % (SUPPORTED_DONGLES[(dev.getVendorId(), dev.getProductId())][0], dev.getVendorId(), dev.getProductId())
+            )
+        except Exception as e:
+            self._log("USB permission request failed: %s" % e)
+
+    def _open_device(self, dev):
+        UsbConstants = jclass("android.hardware.usb.UsbConstants")
+        key = (dev.getVendorId(), dev.getProductId())
+        profile = SUPPORTED_DONGLES.get(key)
+        if profile is None:
+            self._log("USB device recognized but not supported: vid=0x%04X pid=0x%04X" % key)
+            return
+
+        dongle_name, encoder_class, receiver_class = profile
+        claimed_interface = None
+        claimed_out_endpoint = None
+        claimed_in_endpoint = None
+        endpoint_type = None
+        for i in range(dev.getInterfaceCount()):
+            intf = dev.getInterface(i)
+            pair = self._find_endpoint_pair(intf, UsbConstants)
+            if pair is not None:
+                claimed_interface, claimed_out_endpoint, claimed_in_endpoint, endpoint_type = intf, pair[0], pair[1], pair[2]
+                break
+
+        if claimed_interface is None:
+            self._log("Supported dongle has no paired IN+OUT endpoints: %s" % dev.getDeviceName())
+            return
+
+        conn = self._usb_manager.openDevice(dev)
+        if conn is None:
+            self._log("openDevice() failed for %s" % dev.getDeviceName())
+            return
+
+        if not conn.claimInterface(claimed_interface, True):
+            self._log("claimInterface() failed for %s" % dev.getDeviceName())
+            conn.close()
+            return
+
+        encoder = encoder_class()
+        handshake_ok = self._run_open_handshake(conn, claimed_in_endpoint, claimed_out_endpoint, encoder)
+        if not handshake_ok:
+            self._log("USB handshake failed for %s" % dongle_name)
+            if getattr(encoder, "strict_handshake", False):
+                try:
+                    conn.releaseInterface(claimed_interface)
+                except Exception:
+                    pass
+                conn.close()
+                return
+
+        self._device = dev
+        self._connection = conn
+        self._usb_interface = claimed_interface
+        self._out_endpoint = claimed_out_endpoint
+        self._in_endpoint = claimed_in_endpoint
+        self._endpoint_type = endpoint_type
+        self._dongle_name = dongle_name
+        self._encoder = encoder
+        self._receiver = receiver_class()
+        self._log(
+            "%s ready: vid=0x%04X pid=0x%04X out=%s in=%s type=%s tx=%s rx=%s (rx supported=%s)"
+            % (
+                dongle_name, dev.getVendorId(), dev.getProductId(),
+                claimed_out_endpoint.getAddress(), claimed_in_endpoint.getAddress(), endpoint_type,
+                self._encoder.name, self._receiver.name, getattr(self._receiver, "supports_receive", False),
+            )
+        )
+        self.refresh()
+
+    def _find_endpoint_pair(self, intf, UsbConstants):
+        def collect(endpoint_type, label):
+            out_by_num = {}
+            in_by_num = {}
+            for e in range(intf.getEndpointCount()):
+                ep = intf.getEndpoint(e)
+                if ep.getType() != endpoint_type:
+                    continue
+                number = ep.getAddress() & 0x0F
+                if ep.getDirection() == UsbConstants.USB_DIR_OUT:
+                    out_by_num[number] = ep
+                elif ep.getDirection() == UsbConstants.USB_DIR_IN:
+                    in_by_num[number] = ep
+            for number in sorted(set(out_by_num.keys()) & set(in_by_num.keys())):
+                return out_by_num[number], in_by_num[number], label
+            return None
+
+        bulk_pair = collect(UsbConstants.USB_ENDPOINT_XFER_BULK, "bulk")
+        if bulk_pair is not None:
+            return bulk_pair
+        return collect(UsbConstants.USB_ENDPOINT_XFER_INT, "interrupt")
+
+    def _run_open_handshake(self, conn, in_endpoint, out_endpoint, encoder):
+        try:
+            if hasattr(encoder, "open_handshake"):
+                return encoder.open_handshake(conn, in_endpoint, out_endpoint, self._write_chunk, self._drain_in_endpoint)
+            for frame in encoder.handshake_frames():
+                if not self._write_chunk(conn, out_endpoint, frame, 250):
+                    return False
+            self._drain_in_endpoint(conn, in_endpoint, 250)
+            return True
+        except Exception as e:
+            self._log("handshake error: %s" % e)
+            return False
+
+    def _drain_in_endpoint(self, conn, in_endpoint, timeout_ms):
+        if conn is None or in_endpoint is None:
+            return
+        size = max(64, in_endpoint.getMaxPacketSize())
+        buf = jarray(jbyte)([0] * size)
+        deadline = time.time() + (timeout_ms / 1000.0)
+        while time.time() < deadline:
+            result = conn.bulkTransfer(in_endpoint, buf, size, 10)
+            if result <= 0:
+                break
+
+    def _ensure_reader(self):
+        with self._reader_lock:
+            self._read_until_at = max(self._read_until_at, time.time() + 1.0)
+            if self._reader_thread is not None and self._reader_thread.is_alive():
+                return
+            self._reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
+            self._reader_thread.start()
+
+    def _reader_loop(self):
+        while not self._stop_flag.is_set():
+            if time.time() >= self._read_until_at:
+                return
+            conn = self._connection
+            endpoint = self._in_endpoint
+            if conn is None or endpoint is None:
+                return
+            try:
+                size = max(64, endpoint.getMaxPacketSize())
+                buf = jarray(jbyte)([0] * size)
+                conn.bulkTransfer(endpoint, buf, size, 300)
+            except Exception:
+                time.sleep(0.005)
+            time.sleep(0.001)
+
+    def _release_usb(self):
+        try:
+            if self._connection is not None:
+                if self._usb_interface is not None:
+                    self._connection.releaseInterface(self._usb_interface)
+                self._connection.close()
+        except Exception as e:
+            self._log("release error: %s" % e)
+        finally:
+            self._device = None
+            self._connection = None
+            self._usb_interface = None
+            self._out_endpoint = None
+            self._in_endpoint = None
+            self._endpoint_type = None
+            self._dongle_name = None
+            self._encoder = UnknownProtocolEncoder()
+            self._receiver = UnknownReceiveProtocol()
+            self._tx_count = 0
+            self._read_until_at = 0
+            self.refresh()
+
+    def _post_transmit_delay_ms(self, pattern):
+        if hasattr(self._encoder, "post_transmit_delay_ms"):
+            return self._encoder.post_transmit_delay_ms(pattern)
+        total_us = 0
+        for value in pattern:
+            try:
+                total_us += max(0, int(value))
+            except Exception:
+                pass
+        return max(25, int(total_us / 1000) + 2)
+
+    def _encoded_chunks(self, encoded):
+        if encoded is None or len(encoded) == 0:
+            return []
+        first = encoded[0]
+        if isinstance(first, int):
+            return [encoded]
+        return list(encoded)
+
+    def _encoded_size(self, encoded):
+        return sum(len(chunk) for chunk in self._encoded_chunks(encoded))
+
+    def _write_chunk(self, conn, endpoint, data_bytes, timeout_ms=400):
+        signed = []
+        for b in data_bytes:
+            v = int(b) & 0xFF
+            signed.append(v - 256 if v > 127 else v)
+        java_bytes = jarray(jbyte)(signed)
+        result = conn.bulkTransfer(endpoint, java_bytes, len(signed), timeout_ms)
+        if result <= 0:
+            self._log("bulkTransfer(OUT) raw result=%s for %d bytes" % (result, len(signed)))
+        return result > 0
+
+    def _read_chunk(self, size=64, timeout_ms=200):
+        conn = self._connection
+        ep = self._in_endpoint
+        if conn is None or ep is None:
+            return b""
+        buf = jarray(jbyte)([0] * size)
+        n = conn.bulkTransfer(ep, buf, size, timeout_ms)
+        if n and n > 0:
+            return bytes([int(buf[i]) & 0xFF for i in range(n)])
+        return b""
+
+    def _usb_write(self, encoded):
+        try:
+            chunks = self._encoded_chunks(encoded)
+            inter_frame_delay_ms = getattr(self._encoder, "inter_frame_delay_ms", 0)
+            wants_reader = getattr(self._encoder, "wants_background_reader", True)
+            for index, chunk in enumerate(chunks):
+                if not self._write_chunk(self._connection, self._out_endpoint, chunk):
+                    return False
+                if wants_reader:
+                    self._ensure_reader()
+                if inter_frame_delay_ms > 0 and index + 1 < len(chunks):
+                    time.sleep(inter_frame_delay_ms / 1000.0)
+            if hasattr(self._encoder, "drain_after_transmit"):
+                self._encoder.drain_after_transmit(self._connection, self._in_endpoint, self._drain_in_endpoint)
+            return True
+        except Exception as e:
+            self._log("bulkTransfer threw: %s" % e)
+            return False
+
+    # -- RX: запись сигнала -------------------------------------------------
+
+    def start_capture(self):
+        if not self._is_connected():
+            self._log("Нет подключенного донгла")
+            return False
+        if not getattr(self._receiver, "supports_receive", False):
+            self._log(
+                "Протокол '%s' пока не поддерживает приём (learn mode не реализован)"
+                % self._receiver.name
+            )
+            return False
+        if self._capturing:
+            return False
+
+        self._capturing = True
+        threading.Thread(target=self._capture_worker, daemon=True).start()
+        return True
+
+    def _capture_worker(self):
+        try:
+            self._log("Наведи пульт и нажми кнопку (таймаут 15s)")
+            deadline = time.time() + 15.0
+
+            # Общая блокировка с TX: пока идёт приём, передача через это же
+            # устройство физически невозможна (донгл слушает внешний ИК).
+            with self._usb_op_lock:
+                parsed = self._receiver.capture(
+                    conn=self._connection,
+                    out_ep=self._out_endpoint,
+                    in_ep=self._in_endpoint,
+                    write_chunk=lambda data, timeout_ms=400: self._write_chunk(
+                        self._connection, self._out_endpoint, data, timeout_ms
+                    ),
+                    read_chunk=self._read_chunk,
+                    log=self._log,
+                    deadline_s=deadline,
+                )
+
+            self._last_capture = parsed
+            self._library["pending_capture"] = parsed
+            self._save_library()
+            self._log(
+                "Сигнал записан и сохранён: freq=%s Hz, %d тайминг(ов)"
+                % (parsed.get("freq"), len(parsed.get("pattern", [])))
+            )
+        except NotImplementedError as e:
+            self._log("Протокол не поддерживает приём: %s" % e)
+        except Exception as e:
+            self._log("capture error: %s" % e)
+        finally:
+            self._capturing = False
+            self.refresh()
+
+    def is_capturing(self):
+        return self._capturing
+
+    def last_capture(self):
+        return self._last_capture
+
+    # -- Ручной перебор (brute-force) кодов через уже подключенный донгл ----
+    # Переиспользует service_infrared_transmitter_transmit -- тот же путь,
+    # что и обычная отправка из пультов -- поэтому кодирование под конкретный
+    # донгл и блокировка от конфликта с записью уже учтены.
+
+    def _bf_codes(self):
+        return BRUTEFORCE_CODES.get(self._bf_category, []) or []
+
+    def _bf_builtin_available(self):
+        try:
+            return bool(self.api.getAndroid().irHasEmitter())
+        except Exception:
+            return False
+
+    def _bf_transmit_dongle(self, pattern):
+        try:
+            result = self.service_infrared_transmitter_transmit({
+                "frequency": 38000,
+                "pattern": pattern,
+            })
+            return bool(result and result.get("ok"))
+        except Exception as e:
+            self._log("Ошибка донгла: %s" % e)
+            return False
+
+    def _bf_transmit_builtin(self, pattern):
+        try:
+            android = self.api.getAndroid()
+            if not android.irHasEmitter():
+                return False
+            return bool(android.irTransmit(38000, pattern))
+        except Exception as e:
+            self._log("Ошибка встроенного ИК: %s" % e)
+            return False
+
+    def _bf_transmit_index(self, idx):
+        codes = self._bf_codes()
+        if not codes:
+            self._log("Нет кодов в этой категории")
+            return
+        idx = idx % len(codes)
+        address, command = codes[idx]
+        pattern = _nec_pattern(address, command)
+        if not pattern:
+            self._log("Некорректный код #%d" % idx)
+            return
+
+        via_builtin = self._bf_transmit_via == "builtin"
+        ok = self._bf_transmit_builtin(pattern) if via_builtin else self._bf_transmit_dongle(pattern)
+
+        self._log(
+            "Перебор [%d/%d] NEC addr=0x%02X cmd=0x%02X (%s) -> %s"
+            % (
+                idx + 1, len(codes), address, command,
+                "встроенный ИК" if via_builtin else "USB-донгл",
+                "ok" if ok else "ошибка",
+            )
+        )
+
+    def _bf_path_ready(self):
+        if self._bf_transmit_via == "builtin":
+            return self._bf_builtin_available(), "На этом телефоне нет встроенного ИК-передатчика"
+        return self._is_connected(), "USB-донгл не подключен"
+
+    def _bf_set_transmit_via(self, use_builtin):
+        self._bf_transmit_via = "builtin" if use_builtin else "dongle"
+        self.refresh()
+
+    def _bf_test_next(self):
+        if self._capturing:
+            self._log("Сейчас идёт запись сигнала, подожди")
+            self.refresh()
+            return
+        ready, msg = self._bf_path_ready()
+        if not ready:
+            self._log(msg)
+            self.refresh()
+            return
+        codes = self._bf_codes()
+        if not codes:
+            self.refresh()
+            return
+        self._bf_index = (self._bf_index + 1) % len(codes)
+        self._bf_transmit_index(self._bf_index)
+        self.refresh()
+
+    def _bf_run_auto(self):
+        try:
+            codes = self._bf_codes()
+            total = len(codes)
+            if total == 0:
+                return
+            while self._bf_running and not self._bf_stop_flag:
+                if self._capturing:
+                    time.sleep(0.2)
+                    continue
+                ready, _msg = self._bf_path_ready()
+                if not ready:
+                    time.sleep(0.3)
+                    continue
+                self._bf_index = (self._bf_index + 1) % total
+                self._bf_transmit_index(self._bf_index)
+                try:
+                    self.refresh()
+                except Exception:
+                    pass  # обновление UI из фонового потока не гарантировано
+                          # везде -- перебор при этом всё равно продолжается.
+                waited = 0
+                while waited < self._bf_delay_ms and self._bf_running and not self._bf_stop_flag:
+                    time.sleep(0.05)
+                    waited += 50
+        except Exception as e:
+            self._log("Ошибка автоперебора: %s" % e)
+        finally:
+            self._bf_running = False
+            try:
+                self.refresh()
+            except Exception:
+                pass
+
+    def _bf_toggle_auto(self, checked):
+        if checked:
+            if self._bf_running:
+                return
+            ready, msg = self._bf_path_ready()
+            if not ready:
+                self._log(msg)
+                self.refresh()
+                return
+            self._bf_running = True
+            self._bf_stop_flag = False
+            try:
+                self._bf_thread = threading.Thread(target=self._bf_run_auto, daemon=True)
+                self._bf_thread.start()
+            except Exception as e:
+                self._bf_running = False
+                self._log("Автоперебор недоступен, используй ручной режим: %s" % e)
+        else:
+            self._bf_stop_flag = True
+            self._bf_running = False
+        self.refresh()
+
+    def _bf_set_delay(self, value):
+        try:
+            self._bf_delay_ms = max(300, int(value))
+        except Exception:
+            pass
+
+    def _bf_accept_current(self):
+        codes = self._bf_codes()
+        if not (0 <= self._bf_index < len(codes)):
+            return
+        self._bf_stop_flag = True
+        self._bf_running = False
+        address, command = codes[self._bf_index]
+        pattern = _nec_pattern(address, command)
+        captured = {"freq": 38000, "pattern": pattern}
+        self._last_capture = captured
+        self._library["pending_capture"] = captured
+        self._save_library()
+        self._log(
+            "Код принят (addr=0x%02X cmd=0x%02X) и сохранён как последняя запись "
+            "-- теперь его можно добавить кнопкой в пульт" % (address, command)
+        )
+        self._view = "remotes"
+        self.refresh()
+
+    # -- Виртуальные пульты: хранилище ---------------------------------------
+
+    def _library_path(self):
+        files_dir = self._context.getFilesDir()
+        return os.path.join(files_dir.getAbsolutePath(), "usb_c_ir_combo_library.json")
+
+    def _load_library(self):
+        path = self._library_path()
+        data = None
+        try:
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                    if isinstance(loaded, dict) and "remotes" in loaded:
+                        data = loaded
+        except Exception as e:
+            self._log_lines_safe_append("library load error: %s" % e)
+
+        if data is None:
+            data = {"remotes": []}
+
+        self._fix_broken_names(data)
+
+        settings = data.get("settings")
+        if not isinstance(settings, dict):
+            settings = {}
+        settings.setdefault("export_root", DEFAULT_EXPORT_ROOT)
+        data["settings"] = settings
+
+        return data
+
+    def _get_export_root(self):
+        try:
+            return self._sanitize_export_root(self._library.get("settings", {}).get("export_root"))
+        except Exception:
+            return DEFAULT_EXPORT_ROOT
+
+    def _set_export_root(self, value):
+        clean = self._sanitize_export_root(value)
+        settings = self._library.get("settings")
+        if not isinstance(settings, dict):
+            settings = {}
+        settings["export_root"] = clean
+        self._library["settings"] = settings
+        self._export_root_draft = None
+        self._save_library()
+        self._log("Папка экспорта изменена на Download/%s/" % clean)
+        self.refresh()
+
+    def _on_export_root_change(self, value):
+        # Только черновик в памяти -- ничего не пишем на диск при каждом
+        # нажатии клавиши, сохраняем по кнопке "Сохранить".
+        self._export_root_draft = value
+
+    @staticmethod
+    def _sanitize_export_root(value):
+        # MediaStore.Downloads требует relative_path строго под "Download/",
+        # поэтому тут допустимо только имя (под)папки: без ".." и без
+        # символов, которые не переживут запись через ContentResolver.
+        value = (value or "").strip().strip("/")
+        if not value:
+            return DEFAULT_EXPORT_ROOT
+        parts = [p for p in value.split("/") if p not in ("", ".", "..")]
+        cleaned_parts = []
+        for p in parts:
+            kept = "".join(c if (c.isalnum() or c in "-_ ") else "_" for c in p).strip()
+            if kept:
+                cleaned_parts.append(kept)
+        return "/".join(cleaned_parts) or DEFAULT_EXPORT_ROOT
+
+    def _fix_broken_names(self, data):
+        changed = False
+        used_names = []
+        for r in data.get("remotes", []):
+            if not r.get("name"):
+                r["name"] = _unique_name(used_names, "Пульт")
+                changed = True
+            used_names.append(r["name"])
+
+            used_btn_names = []
+            for b in r.get("buttons", []):
+                if not b.get("name"):
+                    b["name"] = _unique_name(used_btn_names, "SIGNAL")
+                    changed = True
+                used_btn_names.append(b["name"])
+
+        if changed:
+            self._log_lines_safe_append("Восстановлены названия пультов/кнопок, повреждённые старым багом")
+
+    def _log_lines_safe_append(self, line):
+        if hasattr(self, "_log_lines"):
+            self._log(line)
+
+    def _save_library(self):
+        path = self._library_path()
+        try:
+            tmp_path = path + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(self._library, f, ensure_ascii=False)
+            os.replace(tmp_path, path)
+            return True
+        except Exception as e:
+            self._log("library save error: %s" % e)
+            return False
+
+    def _find_remote(self, remote_id):
+        for r in self._library["remotes"]:
+            if r["id"] == remote_id:
+                return r
+        return None
+
+    def _create_remote(self, base_name):
+        existing_names = [r["name"] for r in self._library["remotes"]]
+        name = _unique_name(existing_names, base_name)
+        remote = {
+            "id": "remote_%d" % int(time.time() * 1000),
+            "name": name,
+            "buttons": [],
+        }
+        self._library["remotes"].append(remote)
+        self._save_library()
+        self._log("Создан пульт '%s'" % name)
+        self._selected_remote_id = remote["id"]
+        self._view = "remote_detail"
+        self.refresh()
+
+    def _delete_remote(self, remote_id):
+        remote = self._find_remote(remote_id)
+        if remote is None:
+            return
+        self._library["remotes"] = [r for r in self._library["remotes"] if r["id"] != remote_id]
+        self._save_library()
+        self._log("Пульт '%s' удалён" % remote["name"])
+        self._selected_remote_id = None
+        self._view = "remotes"
+        self.refresh()
+
+    def _add_button_to_remote(self, remote_id, base_name):
+        remote = self._find_remote(remote_id)
+        capture = self.last_capture()
+        if remote is None or capture is None:
+            self._log("Нет записанного сигнала для добавления")
+            self._view = "remote_detail"
+            self.refresh()
+            return
+        existing_names = [b["name"] for b in remote["buttons"]]
+        name = _unique_name(existing_names, base_name)
+        remote["buttons"].append({
+            "name": name,
+            "freq": capture.get("freq"),
+            "pattern": capture.get("pattern", []),
+        })
+        self._library.pop("pending_capture", None)
+        self._save_library()
+        self._log("Кнопка '%s' добавлена в пульт '%s'" % (name, remote["name"]))
+        self._view = "remote_detail"
+        self.refresh()
+
+    def _delete_button(self, remote_id, button_name):
+        remote = self._find_remote(remote_id)
+        if remote is None:
+            return
+        remote["buttons"] = [b for b in remote["buttons"] if b["name"] != button_name]
+        self._save_library()
+        self._log("Кнопка '%s' удалена" % button_name)
+        self._view = "remote_detail"
+        self.refresh()
+
+    def _export_remote_to_downloads(self, remote_id):
+        remote = self._find_remote(remote_id)
+        if remote is None or not remote["buttons"]:
+            self._log("Нет кнопок для экспорта")
+            self.refresh()
+            return
+
+        content = _build_ir_file_content(remote)
+        filename = "%s.ir" % _slugify_filename(remote["name"])
+
+        try:
+            ContentValues = jclass("android.content.ContentValues")
+            MediaStoreDownloads = jclass("android.provider.MediaStore$Downloads")
+            String = jclass("java.lang.String")
+
+            resolver = self._context.getContentResolver()
+
+            relative_path = "Download/%s/" % self._get_export_root()
+
+            existing_uri = None
+            projection = jarray(String)(["_id"])
+            selection = "_display_name=? AND relative_path=?"
+            selection_args = jarray(String)([filename, relative_path])
+            cursor = resolver.query(
+                MediaStoreDownloads.EXTERNAL_CONTENT_URI, projection, selection, selection_args, None
+            )
+            if cursor is not None:
+                try:
+                    if cursor.moveToFirst():
+                        ContentUris = jclass("android.content.ContentUris")
+                        row_id = cursor.getLong(0)
+                        existing_uri = ContentUris.withAppendedId(MediaStoreDownloads.EXTERNAL_CONTENT_URI, row_id)
+                finally:
+                    cursor.close()
+
+            if existing_uri is not None:
+                uri = existing_uri
+            else:
+                cv = ContentValues()
+                cv.put("_display_name", filename)
+                cv.put("mime_type", "application/octet-stream")
+                cv.put("relative_path", relative_path.rstrip("/"))
+                uri = resolver.insert(MediaStoreDownloads.EXTERNAL_CONTENT_URI, cv)
+
+            if uri is None:
+                self._log("Не удалось создать файл в Downloads (insert вернул null)")
+                self.refresh()
+                return
+
+            data = content.encode("utf-8")
+            signed = [(b - 256) if b > 127 else b for b in data]
+            java_bytes = jarray(jbyte)(signed)
+
+            stream = resolver.openOutputStream(uri, "wt")
+            stream.write(java_bytes)
+            stream.flush()
+            stream.close()
+
+            self._log(
+                "Готово: %s%s -- импортируй его в разделе "
+                "'Универсальные пульты' так же, как rid_10001.ir" % (relative_path, filename)
+            )
+        except Exception as e:
+            self._log("export error: %s" % e)
+
+        self.refresh()
+
+    # -- Навигация между "экранами" внутри одного screen_main ---------------
+
+    def _go_recorder(self):
+        self._view = "recorder"
+        self.refresh()
+
+    def _go_remotes(self):
+        self._view = "remotes"
+        self.refresh()
+
+    def _go_new_remote(self):
+        self._view = "new_remote"
+        self.refresh()
+
+    def _go_bruteforce(self):
+        self._view = "bruteforce"
+        self.refresh()
+
+    def _open_remote(self, remote_id):
+        self._selected_remote_id = remote_id
+        self._view = "remote_detail"
+        self.refresh()
+
+    def _go_add_button(self):
+        if self.last_capture() is None:
+            self._log("Сначала запиши сигнал на вкладке 'Запись'")
+            self.refresh()
+            return
+        self._view = "add_button"
+        self.refresh()
+
+    # -- logging / прочее -----------------------------------------------------
+
+    def _log_dongle_missing(self, force=False):
+        now = time.time()
+        if force or now - self._last_missing_log_at >= 15:
+            self._last_missing_log_at = now
+            self._log("Донгл не найден, продолжаю поиск")
+
+    def _log(self, line):
+        stamp = time.strftime("%H:%M:%S")
+        self._log_lines.append("[%s] %s" % (stamp, line))
+        if len(self._log_lines) > 100:
+            self._log_lines = self._log_lines[-100:]
+        self.refresh()
+
+    def screen_usb_status_badge(self, ui, api, state):
+        connected = self._is_connected()
+        return ui.icon_button(
+            "usb" if connected else "usb_off",
+            lambda: self.navigate("main"),
+        )
+
+    def _manual_rescan(self):
+        self._log("Manual rescan requested")
+        try:
+            self._scan_once(missing_log_force=True)
+        except Exception as e:
+            self._log("rescan error: %s" % e)
+        self.refresh()
+
+    # -- UI -------------------------------------------------------------------
+
+    def _render_recorder_view(self, ui):
+        connected = self._is_connected()
+        if connected:
+            status_text = "🟢 %s подключен, tx=%s rx=%s" % (
+                self._dongle_name, self._encoder.name, self._receiver.name
+            )
+        else:
+            status_text = "🔴 Донгл не найден"
+
+        capture = self.last_capture()
+        if capture is not None:
+            capture_text = "Последняя запись: %s Hz, %d тайминг(ов)" % (
+                capture.get("freq"), len(capture.get("pattern", []))
+            )
+        else:
+            capture_text = "Пока ничего не записано"
+
+        capture_button_label = "Запись..." if self.is_capturing() else "Записать сигнал"
+
+        buttons = [
+            ui.text(status_text, "titleSmall"),
+            ui.text("TX (передача) всегда доступен через штатное 'Отправить' в пультах", "bodySmall", "muted"),
+            ui.text(capture_text, "bodySmall", "muted"),
+            ui.button("Обновить", self._manual_rescan),
+            ui.button(capture_button_label, self.start_capture),
+        ]
+
+        buttons.append(ui.button("📁 Виртуальные пульты", self._go_remotes))
+        buttons.append(ui.button("🔁 Ручной перебор кодов", self._go_bruteforce))
+
+        return ui.column(
+            [
+                ui.card(buttons),
+                ui.text("Recent log", "titleSmall"),
+                ui.log_panel("\n".join(self._log_lines[-40:]), max_height=300),
+            ],
+            padding=16,
+            spacing=12,
+            fill_max_size=True,
+        )
+
+    def _render_remotes_view(self, ui):
+        remotes = self._library["remotes"]
+        rows = [ui.text("Виртуальные пульты", "titleSmall")]
+
+        if not remotes:
+            rows.append(ui.text("Пока нет ни одного пульта", "bodySmall", "muted"))
+        else:
+            for r in remotes:
+                label = "%s (%d кнопок)" % (r["name"], len(r["buttons"]))
+                rows.append(ui.button(label, lambda *_a, rid=r["id"]: self._open_remote(rid)))
+
+        rows.append(ui.button("➕ Новый пульт", self._go_new_remote))
+        rows.append(ui.button("⬅ Назад к записи", self._go_recorder))
+
+        current_root = self._get_export_root()
+        draft = self._export_root_draft if self._export_root_draft is not None else current_root
+        rows.append(ui.divider())
+        rows.append(ui.text("Папка экспорта: Download/%s/" % current_root, "labelLarge"))
+        rows.append(ui.text_field(
+            value=draft,
+            on_change=self._on_export_root_change,
+            label="Подпапка, например Dolphy или Dolphy/TVs",
+            single_line=True,
+            fill_max_width=True,
+        ))
+        rows.append(ui.button(
+            "Сохранить папку экспорта",
+            lambda *_a: self._set_export_root(
+                self._export_root_draft if self._export_root_draft is not None else current_root
+            ),
+        ))
+
+        return ui.column([ui.card(rows)], padding=16, spacing=12, fill_max_size=True)
+
+    def _render_new_remote_view(self, ui):
+        rows = [ui.text("Выбери тип пульта", "titleSmall")]
+        for preset in REMOTE_NAME_PRESETS:
+            rows.append(ui.button(preset, lambda *_a, p=preset: self._create_remote(p)))
+        rows.append(ui.button("⬅ Отмена", self._go_remotes))
+
+        return ui.column([ui.card(rows)], padding=16, spacing=12, fill_max_size=True)
+
+    def _render_bruteforce_view(self, ui):
+        codes = self._bf_codes()
+        total = len(codes)
+        pos_text = "Код ещё не пробовали"
+        if 0 <= self._bf_index < total:
+            addr, cmd = codes[self._bf_index]
+            pos_text = "Код %d/%d — addr=0x%02X cmd=0x%02X" % (self._bf_index + 1, total, addr, cmd)
+
+        status = "🟢 %s подключен" % self._dongle_name if self._is_connected() else "🔴 USB-донгл не найден"
+        builtin_status = "есть" if self._bf_builtin_available() else "нет"
+
+        rows = [
+            ui.text("Ручной перебор кодов (NEC)", "titleSmall"),
+            ui.text("Встроенный ИК телефона: %s   USB-донгл: %s" % (builtin_status, status), "bodySmall", "muted"),
+            ui.switch(
+                checked=(self._bf_transmit_via == "builtin"),
+                on_change=self._bf_set_transmit_via,
+                title="Передавать через встроенный ИК телефона",
+                subtitle="Выключено — через USB-донгл",
+            ),
+            ui.text(
+                "Коды сейчас — заглушки для проверки логики, не проверенные реальные "
+                "значения. Пополняй список вручную, например из "
+                "github.com/Lucaslhm/Flipper-IRDB.",
+                "bodySmall", "muted",
+            ),
+            ui.text(pos_text, "titleMedium"),
+            ui.button(
+                "Следующий код",
+                self._bf_test_next,
+                enabled=not self._bf_running,
+                fill_max_width=True,
+            ),
+            ui.switch(
+                checked=self._bf_running,
+                on_change=self._bf_toggle_auto,
+                title="Автоперебор",
+                subtitle="Один код каждые %d мс, пока не остановишь" % self._bf_delay_ms,
+            ),
+            ui.slider(
+                value=self._bf_delay_ms,
+                on_change=self._bf_set_delay,
+                minimum=300,
+                maximum=2000,
+                title="Задержка между кодами (мс)",
+                steps=17,
+            ),
+        ]
+
+        if 0 <= self._bf_index < total:
+            rows.append(ui.button(
+                "✅ Сработало — сохранить этот код",
+                self._bf_accept_current,
+                style="filled",
+                fill_max_width=True,
+            ))
+
+        rows.append(ui.button("⬅ Назад к записи", self._go_recorder))
+        rows.append(ui.log_panel("\n".join(self._log_lines[-14:]), max_height=220))
+
+        return ui.column([ui.card(rows)], padding=16, spacing=12, fill_max_size=True)
+
+    def _render_remote_detail_view(self, ui):
+        remote = self._find_remote(self._selected_remote_id)
+        if remote is None:
+            self._view = "remotes"
+            return self._render_remotes_view(ui)
+
+        rows = [ui.text(remote["name"], "titleSmall")]
+
+        if not remote["buttons"]:
+            rows.append(ui.text("В этом пульте пока нет кнопок", "bodySmall", "muted"))
+        else:
+            for b in remote["buttons"]:
+                pretty = BUTTON_NAME_LABELS.get(b["name"], b["name"])
+                label = "%s — %s Hz, %d тайминг(ов)" % (pretty, b.get("freq"), len(b.get("pattern", [])))
+                rows.append(ui.text(label, "bodySmall"))
+                rows.append(ui.button("Удалить '%s'" % pretty, lambda *_a, bn=b["name"]: self._delete_button(remote["id"], bn)))
+
+        capture = self.last_capture()
+        add_label = "➕ Добавить записанный сигнал" if capture is not None else "➕ Добавить (сначала запиши сигнал)"
+        rows.append(ui.button(add_label, self._go_add_button))
+
+        if remote["buttons"]:
+            rows.append(ui.button("📤 Экспортировать как .ir (в Downloads)", lambda *_a: self._export_remote_to_downloads(remote["id"])))
+
+        rows.append(ui.button("🗑 Удалить весь пульт", lambda *_a: self._delete_remote(remote["id"])))
+        rows.append(ui.button("⬅ К списку пультов", self._go_remotes))
+
+        return ui.column([ui.card(rows)], padding=16, spacing=12, fill_max_size=True)
+
+    def _render_add_button_view(self, ui):
+        remote = self._find_remote(self._selected_remote_id)
+        if remote is None:
+            self._view = "remotes"
+            return self._render_remotes_view(ui)
+
+        rows = [ui.text("Название кнопки для '%s'" % remote["name"], "titleSmall")]
+        for key, label in BUTTON_NAME_PRESETS:
+            rows.append(ui.button(label, lambda *_a, k=key: self._add_button_to_remote(remote["id"], k)))
+        rows.append(ui.button(
+            "Другое (SIGNAL N)",
+            lambda *_a: self._add_button_to_remote(remote["id"], "SIGNAL"),
+        ))
+        rows.append(ui.button("⬅ Отмена", lambda *_a: self._open_remote(remote["id"])))
+
+        return ui.column([ui.card(rows)], padding=16, spacing=12, fill_max_size=True)
+
+    def screen_main(self, ui, api, state):
+        if self._view == "remotes":
+            content = self._render_remotes_view(ui)
+        elif self._view == "new_remote":
+            content = self._render_new_remote_view(ui)
+        elif self._view == "remote_detail":
+            content = self._render_remote_detail_view(ui)
+        elif self._view == "add_button":
+            content = self._render_add_button_view(ui)
+        elif self._view == "bruteforce":
+            content = self._render_bruteforce_view(ui)
+        else:
+            content = self._render_recorder_view(ui)
+
+        return ui.scaffold(title="USB-C & BUILD-IN IR Combo", content=content)
