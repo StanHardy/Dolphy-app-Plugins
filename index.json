@@ -1,6 +1,6 @@
 {
   "format": "dolphy-plugins-v1",
-  "count": 7,
+  "count": 8,
   "plugins": [
     {
       "id": 8,
@@ -15,6 +15,20 @@
       "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/battery_level_changer_gps_spoofer/battery_level_changer_gps_spoofer.dolphyplugin",
       "post_url": "https://t.me/c/3966541757/23929",
       "updated_at": "2026-09-16 13:53:59"
+    },
+    {
+      "id": 10,
+      "name": "BLE Guard",
+      "version": "1.0",
+      "author": "WinterBalls",
+      "description": {
+        "ru": "Защищает телефон от BLE-спама, изменяя флаги фонового сканирования устройств.",
+        "en": "Protects the phone from BLE spam by modifying the flags for background device scanning."
+      },
+      "file": "plugins/ble_guard/ble_guard.dolphyplugin",
+      "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/ble_guard/ble_guard.dolphyplugin",
+      "post_url": "https://t.me/c/3966541757/26832",
+      "updated_at": "2026-09-25 22:01:33"
     },
     {
       "id": 1,
