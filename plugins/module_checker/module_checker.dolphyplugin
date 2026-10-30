@@ -1,0 +1,185 @@
+__id__ = "module_checker"
+__name__ = "Module Checker"
+__version__ = "1.0.0"
+__author__ = "Topzi"
+__description__ = "Показывает какие аппаратные модули и функции доступны на этом телефоне"
+__icon__ = "rounded:fact_check"
+__library__ = False
+__design_library__ = False
+__dependencies__ = []
+__permissions__ = []
+
+import json
+
+
+class ModuleChecker(BasePlugin):
+
+    def on_plugin_load(self):
+        self.add_module(
+            title="Module Checker",
+            description="Проверка доступных модулей устройства",
+            icon="fact_check",
+            screen="main",
+            section="PLUGINS"
+        )
+
+    # ---------- helpers ----------
+
+    def _safe(self, fn, default=False):
+        """Вызывает fn() и возвращает default, если что-то пошло не так
+        (метод отсутствует в этой сборке Dolphy, бросил исключение и т.д.)."""
+        try:
+            result = fn()
+            if result is None:
+                return default
+            return result
+        except Exception:
+            return default
+
+    def _has_service(self, service_id):
+        """Best-effort проверка: публичного API для чтения списка активных
+        provide_service(...) регистраций других плагинов в документации нет,
+        поэтому здесь используется java_exports() как косвенный сигнал —
+        библиотеки-провайдеры часто экспортируют объект с похожим именем.
+        Если в будущей версии Dolphy появится api.listServices() или аналог,
+        стоит заменить эту функцию на прямой вызов."""
+        try:
+            exports = self.java_exports()
+            if exports and service_id.split(".")[0] in str(exports):
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _row(self, title, available, extra=""):
+        """Строит одну строку раздела: если available == False,
+        сверху слева показывается 'Нет модуля'."""
+        children = []
+        if not available:
+            children.append(
+                self.ui.text("Нет модуля", "labelSmall", color="error")
+            )
+        children.append(self.ui.text(title, "titleMedium"))
+        if extra:
+            children.append(self.ui.text(extra, "bodySmall", color="muted"))
+        return self.ui.card(
+            self.ui.column(children, spacing=4),
+            padding=12
+        )
+
+    # ---------- capability checks ----------
+
+    def check_nfc(self):
+        device = self.api.getDevice()
+        available = self._safe(lambda: json.loads(device.nfcCapabilitiesJson()).get("available"))
+        if available is None:
+            available = self._safe(lambda: self.api.getAndroid().hasFeature("android.hardware.nfc"))
+        return available
+
+    def check_ble(self):
+        android = self.api.getAndroid()
+        scanner = self._safe(lambda: android.btLeScannerAvailable())
+        adv = self._safe(lambda: android.btLeAdvertiserAvailable())
+        return bool(scanner or adv)
+
+    def check_bt_classic(self):
+        android = self.api.getAndroid()
+        return self._safe(lambda: android.btIsEnabled() is not None) and self._safe(
+            lambda: self.api.getAndroid().hasFeature("android.hardware.bluetooth")
+        )
+
+    def check_wifi(self):
+        android = self.api.getAndroid()
+        return self._safe(lambda: android.wifiIsEnabled() is not None) or self._safe(
+            lambda: android.hasFeature("android.hardware.wifi")
+        )
+
+    def check_wifi_p2p(self):
+        android = self.api.getAndroid()
+        return self._safe(lambda: android.wifiIsP2pSupported())
+
+    def check_ir(self):
+        android = self.api.getAndroid()
+        has_emitter = self._safe(lambda: android.irHasEmitter())
+        # если своего ИК-порта нет, проверяем не предоставил ли его
+        # какой-то плагин через provide_service("infrared.transmitter", ...)
+        if not has_emitter:
+            has_emitter = self._has_service("infrared.transmitter")
+        return bool(has_emitter)
+
+    def check_usb(self):
+        android = self.api.getAndroid()
+        devices_json = self._safe(lambda: android.usbDevicesJson(), default=None)
+        if devices_json is None:
+            return False
+        return True  # метод существует и отработал — USB host API доступен
+
+    def check_camera(self):
+        android = self.api.getAndroid()
+        return self._safe(lambda: android.hasCamera())
+
+    def check_location(self):
+        android = self.api.getAndroid()
+        return self._safe(lambda: android.locationIsEnabled() is not None)
+
+    def check_sensors(self):
+        android = self.api.getAndroid()
+        sensors_json = self._safe(lambda: android.sensorsListJson(), default=None)
+        if not sensors_json:
+            return False
+        try:
+            data = json.loads(sensors_json)
+            return bool(data)
+        except Exception:
+            return False
+
+    def check_root(self):
+        device = self.api.getDevice()
+        return self._safe(lambda: device.rootAvailable())
+
+    def check_shizuku(self):
+        device = self.api.getDevice()
+        return self._safe(lambda: device.shizukuAvailable())
+
+    def check_nsd(self):
+        # проверка сетевого сервис-дискавери косвенно через наличие Wi-Fi
+        return self.check_wifi()
+
+    # ---------- screen ----------
+
+    def screen_main(self, ui, api, state):
+        sections = [
+            ("NFC", self.check_nfc, "Чтение/запись меток, эмуляция"),
+            ("Bluetooth LE", self.check_ble, "Сканирование и реклама BLE"),
+            ("Bluetooth Classic", self.check_bt_classic, "Классический BT, RFCOMM"),
+            ("Wi-Fi", self.check_wifi, "Сканирование сетей, подключение"),
+            ("Wi-Fi Direct (P2P)", self.check_wifi_p2p, "Прямое соединение между устройствами"),
+            ("Инфракрасный порт", self.check_ir, "Передача ИК-сигналов (либо через плагин)"),
+            ("USB", self.check_usb, "Host-режим, внешние устройства"),
+            ("Камера", self.check_camera, "Захват фото/видео"),
+            ("Геолокация", self.check_location, "GPS/сетевая локация"),
+            ("Датчики", self.check_sensors, "Акселерометр, гироскоп и т.д."),
+            ("Root", self.check_root, "Root-доступ (Magisk и т.п.)"),
+            ("Shizuku", self.check_shizuku, "Расширенный доступ через Shizuku"),
+        ]
+
+        rows = []
+        for title, check_fn, extra in sections:
+            available = self._safe(check_fn, default=False)
+            rows.append(self._row(title, available, extra))
+
+        return ui.scaffold(
+            title="Проверка модулей",
+            content=ui.lazy_column(
+                [
+                    ui.text(
+                        "Статус аппаратных и системных возможностей этого телефона",
+                        "bodyMedium",
+                        color="muted"
+                    ),
+                    ui.spacer(height=8),
+                ] + rows,
+                padding=16,
+                spacing=10
+            )
+        )
