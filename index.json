@@ -1,6 +1,6 @@
 {
   "format": "dolphy-plugins-v1",
-  "count": 25,
+  "count": 26,
   "plugins": [
     {
       "id": 16,
@@ -351,6 +351,20 @@
       "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/metalloiskatel/metalloiskatel.dolphyplugin",
       "post_url": "https://t.me/c/3966541757/26999",
       "updated_at": "2026-09-27 06:02:51"
+    },
+    {
+      "id": 26,
+      "name": "Строительный уровень (Bubble Level)",
+      "version": "1.1.0",
+      "author": "@frostmench1k",
+      "description": {
+        "ru": "Цифровой строительный уровень для Dolphy: пузырёк в реальном времени, режимы Пол / Стена / Уклон %, калибровка «Ноль», Hold, звук и вибрация при выравнивании, порог точности, история замеров и шаринг. Автор @frostmench1k.",
+        "en": "Digital bubble level for Dolphy: live tilt bubble, Floor / Wall / Slope % modes, Zero calibration, Hold, sound & vibration when level, adjustable threshold, measurement history and share. By @frostmench1k."
+      },
+      "file": "plugins/stroitelnyy_uroven_bubble_level/stroitelnyy_uroven_bubble_level.dolphyplugin",
+      "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/stroitelnyy_uroven_bubble_level/stroitelnyy_uroven_bubble_level.dolphyplugin",
+      "post_url": "https://t.me/c/3966541757/35336",
+      "updated_at": "2026-10-20 17:21:58"
     }
   ]
 }
