@@ -1,0 +1,394 @@
+import json
+import time
+import re
+
+__id__ = "gps_spoofer_shizuku_v2"
+__name__ = "Battery Level Changer + GPS Spoofer"
+__version__ = "3.2.0"
+__author__ = "Artpart_13"
+__description__ = "Battery level change + GPS spoofer via Shizuku"
+__icon__ = "rounded:battery_charging_full"
+__permissions__ = ["shizuku", "location", "shell"]
+
+PRESETS = {
+    "london":      {"name": "🇬🇧 Великобритания (Лондон)", "lat": 51.5074, "lng": -0.1278,  "icon": "location_city"},
+    "usa":         {"name": "🇺🇸 США (Нью-Йорк)",          "lat": 40.7128, "lng": -74.0060, "icon": "flag"},
+    "australia":   {"name": "🇦🇺 Австралия (Сидней)",      "lat": -33.8688, "lng": 151.2093, "icon": "explore"},
+    "china":       {"name": "🇨🇳 Китай (Пекин)",           "lat": 39.9042, "lng": 116.4074, "icon": "map"},
+    "north_korea": {"name": "🇰🇵 Северная Корея (Пхеньян)","lat": 39.0392, "lng": 125.7625, "icon": "public"},
+    "japan":       {"name": "🇯🇵 Япония (Токио)",          "lat": 35.6762, "lng": 139.6503, "icon": "tour"},
+    "germany":     {"name": "🇩🇪 Германия (Берлин)",       "lat": 52.5200, "lng": 13.4050,  "icon": "castle"},
+    "brazil":      {"name": "🇧🇷 Бразилия (Рио)",          "lat": -22.9068, "lng": -43.1729, "icon": "beach_access"},
+    "uae":         {"name": "🇦🇪 ОАЭ (Дубай)",             "lat": 25.2048, "lng": 55.2708,  "icon": "apartment"},
+    "ukraine":     {"name": "🇺🇦 Украина (Киев)",          "lat": 50.4501, "lng": 30.5234,  "icon": "home"},
+    "france":      {"name": "🇫🇷 Франция (Париж)",         "lat": 48.8566, "lng": 2.3522,   "icon": "landscape"},
+    "canada":      {"name": "🇨🇦 Канада (Торонто)",        "lat": 43.6532, "lng": -79.3832, "icon": "ac_unit"},
+    "india":       {"name": "🇮🇳 Индия (Дели)",            "lat": 28.7041, "lng": 77.1025,  "icon": "temple_hindu"},
+    "singapore":   {"name": "🇸🇬 Сингапур",                "lat": 1.3521,  "lng": 103.8198, "icon": "business"},
+    "egypt":       {"name": "🇪🇬 Египет (Каир)",           "lat": 30.0444, "lng": 31.2357,  "icon": "pyramid"},
+}
+
+
+class GpsSpooferShizuku(BasePlugin):
+    def __init__(self):
+        super().__init__()
+        self.active_location = None
+        self.is_spoofing = False
+        self.status_state = "НЕ РАБОТАЕТ"
+        self.logs = []
+        self.api = None
+        self.ui = None
+        self.input_lat = "50.4501"
+        self.input_lng = "30.5234"
+
+        # Диагностика Shizuku
+        self.diag_checked = False
+        self.shizuku_available = False
+        self.uid = "неизвестно"
+
+        # Симуляция батареи
+        self.battery_sim_level = "50"
+        self.battery_sim_enabled = False
+
+        # Хранилище обработчиков пресетов
+        self._preset_handlers = {}
+
+    # =========================================================
+    #  LIFECYCLE
+    # =========================================================
+    def on_plugin_load(self):
+        self.add_log("Battery Level Changer + GPS Spoofer v3.2")
+        self.add_module(
+            "Battery Level Changer",
+            "Battery level change + GPS spoofer via Shizuku",
+            "battery_charging_full",
+            "main",
+            "SYSTEM",
+            10,
+        )
+
+    # =========================================================
+    #  ЛОГИ
+    # =========================================================
+    def add_log(self, text):
+        timestamp = time.strftime("%H:%M:%S")
+        self.logs.append(f"[{timestamp}] {text}")
+        if len(self.logs) > 70:
+            self.logs.pop(0)
+
+    def get_logs_text(self):
+        return "\n".join(reversed(self.logs))
+
+    # =========================================================
+    #  SHIZUKU
+    # =========================================================
+    def run_shizuku(self, cmd):
+        self.add_log(f"SHIZUKU: {cmd}")
+        try:
+            if not hasattr(self, "shizuku"):
+                self.add_log("ERROR: self.shizuku недоступен")
+                return None
+            res = self.shizuku(cmd)
+            output = str(res).strip() if res is not None else "OK"
+            self.add_log(f"RES -> {output[:180]}")
+            return res
+        except Exception as e:
+            self.add_log(f"Shizuku ERROR: {e}")
+            return None
+
+    # =========================================================
+    #  ДИАГНОСТИКА
+    # =========================================================
+    def run_diagnostics(self):
+        if self.diag_checked:
+            return
+
+        self.add_log("=== ДИАГНОСТИКА SHIZUKU ===")
+        id_res = self.run_shizuku("id")
+
+        if id_res:
+            text = str(id_res)
+            match = re.search(r'uid=(\d+)', text)
+            if match:
+                self.uid = match.group(1)
+                self.add_log(f"UID: {self.uid}")
+                if self.uid in ("2000", "0"):
+                    self.shizuku_available = True
+                    self.add_log(f"✅ Shizuku OK (UID {self.uid})")
+                else:
+                    self.add_log(f"⚠️ Неожиданный UID: {self.uid}")
+        else:
+            self.add_log("❌ Shizuku недоступен")
+
+        self.diag_checked = True
+        self.add_log("=== ДИАГНОСТИКА ЗАВЕРШЕНА ===")
+
+    # =========================================================
+    #  GPS ПРЕСЕТЫ — ИСПРАВЛЕНО
+    # =========================================================
+    def _make_preset_click(self, key):
+        """Создаёт независимый обработчик для каждого пресета."""
+        def handler():
+            self.add_log(f"Нажат пресет: {key}")
+            self.set_location(key)
+        return handler
+
+    def register_preset_handlers(self):
+        """Заранее регистрирует обработчики для всех пресетов."""
+        self._preset_handlers = {}
+        for key in PRESETS.keys():
+            self._preset_handlers[key] = self._make_preset_click(key)
+        self.add_log(f"Зарегистрировано пресетов: {len(self._preset_handlers)}")
+
+    def set_location(self, key):
+        target = PRESETS.get(key)
+        if target:
+            self.active_location = target
+            self.start_mock_location(target["lat"], target["lng"], target["name"])
+        else:
+            self.add_log(f"Пресет не найден: {key}")
+
+    def set_custom_location(self):
+        try:
+            lat = float(str(self.input_lat).replace(",", "."))
+            lng = float(str(self.input_lng).replace(",", "."))
+            if not (-90 <= lat <= 90 and -180 <= lng <= 180):
+                raise ValueError("Координаты вне диапазона")
+            name = f"Custom ({lat}, {lng})"
+            self.active_location = {"name": name, "lat": lat, "lng": lng}
+            self.start_mock_location(lat, lng, name)
+        except Exception as e:
+            self.add_log(f"Некорректные координаты: {e}")
+            if hasattr(self, "toast"):
+                self.toast(f"Ошибка: {e}")
+
+    def start_mock_location(self, lat, lng, location_name):
+        self.add_log(f"GPS → {location_name} ({lat}, {lng})")
+
+        for c in [
+            "cmd location add-test-provider gps",
+            "cmd location set-test-provider-enabled gps true",
+            f"cmd location set-test-provider-location gps --location {lat},{lng}",
+        ]:
+            self.run_shizuku(c)
+
+        self.is_spoofing = True
+        self.status_state = f"РАБОТАЕТ: {location_name}"
+
+        if hasattr(self, "toast"):
+            self.toast(f"✅ {location_name}")
+
+        self._refresh_ui()
+
+    def stop_spoofing(self):
+        self.add_log("Отключение GPS...")
+        for c in [
+            "cmd location set-test-provider-enabled gps false",
+            "cmd location remove-test-provider gps",
+        ]:
+            self.run_shizuku(c)
+
+        self.is_spoofing = False
+        self.active_location = None
+        self.status_state = "ОТКЛЮЧЕНО"
+
+        if hasattr(self, "toast"):
+            self.toast("GPS отключён")
+
+        self._refresh_ui()
+
+    # =========================================================
+    #  БАТАРЕЯ
+    # =========================================================
+    def apply_battery_sim(self):
+        try:
+            level = int(str(self.battery_sim_level).strip())
+            if not (0 <= level <= 100):
+                raise ValueError("0-100")
+
+            self.add_log(f"Батарея → {level}%")
+            res = self.run_shizuku(f"dumpsys battery set level {level}")
+
+            self.battery_sim_enabled = True
+            self.add_log(f"✅ Уровень установлен: {level}%")
+
+            if hasattr(self, "toast"):
+                self.toast(f"🔋 {level}%")
+
+            self._refresh_ui()
+        except Exception as e:
+            self.add_log(f"Ошибка: {e}")
+            if hasattr(self, "toast"):
+                self.toast(f"Ошибка: {e}")
+
+    def reset_battery(self):
+        self.add_log("Сброс батареи...")
+        self.run_shizuku("dumpsys battery reset")
+        self.battery_sim_enabled = False
+
+        if hasattr(self, "toast"):
+            self.toast("Батарея сброшена")
+
+        self._refresh_ui()
+
+    # =========================================================
+    #  ВСПОМОГАТЕЛЬНЫЕ
+    # =========================================================
+    def _refresh_ui(self):
+        for name in ("refresh", "refresh_ui", "rebuild", "invalidate"):
+            fn = getattr(self, name, None)
+            if callable(fn):
+                try:
+                    fn()
+                    return
+                except Exception as e:
+                    self.add_log(f"Refresh err: {e}")
+
+    def _clear_logs(self):
+        self.logs.clear()
+        self.add_log("Логи очищены")
+        self._refresh_ui()
+
+    # =========================================================
+    #  UI
+    # =========================================================
+    def screen_main(self, ui, api, state):
+        self.ui = ui
+        self.api = api
+
+        if not self.diag_checked:
+            self.run_diagnostics()
+
+        if not self._preset_handlers:
+            self.register_preset_handlers()
+
+        # --- Пресеты через отдельные обработчики ---
+        preset_rows = []
+        for key, data in PRESETS.items():
+            handler = self._preset_handlers.get(key)
+            preset_rows.append(
+                ui.function_row(
+                    data["name"],
+                    f"{data['lat']}, {data['lng']}",
+                    data["icon"],
+                    on_click=handler,
+                )
+            )
+
+        # --- Статус GPS ---
+        if self.is_spoofing:
+            status_card = ui.card([
+                ui.row([
+                    ui.icon("check_circle", 40),
+                    ui.column([
+                        ui.text("GPS Статус", "titleMedium"),
+                        ui.text(self.status_state, "titleLarge"),
+                    ], spacing=2),
+                ], spacing=12),
+                ui.button(
+                    "🛑 Отключить GPS",
+                    on_click=self.stop_spoofing,
+                    fill_max_width=True,
+                ),
+            ])
+        else:
+            status_card = ui.card([
+                ui.row([
+                    ui.icon("cancel", 40),
+                    ui.column([
+                        ui.text("GPS Статус", "titleMedium"),
+                        ui.text(self.status_state, "titleLarge"),
+                    ], spacing=2),
+                ], spacing=12),
+            ])
+
+        # --- Диагностика ---
+        diag_card = ui.card([
+            ui.text("🔍 Shizuku", "titleMedium"),
+            ui.text(f"UID: {self.uid}", "bodyMedium"),
+            ui.text(
+                f"{'✅ Доступен' if self.shizuku_available else '❌ Недоступен'}",
+                "bodyMedium"
+            ),
+        ])
+
+        # --- Ручной ввод GPS ---
+        manual_card = ui.card([
+            ui.text("📍 Координаты GPS", "titleMedium"),
+            ui.row([
+                ui.text_field(
+                    label="Широта",
+                    value=self.input_lat,
+                    on_change=lambda v: setattr(self, "input_lat", v),
+                    fill_max_width=True,
+                ),
+                ui.text_field(
+                    label="Долгота",
+                    value=self.input_lng,
+                    on_change=lambda v: setattr(self, "input_lng", v),
+                    fill_max_width=True,
+                ),
+            ], spacing=8),
+            ui.button(
+                "✅ Применить GPS",
+                on_click=self.set_custom_location,
+                fill_max_width=True,
+            ),
+        ])
+
+        # --- Батарея (кнопка «Применить» — отдельным блоком) ---
+        battery_card = ui.card([
+            ui.text("🔋 Battery Level Changer", "titleMedium"),
+            ui.text("Введите уровень 0-100", "bodySmall"),
+
+            ui.text_field(
+                label="Уровень заряда",
+                value=self.battery_sim_level,
+                on_change=lambda v: setattr(self, "battery_sim_level", v),
+                fill_max_width=True,
+            ),
+
+            # Отдельная кнопка — гарантированно отображается
+            ui.button(
+                "⚡ ПРИМЕНИТЬ УРОВЕНЬ",
+                on_click=self.apply_battery_sim,
+                fill_max_width=True,
+            ),
+
+            ui.button(
+                "🔄 Сброс батареи",
+                on_click=self.reset_battery,
+                fill_max_width=True,
+            ) if self.battery_sim_enabled else ui.text(
+                "Симуляция не активна", "bodySmall"
+            ),
+        ])
+
+        # --- Пресеты ---
+        presets_card = ui.card([
+            ui.text("🌍 Города", "titleMedium"),
+            ui.segmented_list(preset_rows),
+        ])
+
+        # --- Логи ---
+        logs_card = ui.card([
+            ui.text("📋 Логи", "titleMedium"),
+            ui.log_panel(self.get_logs_text(), 220),
+            ui.button(
+                "🗑️ Очистить логи",
+                on_click=self._clear_logs,
+                fill_max_width=True,
+            ),
+        ])
+
+        return ui.scaffold(
+            title="Battery Level Changer",
+            content=ui.lazy_column([
+                status_card,
+                diag_card,
+                manual_card,
+                battery_card,
+                presets_card,
+                logs_card,
+            ], padding=16, spacing=12, fill_max_size=True),
+        )
