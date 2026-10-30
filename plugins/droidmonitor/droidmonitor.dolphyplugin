@@ -1,0 +1,571 @@
+# -*- coding: utf-8 -*-
+__id__ = "droid_monitor"
+__name__ = "DroidMonitor"
+__version__ = "1.2.1"
+__author__ = "OpenAI"
+__description__ = "Мониторинг Android с журналом диагностики CPU, RAM, батареи и сети"
+__icon__ = "rounded:monitor_heart"
+__permissions__ = []
+
+import os
+import json
+import time
+import shutil
+import platform
+from collections import deque
+
+
+class DroidMonitor(BasePlugin):
+    """Лёгкая панель мониторинга Android для Dolphy.
+
+    Использует документированные API Dolphy и стандартные файлы /proc.
+    Обновление выполняется по нажатию кнопки, без бесконечных циклов и таймеров.
+    """
+
+    MAX_TEXT = 1800
+
+    def __init__(self):
+        super().__init__()
+        self._ready = False
+        self._tab = 0
+        self._last_cpu = None
+        self._cpu_percent = None
+        self._last_refresh = 0.0
+        self._snapshot = {}
+        self._last_error = ""
+        self._logs = deque(maxlen=160)
+        self._log_path = ""
+
+    def on_plugin_load(self):
+        try:
+            self.add_module(
+                title="DroidMonitor",
+                description="Состояние телефона и диагностика системы",
+                icon="monitor_heart",
+                screen="main",
+                section="PLUGINS",
+                order=10,
+            )
+            self._ready = True
+            self._init_log_path()
+            self._log("INFO", "Плагин загружен")
+            self._collect()
+        except Exception as exc:
+            try:
+                self.toast("DroidMonitor: " + str(exc)[:160])
+            except Exception:
+                pass
+
+    def on_plugin_enable(self):
+        try:
+            self._ready = True
+            self._log("INFO", "Плагин включён")
+            self._collect()
+        except Exception:
+            pass
+
+    def on_plugin_disable(self):
+        self._ready = False
+
+    def on_plugin_unload(self):
+        self._ready = False
+        self._last_cpu = None
+        self._cpu_percent = None
+        self._snapshot = {}
+        self._log("INFO", "Плагин выгружен")
+
+    def _init_log_path(self):
+        try:
+            android = self.api.getAndroid()
+            base = str(android.pluginFilesDir() or "")
+            if base:
+                self._log_path = base.rstrip("/") + "/droidmonitor.log"
+        except Exception:
+            self._log_path = ""
+
+    def _log(self, level, message):
+        try:
+            line = "[%s] %-5s %s" % (time.strftime("%Y-%m-%d %H:%M:%S"), str(level)[:5], str(message).replace("\n", " ")[:500])
+            self._logs.appendleft(line)
+            if self._log_path:
+                try:
+                    self.api.getAndroid().filesAppend(self._log_path, line + "\n")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _clear_logs(self):
+        self._logs.clear()
+        self._log("INFO", "Локальный список логов очищен")
+        self._refresh()
+
+    @staticmethod
+    def _safe_str(value, fallback="Недоступно"):
+        try:
+            if value is None or value == "":
+                return fallback
+            if isinstance(value, (dict, list, tuple)):
+                return json.dumps(value, ensure_ascii=False, separators=(", ", ": "))[:DroidMonitor.MAX_TEXT]
+            return str(value)
+        except Exception:
+            return fallback
+
+    @staticmethod
+    def _json_value(raw):
+        try:
+            if isinstance(raw, dict):
+                return raw
+            if isinstance(raw, (bytes, bytearray)):
+                raw = raw.decode("utf-8", "replace")
+            if isinstance(raw, str):
+                value = json.loads(raw)
+                return value if isinstance(value, dict) else {"value": value}
+        except Exception:
+            pass
+        return {}
+
+    @staticmethod
+    def _read_text(path, limit=65536):
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as handle:
+                return handle.read(limit)
+        except Exception:
+            return ""
+
+    def _read_memory(self):
+        result = {}
+        raw = self._read_text("/proc/meminfo", 32768)
+        try:
+            for line in raw.splitlines():
+                parts = line.split()
+                if len(parts) >= 2:
+                    try:
+                        result[parts[0].rstrip(":")] = int(parts[1]) * 1024
+                    except Exception:
+                        continue
+            total = max(int(result.get("MemTotal", 0)), 0)
+            available = max(int(result.get("MemAvailable", result.get("MemFree", 0))), 0)
+            used = max(total - available, 0)
+            return {
+                "total": total,
+                "available": available,
+                "used": used,
+                "percent": min(100.0, max(0.0, (used * 100.0 / total))) if total else None,
+            }
+        except Exception:
+            return {"total": 0, "available": 0, "used": 0, "percent": None}
+
+    def _read_cpu(self):
+        raw = self._read_text("/proc/stat", 4096)
+        try:
+            line = raw.splitlines()[0]
+            values = [int(value) for value in line.split()[1:]]
+            if len(values) < 4:
+                return None
+            idle = values[3] + (values[4] if len(values) > 4 else 0)
+            total = sum(values)
+            previous = self._last_cpu
+            self._last_cpu = (total, idle)
+            if previous:
+                delta_total = max(total - previous[0], 0)
+                delta_idle = max(idle - previous[1], 0)
+                if delta_total:
+                    self._cpu_percent = min(100.0, max(0.0, 100.0 * (delta_total - delta_idle) / delta_total))
+            else:
+                self._log("DEBUG", "CPU: получен первый замер; процент появится после следующего обновления")
+            return self._cpu_percent
+        except Exception:
+            return self._cpu_percent
+
+    @staticmethod
+    def _format_bytes(value):
+        try:
+            value = float(value)
+            if value < 0:
+                return "—"
+            units = ("Б", "КБ", "МБ", "ГБ", "ТБ")
+            for unit in units:
+                if value < 1024 or unit == units[-1]:
+                    return ("%.0f %s" % (value, unit)) if unit == "Б" else ("%.1f %s" % (value, unit))
+                value /= 1024.0
+        except Exception:
+            pass
+        return "—"
+
+    @staticmethod
+    def _first(data, keys, fallback=None):
+        if not isinstance(data, dict):
+            return fallback
+        for key in keys:
+            value = data.get(key)
+            if value is not None and value != "":
+                return value
+        return fallback
+
+    def _collect(self):
+        if not self._ready and self._snapshot:
+            return self._snapshot
+        snap = {}
+        try:
+            snap["cpu"] = self._read_cpu()
+            snap["memory"] = self._read_memory()
+            storage = None
+            for path in ("/storage/emulated/0", "/sdcard", "/"):
+                try:
+                    if os.path.exists(path):
+                        storage = shutil.disk_usage(path)
+                        snap["storage_path"] = path
+                        break
+                except Exception:
+                    continue
+            if storage:
+                snap["storage"] = {
+                    "total": int(storage.total),
+                    "used": int(storage.used),
+                    "free": int(storage.free),
+                    "percent": min(100.0, max(0.0, 100.0 * storage.used / max(storage.total, 1))),
+                }
+            else:
+                snap["storage"] = {}
+
+            android = None
+            device_api = None
+            try:
+                android = self.api.getAndroid()
+            except Exception as exc:
+                self._log("WARN", "getAndroid недоступен: " + str(exc)[:160])
+            if android is not None:
+                try:
+                    snap["battery"] = self._json_value(android.batteryJson())
+                except Exception as exc:
+                    snap["battery"] = {}
+                    self._log("WARN", "batteryJson: " + str(exc)[:160])
+                try:
+                    snap["device"] = self._json_value(android.deviceInfoExtendedJson())
+                except Exception as exc:
+                    snap["device"] = {}
+                    self._log("WARN", "deviceInfoExtendedJson: " + str(exc)[:160])
+            else:
+                snap["battery"], snap["device"] = {}, {}
+            try:
+                device_api = self.api.getDevice()
+            except Exception as exc:
+                self._log("WARN", "getDevice недоступен: " + str(exc)[:160])
+            if device_api is not None:
+                try:
+                    snap["wifi_enabled"] = bool(device_api.wifiIsEnabled())
+                except Exception as exc:
+                    snap["wifi_enabled"] = None
+                    self._log("WARN", "wifiIsEnabled: " + str(exc)[:160])
+                for key, method in (("wifi", "wifiConnectionInfoJson"), ("wifi_detail", "wifiDetailedInfoJson"), ("wifi_dhcp", "wifiDhcpInfoJson"), ("network", "connectivityDetailJson"), ("interfaces", "netInterfacesJson")):
+                    try:
+                        value = getattr(device_api, method)()
+                        snap[key] = self._json_value(value)
+                    except Exception as exc:
+                        snap[key] = {}
+                        self._log("DEBUG", method + ": " + str(exc)[:120])
+            else:
+                snap["wifi_enabled"] = None
+                for key in ("wifi", "wifi_detail", "wifi_dhcp", "network", "interfaces"):
+                    snap[key] = {}
+
+            snap["platform"] = platform.system() or "Android"
+            snap["time"] = time.strftime("%H:%M:%S")
+            # Record key availability without dumping private network details.
+            self._log("DEBUG", "Доступность: battery=%s device=%s wifi=%s" % (
+                bool(snap.get("battery")), bool(snap.get("device")), snap.get("wifi_enabled", "n/a")
+            ))
+            self._snapshot = snap
+            self._last_refresh = time.time()
+            self._last_error = ""
+            self._log("DEBUG", "Снимок обновлён: CPU=%s RAM=%s WiFi=%s" % (
+            snap.get("cpu") if snap.get("cpu") is not None else "n/a",
+            (snap.get("memory") or {}).get("percent", "n/a"),
+            snap.get("wifi_enabled", "n/a"),
+        ))
+        except Exception as exc:
+            self._last_error = str(exc)[:180]
+            self._log("ERROR", "Ошибка сбора данных: " + self._last_error)
+            if not self._snapshot:
+                self._snapshot = {"memory": {}, "storage": {}, "battery": {}, "device": {}, "network": {}, "wifi": {}}
+            snap = self._snapshot
+        return snap
+
+    def _refresh(self):
+        self._log("INFO", "Обновление запрошено")
+        try:
+            self._collect()
+        except Exception as exc:
+            self._last_error = str(exc)[:180]
+            self._log("ERROR", "Обновление: " + self._last_error)
+        try:
+            self.refresh()
+        except Exception:
+            try:
+                self.api.refresh()
+            except Exception:
+                pass
+
+    def _set_tab(self, value):
+        try:
+            self._tab = max(0, min(3, int(value)))
+        except Exception:
+            self._tab = 0
+        self._refresh()
+
+    def _metric(self, ui, title, value, subtitle, icon, tint="primary", progress=None):
+        try:
+            children = [
+                ui.row([
+                    ui.icon(icon, size=21, tint=tint),
+                    ui.spacer(width=4),
+                    ui.text(title, "labelLarge", color="secondary"),
+                ], spacing=6),
+                ui.text(value, "headlineSmall"),
+                ui.text(subtitle, "bodyMedium", color="secondary", max_lines=2),
+            ]
+            if progress is not None:
+                children.append(ui.linear_progress(progress=min(1.0, max(0.0, float(progress) / 100.0)), fill_max_width=True))
+            return ui.card(children, padding=14)
+        except Exception:
+            return ui.card([ui.text(title, "labelLarge"), ui.text(value, "titleLarge"), ui.text(subtitle, "bodyMedium")], padding=12)
+
+    def _section_title(self, ui, title, subtitle=""):
+        items = [ui.text(title, "titleLarge")]
+        if subtitle:
+            items.append(ui.text(subtitle, "bodyMedium", color="secondary"))
+        return ui.column(items, spacing=3)
+
+    def _overview(self, ui, snap):
+        mem = snap.get("memory") or {}
+        storage = snap.get("storage") or {}
+        battery = snap.get("battery") or {}
+        cpu = snap.get("cpu")
+        cpu_text = ("%.0f%%" % cpu) if isinstance(cpu, (int, float)) else "—"
+        ram_text = ("%.0f%%" % mem.get("percent")) if isinstance(mem.get("percent"), (int, float)) else "—"
+        storage_text = ("%.0f%%" % storage.get("percent")) if isinstance(storage.get("percent"), (int, float)) else "—"
+        level = self._first(battery, ("level", "batteryLevel", "percent", "percentage"))
+        if isinstance(level, (int, float)) and level <= 1:
+            level = level * 100
+        battery_text = ("%.0f%%" % level) if isinstance(level, (int, float)) else "—"
+        if isinstance(level, (int, float)):
+            charging = self._first(battery, ("charging", "isCharging"), False)
+            status = self._first(battery, ("status", "batteryStatus"))
+            status_names = {1: "Неизвестно", 2: "Заряжается", 3: "Разряжается", 4: "Не заряжается", 5: "Заряжена"}
+            if isinstance(status, str):
+                status_label = status_names.get(int(status), status) if status.isdigit() else status
+            else:
+                status_label = status_names.get(status, "")
+            if charging is True or charging == 1:
+                battery_sub = "Заряжается"
+            elif status_label:
+                battery_sub = status_label
+            else:
+                battery_sub = "Уровень заряда"
+        else:
+            battery_sub = "Данные батареи недоступны"
+
+        # Use a compact vertical stack: horizontal metric rows can stretch oddly
+        # in some Dolphy builds and leave a large blank area above the cards.
+        cards = ui.column([
+            self._metric(ui, "ПРОЦЕССОР", cpu_text, "Текущая загрузка" if isinstance(cpu, (int, float)) else "Собираем данные / доступ ограничен", "memory", "#70E1B5", cpu if isinstance(cpu, (int, float)) else None),
+            self._metric(ui, "ОПЕРАТИВНАЯ ПАМЯТЬ", ram_text,
+                         self._format_bytes(mem.get("used", 0)) + " использовано", "developer_board", "#8AB4F8",
+                         mem.get("percent") if isinstance(mem.get("percent"), (int, float)) else None),
+            self._metric(ui, "НАКОПИТЕЛЬ", storage_text,
+                         self._format_bytes(storage.get("free", 0)) + " свободно", "storage", "#C6A0F6",
+                         storage.get("percent") if isinstance(storage.get("percent"), (int, float)) else None),
+            self._metric(ui, "БАТАРЕЯ", battery_text, battery_sub, "battery_full", "#F8C471",
+                         level if isinstance(level, (int, float)) else None),
+        ], spacing=8)
+        connection = "Подключена" if snap.get("wifi_enabled") else ("Выключена" if snap.get("wifi_enabled") is False else "Статус неизвестен")
+        wifi = snap.get("wifi") or {}
+        ssid = self._first(wifi, ("ssid", "SSID", "networkName", "wifiSsid"), "Сведения о сети не предоставлены")
+        if str(ssid).strip().lower() in ("<unknown ssid>", "unknown ssid", "0x"):
+            ssid = "SSID скрыт системой"
+        return ui.column([
+            self._section_title(ui, "Состояние устройства", "Основные показатели телефона"),
+            cards,
+            ui.card([
+                ui.row([ui.icon("wifi", size=22, tint="#70E1B5"), ui.text("СЕТЬ", "labelLarge", color="secondary")], spacing=8),
+                ui.text(connection, "titleMedium"),
+                ui.text(self._safe_str(ssid), "bodyMedium", max_lines=2),
+            ], padding=16),
+            ui.row([
+                ui.text("Обновлено: " + str(snap.get("time", "—")), "bodyMedium", color="secondary"),
+                ui.spacer(),
+                ui.button("Обновить", on_click=self._refresh, style="tonal"),
+            ], spacing=8),
+        ], spacing=14, padding=16)
+
+    def _system(self, ui, snap):
+        mem = snap.get("memory") or {}
+        storage = snap.get("storage") or {}
+        device = snap.get("device") or {}
+        battery = snap.get("battery") or {}
+        level = self._first(battery, ("level", "batteryLevel", "percent", "percentage"))
+        if isinstance(level, (int, float)) and level <= 1:
+            level = level * 100
+        charging = self._first(battery, ("charging", "isCharging"), False)
+        status = self._first(battery, ("status", "batteryStatus"))
+        status_names = {1: "Неизвестно", 2: "Заряжается", 3: "Разряжается", 4: "Не заряжается", 5: "Заряжена"}
+        try:
+            status = int(status) if status is not None else None
+        except Exception:
+            pass
+        battery_sub = "Заряжается" if charging is True or charging == 1 else status_names.get(status, "Состояние неизвестно")
+        rows = []
+        rows.append(ui.settings_row("Процессор", "Загрузка: " + (("%.0f%%" % snap["cpu"]) if isinstance(snap.get("cpu"), (int, float)) else "нет данных"), icon="memory"))
+        rows.append(ui.settings_row("Оперативная память", self._format_bytes(mem.get("used", 0)) + " из " + self._format_bytes(mem.get("total", 0)), icon="developer_board"))
+        rows.append(ui.settings_row("Доступно RAM", self._format_bytes(mem.get("available", 0)), icon="memory_alt"))
+        rows.append(ui.settings_row("Накопитель", self._format_bytes(storage.get("used", 0)) + " занято / " + self._format_bytes(storage.get("total", 0)), icon="storage"))
+        rows.append(ui.settings_row("Путь накопителя", self._safe_str(snap.get("storage_path")), icon="folder"))
+        model = self._first(device, ("model", "deviceModel", "product", "device"), platform.machine() or "Модель не определена")
+        manufacturer = self._first(device, ("manufacturer", "brand", "vendor"), "Производитель не определён")
+        android_ver = self._first(device, ("androidVersion", "release", "version", "sdk"), "Версия Android не определена")
+        rows.extend([
+            ui.divider(),
+            ui.settings_row("Устройство", self._safe_str(model), icon="smartphone"),
+            ui.settings_row("Производитель", self._safe_str(manufacturer), icon="devices"),
+            ui.settings_row("Android", self._safe_str(android_ver), icon="settings"),
+            ui.settings_row("Батарея", (self._safe_str(level) + "% · " + battery_sub) if isinstance(level, (int, float)) else "Нет данных", icon="battery_full"),
+        ])
+        return ui.column([
+            self._section_title(ui, "Система", "Ресурсы и сведения об устройстве"),
+            ui.card(rows, padding=14),
+            ui.button("Обновить показатели", on_click=self._refresh, style="filled", fill_max_width=True),
+        ], spacing=14, padding=16)
+
+    @staticmethod
+    def _format_ssid(value):
+        if value is None or value == "":
+            return "Недоступно"
+        text = str(value).strip().strip('"')
+        if text.lower() in ("<unknown ssid>", "unknown ssid", "0x", "null"):
+            return "SSID скрыт системой"
+        return text
+
+    @staticmethod
+    def _format_signal(value):
+        try:
+            number = int(value)
+            if number < 0:
+                return "%d dBm" % number
+            if number <= 4:
+                return "%d/4" % number
+            return str(number)
+        except Exception:
+            return "Недоступно"
+
+    @staticmethod
+    def _format_frequency(value):
+        try:
+            number = int(value)
+            if number >= 1000:
+                return ("%.3f GHz" % (number / 1000.0)).rstrip("0").rstrip(".")
+            if number > 0:
+                return "%d MHz" % number
+        except Exception:
+            pass
+        return "Недоступно"
+
+    def _safe_json_summary(self, value):
+        if not isinstance(value, dict) or not value:
+            return "Нет дополнительных данных"
+        parts = []
+        for key, item in list(value.items())[:6]:
+            if isinstance(item, (dict, list)):
+                continue
+            parts.append("%s: %s" % (str(key)[:24], str(item)[:60]))
+        return " · ".join(parts) if parts else "Данные получены"
+
+    def _logs_screen(self, ui):
+        lines = list(self._logs)
+        log_text = "\n".join(lines) if lines else "Лог пока пуст. Нажми «Обновить», чтобы записать события."
+        children = [
+            self._section_title(ui, "Журнал событий", "Последние события · до 160 записей"),
+            ui.text("Файл: droidmonitor.log (если хранилище плагина доступно)", "bodySmall", color="secondary"),
+            ui.log_panel(log_text, max_height=420),
+            ui.row([
+                ui.button("Обновить", on_click=self._refresh, style="filled"),
+                ui.button("Очистить список", on_click=self._clear_logs, style="outlined"),
+            ], spacing=8),
+        ]
+        return ui.column(children, padding=16, spacing=12)
+
+    def _network(self, ui, snap):
+        wifi = {}
+        for source in (snap.get("wifi") or {}, snap.get("wifi_detail") or {}, snap.get("wifi_dhcp") or {}, snap.get("network") or {}):
+            if isinstance(source, dict):
+                wifi.update(source)
+        net = snap.get("network") or {}
+        wifi_state = "Wi-Fi включён" if snap.get("wifi_enabled") is True else ("Wi-Fi выключен" if snap.get("wifi_enabled") is False else "Состояние неизвестно")
+        rows = [
+            ui.settings_row("Состояние Wi-Fi", wifi_state, icon="wifi"),
+            ui.settings_row("Имя сети (SSID)", self._format_ssid(self._first(wifi, ("ssid", "SSID", "networkName", "wifiSsid", "wifi_ssid"))), icon="router"),
+            ui.settings_row("Уровень сигнала", self._format_signal(self._first(wifi, ("rssi", "RSSI", "signalLevel", "signalStrength", "rssiDbm"))), icon="signal_cellular_alt"),
+            ui.settings_row("Частота", self._format_frequency(self._first(wifi, ("frequency", "freq", "frequencyMhz", "frequency_mhz"))), icon="graphic_eq"),
+            ui.settings_row("IP-адрес", self._safe_str(self._first(wifi, ("ipAddress", "ip", "address", "ip_address", "ipAddressV4"))), icon="lan"),
+            ui.divider(),
+            ui.settings_row("Шлюз", self._safe_str(self._first(wifi, ("gateway", "ipGateway", "gatewayAddress"))), icon="router"),
+            ui.settings_row("DNS", self._safe_str(self._first(wifi, ("dns1", "dns", "dnsAddress"))), icon="dns"),
+            ui.settings_row("Подробности соединения", self._safe_json_summary(net), icon="network_check"),
+        ]
+        return ui.column([
+            self._section_title(ui, "Сеть", "Только чтение — без изменения настроек"),
+            ui.card(rows, padding=14),
+            ui.text("Некоторые поля Android скрывает без системных разрешений или при отключённом Wi-Fi.", "bodyMedium", color="secondary"),
+            ui.button("Обновить сеть", on_click=self._refresh, style="tonal", fill_max_width=True),
+        ], spacing=14, padding=16)
+
+    def screen_main(self, ui, api, state):
+        try:
+            if not self._ready:
+                self._ready = True
+            snap = self._collect()
+            tabs = ui.tabs(["Обзор", "Система", "Сеть", "Логи"], selected=self._tab, on_select=self._set_tab)
+            if self._tab == 1:
+                body = self._system(ui, snap)
+            elif self._tab == 2:
+                body = self._network(ui, snap)
+            elif self._tab == 3:
+                body = self._logs_screen(ui)
+            else:
+                body = self._overview(ui, snap)
+            header = ui.column([
+                ui.row([
+                    ui.icon("monitor_heart", size=30, tint="#70E1B5"),
+                    ui.column([
+                        ui.text("DroidMonitor", "headlineMedium"),
+                        ui.text("SYSTEM TELEMETRY  ·  ANDROID", "labelMedium", color="secondary"),
+                    ], spacing=2),
+                ], spacing=12),
+                ui.text("Панель состояния устройства", "bodyMedium", color="secondary"),
+                tabs,
+            ], padding=16, spacing=10)
+            # Lazy vertical root keeps the content at the top and scrollable;
+            # a fill-sized regular column caused excessive empty space on some builds.
+            content = ui.lazy_column([header, body], padding=0, spacing=0, fill_max_size=True)
+            actions = [ui.top_action("refresh", on_click=self._refresh)]
+            return ui.scaffold(title="DroidMonitor", content=content, actions=actions)
+        except Exception as exc:
+            try:
+                self._log("ERROR", "Ошибка построения экрана: " + str(exc)[:300])
+            except Exception:
+                pass
+            try:
+                self.toast("DroidMonitor UI: " + str(exc)[:140])
+            except Exception:
+                pass
+            try:
+                return ui.scaffold(
+                    title="DroidMonitor",
+                    content=ui.column([
+                        ui.text("Не удалось построить панель", "titleLarge"),
+                        ui.text(str(exc)[:300], "bodyMedium", color="error"),
+                        ui.button("Повторить", on_click=self._refresh, style="filled"),
+                    ], padding=16, spacing=12),
+                )
+            except Exception:
+                return ui.empty()
