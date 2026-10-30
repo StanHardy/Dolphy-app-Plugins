@@ -1,6 +1,6 @@
 {
   "format": "dolphy-plugins-v1",
-  "count": 17,
+  "count": 18,
   "plugins": [
     {
       "id": 16,
@@ -155,6 +155,20 @@
       "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/tv5a_remote/tv5a_remote.dolphyplugin",
       "post_url": "https://t.me/c/3966541757/28149",
       "updated_at": "2026-09-30 19:58:13"
+    },
+    {
+      "id": 21,
+      "name": "USB-C & BUILD-IN IR",
+      "version": "1.0.0",
+      "author": "Claude & bsfwl",
+      "description": {
+        "ru": "Форк плагина   @Squezze21 \nДобавлено: ручной перебор, поддержка встроенного ИК.",
+        "en": "Fork of the @Squeeze21 plugin \nAdded: manual brute force, built-in IR support."
+      },
+      "file": "plugins/usb_c_build_in_ir/usb_c_build_in_ir.dolphyplugin",
+      "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/usb_c_build_in_ir/usb_c_build_in_ir.dolphyplugin",
+      "post_url": "https://t.me/c/3966541757/28283",
+      "updated_at": "2026-10-01 06:12:59"
     },
     {
       "id": 2,
