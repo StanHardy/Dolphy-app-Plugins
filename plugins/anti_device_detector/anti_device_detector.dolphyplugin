@@ -1,0 +1,151 @@
+__id__ = "anti_device_detector"
+__name__ = "Anti Device Detector"
+__version__ = "1.0.0"
+__author__ = "(Dolphy User) L1tWin"
+__icon__ = "rounded:visibility_off"
+__description__ = "Режим снижения заметности устройства: отключает Bluetooth, Wi-Fi, NFC и геолокацию"
+__permissions__ = []
+
+class AntiDeviceDetector(BasePlugin):
+    def on_plugin_load(self):
+        self.add_module(
+            title="Anti Device Detector",
+            description="Снижение заметности для сканеров",
+            icon="visibility_off",
+            screen="main",
+            section="PLUGINS"
+        )
+
+    def _android(self):
+        return self.api.getAndroid()
+
+    def _device(self):
+        return self.api.getDevice()
+
+    def _bt_enabled(self):
+        try:
+            return bool(self._android().btIsEnabled())
+        except:
+            return False
+
+    def _wifi_enabled(self):
+        try:
+            return bool(self._android().wifiIsEnabled())
+        except:
+            return False
+
+    def _disable_bt(self):
+        try:
+            a = self._android()
+            a.btDisable()
+            a.btSetName("Android")
+        except:
+            pass
+
+    def _disable_wifi(self):
+        try:
+            self._android().wifiDisconnect()
+        except:
+            pass
+        try:
+            self.shell("svc wifi disable")
+        except:
+            try:
+                self.shizuku("svc wifi disable")
+            except:
+                pass
+
+    def _disable_nfc(self):
+        try:
+            self.shell("svc nfc disable")
+        except:
+            try:
+                self.shizuku("svc nfc disable")
+            except:
+                pass
+
+    def _disable_location(self):
+        try:
+            self.shell("settings put secure location_mode 0")
+        except:
+            try:
+                self.shizuku("settings put secure location_mode 0")
+            except:
+                pass
+
+    def _try_mac_spoof(self):
+        try:
+            d = self._device()
+            if d.rootAvailable():
+                d.rootMacSpoof("wlan0", "02:00:00:00:00:00", lambda r: None)
+        except:
+            pass
+
+    def activate(self):
+        self._disable_bt()
+        self._disable_wifi()
+        self._disable_nfc()
+        self._disable_location()
+        self._try_mac_spoof()
+        self.set_setting("active", True)
+        self.toast("Anti Device Detector включён")
+        self.refresh()
+
+    def deactivate(self):
+        self.set_setting("active", False)
+        self.toast("Anti Device Detector выключен")
+        self.refresh()
+
+    def screen_main(self, ui, api, state):
+        active = bool(self.get_setting("active", False))
+        bt = self._bt_enabled()
+        wifi = self._wifi_enabled()
+
+        status = "АКТИВЕН" if active else "ВЫКЛЮЧЕН"
+        color = "error" if active else "success"
+
+        def on_toggle():
+            if active:
+                self.deactivate()
+            else:
+                self.activate()
+
+        return ui.scaffold(
+            title="Anti Device Detector",
+            content=ui.column([
+                ui.card([
+                    ui.text("Статус", "titleMedium"),
+                    ui.spacer(height=8),
+                    ui.text(status, "headlineSmall", color=color),
+                    ui.spacer(height=4),
+                    ui.text("Отключает Bluetooth, Wi-Fi, NFC и геолокацию", "bodySmall", color="muted")
+                ], padding=16),
+
+                ui.card([
+                    ui.text("Текущее состояние", "titleMedium"),
+                    ui.spacer(height=8),
+                    ui.text("Bluetooth: " + ("включён" if bt else "выключен"), "bodyMedium"),
+                    ui.text("Wi-Fi: " + ("включён" if wifi else "выключен"), "bodyMedium"),
+                    ui.text("NFC: управляется через svc", "bodyMedium"),
+                    ui.text("Геолокация: управляется через settings", "bodyMedium")
+                ], padding=16),
+
+                ui.button(
+                    "Выключить" if active else "Включить",
+                    on_toggle,
+                    style="filled",
+                    fill_max_width=True
+                ),
+
+                ui.spacer(height=8),
+                ui.card([
+                    ui.text("Важно", "titleSmall"),
+                    ui.spacer(height=6),
+                    ui.text(
+                        "Полная невидимость невозможна. Плагин отключает основные радиомодули и снижает вероятность обнаружения. Сотовые сети и уже установленные приложения могут продолжать работать. Для svc/settings желателен Root или Shizuku.",
+                        "bodySmall",
+                        color="muted"
+                    )
+                ], padding=16)
+            ], padding=16, spacing=12)
+        )
