@@ -1,6 +1,6 @@
 {
   "format": "dolphy-plugins-v1",
-  "count": 18,
+  "count": 19,
   "plugins": [
     {
       "id": 16,
@@ -141,6 +141,20 @@
       "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/module_checker/module_checker.dolphyplugin",
       "post_url": "https://t.me/c/3966541757/23510",
       "updated_at": "2026-09-14 15:25:55"
+    },
+    {
+      "id": 22,
+      "name": "Morse Code",
+      "version": "1.2.0",
+      "author": "@halil2017l",
+      "description": {
+        "ru": "Передавай сообщения азбукой Морзе: тон, вибро или показ. SOS, HELLO и свои тексты.",
+        "en": "Send messages in Morse code: via tone, vibration, or visual display. Send SOS, HELLO, and your own custom text."
+      },
+      "file": "plugins/morse_code/morse_code.dolphyplugin",
+      "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/morse_code/morse_code.dolphyplugin",
+      "post_url": "https://t.me/c/3966541757/29279",
+      "updated_at": "2026-10-03 09:21:29"
     },
     {
       "id": 18,
