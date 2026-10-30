@@ -1,6 +1,6 @@
 {
   "format": "dolphy-plugins-v1",
-  "count": 10,
+  "count": 11,
   "plugins": [
     {
       "id": 8,
@@ -57,6 +57,20 @@
       "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/cortex/cortex.dolphyplugin",
       "post_url": "https://t.me/c/3966541757/23031",
       "updated_at": "2026-09-10 15:11:53"
+    },
+    {
+      "id": 13,
+      "name": "Dolphy Performance Booster",
+      "version": "1.0.0",
+      "author": "@Evil6767",
+      "description": {
+        "ru": "По факту должен оптимизировать dolphy это вайбкод так что если вам скучно можете установить (тест)",
+        "en": "Essentially, Dolphy is supposed to optimize things—it's a \"vibe code,\" so if you're bored, you can install it (test)"
+      },
+      "file": "plugins/dolphy_performance_booster/dolphy_performance_booster.dolphyplugin",
+      "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/dolphy_performance_booster/dolphy_performance_booster.dolphyplugin",
+      "post_url": "https://t.me/c/3966541757/27000",
+      "updated_at": "2026-09-27 06:03:04"
     },
     {
       "id": 7,
