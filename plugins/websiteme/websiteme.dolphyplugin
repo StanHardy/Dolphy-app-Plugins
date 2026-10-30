@@ -1,0 +1,218 @@
+__id__ = "websiteme"
+__name__ = "WebSiteMe"
+__version__ = "1.0.0"
+__author__ = "h3rovnik"
+__icon__ = "rounded:web"
+__description__ = "Compact web browser with bookmarks created by h3rovnik"
+__permissions__ = []
+
+import time
+
+class WebSiteMe(BasePlugin):
+    def on_plugin_load(self):
+        self.add_module(
+            title="WebSiteMe",
+            description="Compact web browser with bookmarks created by h3rovnik",
+            icon="web",
+            screen="main",
+            section="PLUGINS"
+        )
+        self.data = self.get_setting("websiteme_data")
+        if not self.data:
+            self.data = {
+                "url": "https://html.duckduckgo.com/",
+                "view": "duckduckgo",
+                "history": ["https://html.duckduckgo.com/"],
+                "customBookmarks": [],
+                "showAddDialog": False,
+                "newBookmarkTitle": "",
+                "newBookmarkUrl": ""
+            }
+            self.set_setting("websiteme_data", self.data)
+
+    def _save_data(self):
+        self.set_setting("websiteme_data", self.data)
+
+    def _navigate(self, view, url):
+        self.data["view"] = view
+        self.data["url"] = url
+        if not self.data["history"] or self.data["history"][-1] != url:
+            self.data["history"].append(url)
+            if len(self.data["history"]) > 20:
+                self.data["history"].pop(0)
+        self._save_data()
+        self.refresh()
+
+    def _go_home(self):
+        self._navigate("duckduckgo", "https://html.duckduckgo.com/")
+
+    def _force_logout(self):
+        self._navigate("logout", "https://accounts.google.com/Logout")
+
+    def screen_main(self, ui, api, state):
+        data = self.data
+        url = data.get("url", "https://html.duckduckgo.com/")
+        view = data.get("view", "duckduckgo")
+        custom_bookmarks = data.get("customBookmarks", [])
+        show_add_dialog = data.get("showAddDialog", False)
+        new_title = data.get("newBookmarkTitle", "")
+        new_url = data.get("newBookmarkUrl", "")
+
+        def chunk_list(lst, size):
+            return [lst[i:i+size] for i in range(0, len(lst), size)]
+
+        if view == "duckduckgo":
+            sites = [
+                ("Duck", "duckduckgo", "https://html.duckduckgo.com/"),
+                ("Google", "google", "https://www.google.com/webhp?igu=1"),
+                ("YouTube", "youtube", "https://m.youtube.com/"),
+                ("Startpage", "startpage", "https://www.startpage.com/"),
+                ("Ecosia", "ecosia", "https://www.ecosia.org/"),
+                ("GitHub", "github", "https://github.com"),
+                ("Wikipedia", "wikipedia", "https://wikipedia.org"),
+                ("Yahoo", "yahoo", "https://search.yahoo.com/"),
+                ("Searx", "searx", "https://searx.be/"),
+                ("Mojeek", "mojeek", "https://www.mojeek.com/")
+            ]
+
+            for bm in custom_bookmarks:
+                sites.append((bm["title"], bm["id"], bm["url"]))
+
+            sites.append(("+", "add", None))
+
+            rows = []
+            for chunk in chunk_list(sites, 4):
+                row_buttons = []
+                for name, sid, surl in chunk:
+                    if sid == "add":
+                        row_buttons.append(
+                            ui.chip(
+                                text=name,
+                                selected=False,
+                                on_click=self._toggle_dialog
+                            )
+                        )
+                    else:
+                        row_buttons.append(
+                            ui.chip(
+                                text=name,
+                                selected=(view == sid),
+                                on_click=lambda s=sid, u=surl: self._navigate(s, u)
+                            )
+                        )
+                rows.append(ui.row(row_buttons, spacing=2, fill_max_width=True))
+
+            dialog_content = []
+            if show_add_dialog:
+                dialog_content.append(ui.text("Add bookmark", style="titleMedium"))
+                dialog_content.append(
+                    ui.text_field(
+                        value=new_title,
+                        label="Title",
+                        on_change=lambda v: self._update_field("newBookmarkTitle", v)
+                    )
+                )
+                dialog_content.append(
+                    ui.text_field(
+                        value=new_url,
+                        label="URL",
+                        on_change=lambda v: self._update_field("newBookmarkUrl", v)
+                    )
+                )
+                dialog_content.append(
+                    ui.button(
+                        "Save",
+                        on_click=self._save_bookmark,
+                        style="filled",
+                        fill_max_width=True
+                    )
+                )
+
+            bottom_row = ui.row([
+                ui.button("Logout accounts", on_click=self._force_logout, style="outlined", fill_max_width=True)
+            ], spacing=2, fill_max_width=True)
+
+            content_items = [
+                ui.webview(url=url, height=350),
+                ui.column(rows, spacing=2),
+                ui.divider(),
+                bottom_row
+            ]
+            if show_add_dialog:
+                content_items.append(ui.card(ui.column(dialog_content, spacing=2), padding=8))
+
+            return ui.scaffold(
+                title="WebSiteMe",
+                actions=[ui.top_action("home", on_click=self._go_home)],
+                content=ui.column(content_items, padding=2, spacing=2, fill_max_size=True)
+            )
+        else:
+            title = "WebSiteMe"
+            for bm in custom_bookmarks:
+                if bm["id"] == view:
+                    title = bm["title"]
+                    break
+            else:
+                titles = {
+                    "google": "Google",
+                    "youtube": "YouTube",
+                    "startpage": "Startpage",
+                    "ecosia": "Ecosia",
+                    "github": "GitHub",
+                    "wikipedia": "Wikipedia",
+                    "yahoo": "Yahoo",
+                    "searx": "Searx",
+                    "mojeek": "Mojeek",
+                    "logout": "Logout"
+                }
+                title = titles.get(view, "WebSiteMe")
+
+            return ui.scaffold(
+                title=title,
+                actions=[ui.top_action("home", on_click=self._go_home)],
+                content=ui.webview(url=url, fill_max_size=True, height=0)
+            )
+
+    def _update_field(self, key, value):
+        self.data[key] = value
+        self._save_data()
+        self.refresh()
+
+    def _toggle_dialog(self):
+        self.data["showAddDialog"] = not self.data["showAddDialog"]
+        if not self.data["showAddDialog"]:
+            self.data["newBookmarkTitle"] = ""
+            self.data["newBookmarkUrl"] = ""
+        self._save_data()
+        self.refresh()
+
+    def _close_dialog(self):
+        self.data["showAddDialog"] = False
+        self.data["newBookmarkTitle"] = ""
+        self.data["newBookmarkUrl"] = ""
+        self._save_data()
+        self.refresh()
+
+    def _save_bookmark(self):
+        title = self.data.get("newBookmarkTitle", "").strip()
+        url = self.data.get("newBookmarkUrl", "").strip()
+        if not title or not url:
+            self.toast("Fill all fields!")
+            return
+        if not url.startswith(("http://", "https://")):
+            url = "https://" + url
+        new_id = "custom_" + str(int(time.time() * 1000))
+        self.data["customBookmarks"].append({
+            "id": new_id,
+            "title": title,
+            "url": url
+        })
+        self.data["newBookmarkTitle"] = ""
+        self.data["newBookmarkUrl"] = ""
+        self.data["showAddDialog"] = False
+        self._save_data()
+        self.toast("Bookmark added")
+        self.refresh()
+
+    def on_plugin_unload(self):
+        self._save_data()
