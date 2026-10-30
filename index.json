@@ -1,6 +1,6 @@
 {
   "format": "dolphy-plugins-v1",
-  "count": 2,
+  "count": 3,
   "plugins": [
     {
       "id": 1,
@@ -29,6 +29,20 @@
       "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/usb_c_ir_backend/usb_c_ir_backend.dolphyplugin",
       "post_url": "https://t.me/c/3966541757/20533",
       "updated_at": "2026-08-28 08:53:03"
+    },
+    {
+      "id": 4,
+      "name": "Wi-Fi info",
+      "version": "1.0.0",
+      "author": "h3rovnik",
+      "description": {
+        "ru": "Плагин сканирует доступные Wi-Fi сети и показывает их параметры SSID, BSSID, RSSI, частота, канал, тип шифрования, ширина канала, производитель, имя оператора, центральная частота, timestamp, предоставляя пользователю развернутую информацию о Wi-Fi.",
+        "en": "The plugin scans available Wi-Fi networks and displays their parameters such as SSID, BSSID, RSSI, frequency, channel, encryption type, channel width, manufacturer, operator name, center frequency, and timestamp providing the user with detailed information about the Wi-Fi networks."
+      },
+      "file": "plugins/wi_fi_info/wi_fi_info.dolphyplugin",
+      "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/wi_fi_info/wi_fi_info.dolphyplugin",
+      "post_url": "https://t.me/c/3966541757/21197",
+      "updated_at": "2026-08-30 13:03:01"
     }
   ]
 }
