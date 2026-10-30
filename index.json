@@ -1,7 +1,21 @@
 {
   "format": "dolphy-plugins-v1",
-  "count": 12,
+  "count": 13,
   "plugins": [
+    {
+      "id": 16,
+      "name": "Anti Device Detector",
+      "version": "1.0.0",
+      "author": "(Dolphy User) L1tWin",
+      "description": {
+        "ru": "О плагине:\nРежим снижения заметности устройства:\nФункция, предназначенная для уменьшения возможности обнаружения устройства. При активации, Bluetooth, Wi-Fi, NFC и геолокация, устройство становится менее заметным для других устройств и сервисов, которые используют эти соединения для его обнаружения.",
+        "en": "About the plugin:\nDevice Visibility Reduction Mode:\nA feature designed to reduce the ability to detect the device. When activated, Bluetooth, Wi-Fi, NFC, and location services are disabled, making the device less visible to other devices and services that use these connections to detect it."
+      },
+      "file": "plugins/anti_device_detector/anti_device_detector.dolphyplugin",
+      "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/anti_device_detector/anti_device_detector.dolphyplugin",
+      "post_url": "https://t.me/c/3966541757/27751",
+      "updated_at": "2026-09-29 12:00:17"
+    },
     {
       "id": 8,
       "name": "Battery Level Changer + GPS Spoofer",
