@@ -1,0 +1,575 @@
+__id__ = "bubble_level"
+__name__ = "Строительный уровень (Bubble Level)"
+__version__ = "1.1.0"
+__author__ = "@frostmench1k"
+__icon__ = "rounded:straighten"
+__description__ = "Цифровой нивелир: пол/стена, уклон %, Hold, калибровка и звук"
+__permissions__ = []
+
+import json
+import math
+import time
+from java import jclass, dynamic_proxy
+
+_SensorEventListener = jclass("android.hardware.SensorEventListener")
+_SensorManager = jclass("android.hardware.SensorManager")
+_Sensor = jclass("android.hardware.Sensor")
+
+VISUAL_MAX_DEG = 15.0
+TONE_BEEP = 24
+MODES = ["Пол", "Стена", "Уклон %"]
+
+
+class _TiltListener(dynamic_proxy(_SensorEventListener)):
+    def __init__(self, plugin):
+        super().__init__()
+        self._plugin = plugin
+
+    def onSensorChanged(self, event):
+        try:
+            v = event.values
+            n = len(v)
+            arr = [float(v[i]) for i in range(min(3, n))]
+        except Exception:
+            return
+        if len(arr) < 3:
+            return
+        try:
+            self._plugin._on_values(arr[0], arr[1], arr[2])
+        except Exception:
+            pass
+
+    def onAccuracyChanged(self, sensor, accuracy):
+        pass
+
+
+class BubbleLevel(BasePlugin):
+    def on_plugin_load(self):
+        self.sensor_manager = None
+        self.listener = None
+        self.sensor = None
+        self.sensor_label = "—"
+        self.running = False
+
+        self.raw_x = 0.0
+        self.raw_y = 0.0
+        self.raw_z = 9.81
+        self.angle_x = 0.0
+        self.angle_y = 0.0
+        self.total_deg = 0.0
+        self.slope_pct = 0.0
+
+        self.hold_x = 0.0
+        self.hold_y = 0.0
+        self.hold_total = 0.0
+        self.hold_slope = 0.0
+
+        self.offset_x = float(self.get_setting("offset_x", 0.0))
+        self.offset_y = float(self.get_setting("offset_y", 0.0))
+        self.sound_enabled = bool(self.get_setting("sound", True))
+        self.vibrate_enabled = bool(self.get_setting("vibrate", True))
+        self.invert_x = bool(self.get_setting("invert_x", False))
+        self.invert_y = bool(self.get_setting("invert_y", False))
+        self.threshold = float(self.get_setting("threshold", 0.5))
+        self.mode = str(self.get_setting("mode", "Пол"))
+        if self.mode not in MODES:
+            self.mode = "Пол"
+
+        self.held = False
+        self.tab_index = 0
+        self.history = []
+        self._was_level = False
+        self._prev_level_ui = False
+        self._last_ui_update = 0.0
+        self._last_tone = 0.0
+        self._last_vib = 0.0
+        self._alpha = 0.28
+
+        self.add_module(
+            title="Строительный уровень",
+            description="Нивелир · пол / стена / уклон | @frostmench1k",
+            icon="straighten",
+            screen="main",
+            section="PLUGINS"
+        )
+
+        self.api.registerSettings("Строительный уровень", json.dumps([
+            {"type": "switch", "key": "sound", "title": "Звук при выравнивании", "default": True},
+            {"type": "switch", "key": "vibrate", "title": "Вибрация в центре", "default": True},
+            {"type": "slider", "key": "threshold", "title": "Порог «ровно» (°)",
+             "min": 0.2, "max": 2.0, "default": 0.5, "steps": 18}
+        ]), 12)
+
+        self.start_sensors()
+
+    def on_setting_changed(self, payload):
+        key = payload.get("key", "")
+        value = payload.get("value")
+        if key == "sound":
+            self.sound_enabled = bool(value)
+        elif key == "vibrate":
+            self.vibrate_enabled = bool(value)
+        elif key == "threshold":
+            self.threshold = max(0.2, min(2.0, float(value)))
+        self.refresh()
+
+    def on_plugin_disable(self):
+        self.stop_sensors()
+
+    def on_plugin_unload(self):
+        self.stop_sensors()
+
+    def start_sensors(self):
+        self.stop_sensors()
+        try:
+            sm = self.api.getContext().getSystemService("sensor")
+        except Exception:
+            sm = None
+        if sm is None:
+            self.toast("Служба датчиков недоступна")
+            return
+
+        candidates = [
+            (_Sensor.TYPE_GRAVITY, "Gravity"),
+            (_Sensor.TYPE_ACCELEROMETER, "Accelerometer"),
+            (_Sensor.TYPE_GAME_ROTATION_VECTOR, "Game Rotation"),
+            (_Sensor.TYPE_ROTATION_VECTOR, "Rotation"),
+        ]
+        sensor = None
+        label = "—"
+        for stype, name in candidates:
+            try:
+                s = sm.getDefaultSensor(stype)
+            except Exception:
+                s = None
+            if s is not None:
+                sensor = s
+                label = name
+                break
+        if sensor is None:
+            self.toast("Датчик наклона недоступен")
+            return
+
+        listener = _TiltListener(self)
+        try:
+            ok = sm.registerListener(listener, sensor, _SensorManager.SENSOR_DELAY_GAME)
+        except Exception:
+            ok = False
+        if not ok:
+            self.toast("Не удалось подключить датчик")
+            return
+
+        self.sensor_manager = sm
+        self.listener = listener
+        self.sensor = sensor
+        self.sensor_label = label
+        self.running = True
+
+    def stop_sensors(self):
+        if self.sensor_manager is not None and self.listener is not None:
+            try:
+                self.sensor_manager.unregisterListener(self.listener)
+            except Exception:
+                pass
+        self.sensor_manager = None
+        self.listener = None
+        self.sensor = None
+        self.running = False
+
+    def _rotation_to_gravity(self, x, y, z):
+        try:
+            rv = [float(x), float(y), float(z)]
+            r = [0.0] * 9
+            _SensorManager.getRotationMatrixFromVector(r, rv)
+            return -r[6] * 9.81, -r[7] * 9.81, -r[8] * 9.81
+        except Exception:
+            return float(x) * 9.81, float(y) * 9.81, float(z) * 9.81
+
+    def _compute_angles(self, gx, gy, gz):
+        if self.mode == "Стена":
+            ax = math.degrees(math.atan2(gx, gy if abs(gy) > 0.05 else 0.05))
+            ay = math.degrees(math.atan2(gz, gy if abs(gy) > 0.05 else 0.05))
+        else:
+            z = gz if abs(gz) > 0.05 else 0.05
+            ax = math.degrees(math.atan2(gx, z))
+            ay = math.degrees(math.atan2(gy, z))
+        ax -= self.offset_x
+        ay -= self.offset_y
+        if self.invert_x:
+            ax = -ax
+        if self.invert_y:
+            ay = -ay
+        total = math.sqrt(ax * ax + ay * ay)
+        slope = math.tan(math.radians(total)) * 100.0
+        return ax, ay, total, slope
+
+    def _on_values(self, rx, ry, rz):
+        if not self.running or self.held:
+            return
+        if "Rotation" in self.sensor_label:
+            gx, gy, gz = self._rotation_to_gravity(rx, ry, rz)
+        else:
+            gx, gy, gz = rx, ry, rz
+
+        a = self._alpha
+        self.raw_x = self.raw_x * (1.0 - a) + gx * a
+        self.raw_y = self.raw_y * (1.0 - a) + gy * a
+        self.raw_z = self.raw_z * (1.0 - a) + gz * a
+
+        ax, ay, total, slope = self._compute_angles(self.raw_x, self.raw_y, self.raw_z)
+        self.angle_x = ax
+        self.angle_y = ay
+        self.total_deg = total
+        self.slope_pct = slope
+
+        is_level = total < self.threshold
+        if is_level and not self._was_level:
+            self._on_level_hit()
+        self._was_level = is_level
+        changed = is_level != self._prev_level_ui
+        self._prev_level_ui = is_level
+        self._throttled_refresh(force=changed)
+
+    def _on_level_hit(self):
+        now = time.time()
+        android = None
+        try:
+            android = self.api.getAndroid()
+        except Exception:
+            pass
+        if android is None:
+            return
+        if self.sound_enabled and (now - self._last_tone >= 0.7):
+            self._last_tone = now
+            try:
+                android.audioTone(TONE_BEEP, 120)
+            except Exception:
+                pass
+        if self.vibrate_enabled and (now - self._last_vib >= 0.7):
+            self._last_vib = now
+            try:
+                android.vibrate(45)
+            except Exception:
+                pass
+
+    def _throttled_refresh(self, force=False):
+        now = time.time()
+        if force or (now - self._last_ui_update >= 0.12):
+            self._last_ui_update = now
+            try:
+                self.refresh()
+            except Exception:
+                pass
+
+    def _live(self):
+        if self.held:
+            return self.hold_x, self.hold_y, self.hold_total, self.hold_slope
+        return self.angle_x, self.angle_y, self.total_deg, self.slope_pct
+
+    def select_tab(self, index):
+        self.tab_index = int(index)
+        self.refresh()
+
+    def select_mode(self, value):
+        self.mode = str(value) if str(value) in MODES else "Пол"
+        self.set_setting("mode", self.mode)
+        self._was_level = False
+        self.refresh()
+
+    def toggle_hold(self):
+        if not self.held:
+            self.hold_x = self.angle_x
+            self.hold_y = self.angle_y
+            self.hold_total = self.total_deg
+            self.hold_slope = self.slope_pct
+            self.held = True
+            self.toast("Hold: показания зафиксированы")
+        else:
+            self.held = False
+            self.toast("Hold снят")
+        self.refresh()
+
+    def calibrate_zero(self):
+        ax, ay, _, _ = self._compute_angles(self.raw_x, self.raw_y, self.raw_z)
+        self.offset_x += ax
+        self.offset_y += ay
+        self.set_setting("offset_x", self.offset_x)
+        self.set_setting("offset_y", self.offset_y)
+        self.angle_x = 0.0
+        self.angle_y = 0.0
+        self.total_deg = 0.0
+        self.slope_pct = 0.0
+        self._was_level = True
+        self._prev_level_ui = True
+        self.toast("Ноль установлен")
+        self.refresh()
+
+    def reset_calibration(self):
+        self.offset_x = 0.0
+        self.offset_y = 0.0
+        self.set_setting("offset_x", 0.0)
+        self.set_setting("offset_y", 0.0)
+        self._was_level = False
+        self.toast("Калибровка сброшена")
+        self.refresh()
+
+    def toggle_sound(self, value):
+        self.sound_enabled = bool(value)
+        self.set_setting("sound", self.sound_enabled)
+        self.refresh()
+
+    def toggle_vibrate(self, value):
+        self.vibrate_enabled = bool(value)
+        self.set_setting("vibrate", self.vibrate_enabled)
+        self.refresh()
+
+    def toggle_invert_x(self, value):
+        self.invert_x = bool(value)
+        self.set_setting("invert_x", self.invert_x)
+        self.refresh()
+
+    def toggle_invert_y(self, value):
+        self.invert_y = bool(value)
+        self.set_setting("invert_y", self.invert_y)
+        self.refresh()
+
+    def set_threshold(self, value):
+        self.threshold = max(0.2, min(2.0, float(value)))
+        self.set_setting("threshold", self.threshold)
+        self.refresh()
+
+    def restart_sensors(self):
+        self.start_sensors()
+        if self.running:
+            self.toast(f"Датчик: {self.sensor_label}")
+        self.refresh()
+
+    def save_snapshot(self):
+        ax, ay, total, slope = self._live()
+        stamp = time.strftime("%H:%M:%S")
+        line = f"{stamp} · {self.mode} · {total:.2f}° · X {ax:+.2f}° · Y {ay:+.2f}° · {slope:.1f}%"
+        self.history.insert(0, line)
+        self.history = self.history[:30]
+        self.toast("Замер сохранён")
+        self.refresh()
+
+    def clear_history(self):
+        self.history = []
+        self.toast("История очищена")
+        self.refresh()
+
+    def share_reading(self):
+        ax, ay, total, slope = self._live()
+        text = (
+            f"Строительный уровень v1.1.0 (@frostmench1k)\n"
+            f"Режим: {self.mode}\n"
+            f"Отклонение: {total:.2f}°\n"
+            f"X: {ax:+.2f}° · Y: {ay:+.2f}°\n"
+            f"Уклон: {slope:.2f}%\n"
+            f"Порог: {self.threshold:.1f}° · Hold: {'да' if self.held else 'нет'}\n"
+            f"Датчик: {self.sensor_label}"
+        )
+        if self.history:
+            text += "\n\nИстория:\n" + "\n".join(self.history[:10])
+        try:
+            self.api.getAndroid().shareText(text, "Замер уровня")
+        except Exception:
+            try:
+                self.api.getAndroid().clipboardSet(text)
+                self.toast("Скопировано в буфер")
+            except Exception:
+                self.toast("Не удалось поделиться")
+
+    def _status(self, total):
+        if not self.running:
+            return "Датчик выключен", "muted"
+        if self.held:
+            return "HOLD · показания заморожены", "warning"
+        if total < self.threshold:
+            return "Идеально ровно", "success"
+        if total < self.threshold * 4:
+            return "Почти ровно", "warning"
+        if total < 8.0:
+            return "Есть наклон", "warning"
+        return "Сильный наклон", "error"
+
+    def _axis_progress(self, angle):
+        return max(0.0, min(1.0, 0.5 + (angle / (VISUAL_MAX_DEG * 2.0))))
+
+    def _level_progress(self, total):
+        return max(0.0, min(1.0, 1.0 - (total / VISUAL_MAX_DEG)))
+
+    def _bubble_html(self, ax, ay, color):
+        bx = max(-1.0, min(1.0, -ax / VISUAL_MAX_DEG)) * 40.0
+        by = max(-1.0, min(1.0, -ay / VISUAL_MAX_DEG)) * 40.0
+        if color == "success":
+            ring, soft, glow = "#1B7F4A", "#34C77B", "rgba(52,199,123,0.5)"
+        elif color == "warning":
+            ring, soft, glow = "#D97706", "#F59E0B", "rgba(245,158,11,0.45)"
+        else:
+            ring, soft, glow = "#DC2626", "#F87171", "rgba(248,113,113,0.45)"
+        mode_hint = self.mode
+        return f"""<!DOCTYPE html><html><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<style>
+*{{box-sizing:border-box}}
+html,body{{margin:0;padding:0;background:transparent;overflow:hidden;
+font-family:system-ui,sans-serif}}
+.stage{{height:280px;display:flex;align-items:center;justify-content:center;
+background:radial-gradient(ellipse at 50% 30%,rgba(255,255,255,0.06),transparent 55%)}}
+.vial{{position:relative;width:230px;height:230px;border-radius:50%;
+border:2.5px solid {ring};
+background:
+ radial-gradient(circle at 50% 42%,rgba(255,255,255,0.14),transparent 42%),
+ linear-gradient(160deg,rgba(255,255,255,0.07),rgba(0,0,0,0.22));
+box-shadow:0 0 0 1px rgba(255,255,255,0.08),0 12px 36px rgba(0,0,0,0.28),0 0 28px {glow}}}
+.ring{{position:absolute;left:50%;top:50%;width:72px;height:72px;margin:-36px 0 0 -36px;
+border-radius:50%;border:1.5px dashed {soft};opacity:.7}}
+.bull{{position:absolute;left:50%;top:50%;width:18px;height:18px;margin:-9px 0 0 -9px;
+border-radius:50%;border:2px solid {ring};opacity:.9}}
+.cross:before,.cross:after{{content:"";position:absolute;background:rgba(255,255,255,0.18)}}
+.cross:before{{left:50%;top:10%;bottom:10%;width:1px;transform:translateX(-50%)}}
+.cross:after{{top:50%;left:10%;right:10%;height:1px;transform:translateY(-50%)}}
+.cross{{position:absolute;inset:0}}
+.tick{{position:absolute;width:10px;height:2px;background:rgba(255,255,255,0.28);top:50%;margin-top:-1px}}
+.t1{{left:8%}}.t2{{right:8%;left:auto}}.t3{{left:50%;top:8%;width:2px;height:10px;margin:0 0 0 -1px}}
+.t4{{left:50%;bottom:8%;top:auto;width:2px;height:10px;margin:0 0 0 -1px}}
+.bubble{{position:absolute;left:50%;top:50%;width:40px;height:40px;margin:-20px 0 0 -20px;
+border-radius:50%;
+background:radial-gradient(circle at 32% 28%,#fff 0%,{soft} 38%,{ring} 100%);
+box-shadow:0 2px 10px {glow},inset 0 -4px 8px rgba(0,0,0,0.18);
+transform:translate({bx:.2f}%,{by:.2f}%);transition:transform .1s linear}}
+.badge{{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);
+font-size:11px;letter-spacing:.04em;color:rgba(255,255,255,0.55);text-transform:uppercase}}
+</style></head><body><div class="stage"><div class="vial">
+<div class="cross"></div><div class="tick t1"></div><div class="tick t2"></div>
+<div class="tick t3"></div><div class="tick t4"></div>
+<div class="ring"></div><div class="bull"></div><div class="bubble"></div>
+<div class="badge">{mode_hint}</div>
+</div></div></body></html>"""
+
+    def screen_main(self, ui, api, state):
+        ax, ay, total, slope = self._live()
+        title, color = self._status(total)
+        tabs = ui.tabs(["Уровень", "Замеры", "Настройки"], selected=self.tab_index, on_select=self.select_tab)
+        if self.tab_index == 1:
+            page = self._tab_history(ui)
+        elif self.tab_index == 2:
+            page = self._tab_settings(ui)
+        else:
+            page = self._tab_level(ui, ax, ay, total, slope, title, color)
+
+        return ui.scaffold(
+            title="Строительный уровень",
+            actions=[
+                ui.top_action("pause" if not self.held else "play_arrow", self.toggle_hold),
+                ui.top_action("my_location", self.calibrate_zero),
+                ui.top_action("share", self.share_reading),
+                ui.top_action("refresh", self.restart_sensors)
+            ],
+            content=ui.column([tabs, page], padding=14, spacing=10, fill_max_size=True)
+        )
+
+    def _tab_level(self, ui, ax, ay, total, slope, title, color):
+        main_value = f"{slope:.1f}%" if self.mode == "Уклон %" else f"{total:.2f}°"
+        main_label = "Уклон поверхности" if self.mode == "Уклон %" else "Отклонение от горизонта"
+        px = self._axis_progress(ax)
+        py = self._axis_progress(ay)
+        level_p = self._level_progress(total)
+
+        return ui.column([
+            ui.button_group(MODES, self.mode, self.select_mode),
+            ui.card([
+                ui.row([
+                    ui.column([
+                        ui.text(main_value, "headlineLarge", color=color),
+                        ui.text(title, "titleMedium", color=color),
+                        ui.text(main_label, "bodySmall", color="muted"),
+                        ui.text(f"{self.sensor_label} · порог {self.threshold:.1f}°", "labelSmall", color="muted")
+                    ], spacing=2),
+                    ui.wavy_progress(progress=level_p, size=92)
+                ], spacing=12),
+                ui.spacer(height=6),
+                ui.webview(html=self._bubble_html(ax, ay, color), height=290, fill_max_size=False),
+                ui.text("Пузырёк к центру — поверхность выровнена", "bodySmall", color="muted")
+            ], padding=16),
+            ui.card([
+                ui.row([
+                    ui.column([
+                        ui.text("Крен X", "labelSmall", color="muted"),
+                        ui.text(f"{ax:+.2f}°", "titleLarge", color=color)
+                    ], spacing=2),
+                    ui.column([
+                        ui.text("Тангаж Y", "labelSmall", color="muted"),
+                        ui.text(f"{ay:+.2f}°", "titleLarge", color=color)
+                    ], spacing=2),
+                    ui.column([
+                        ui.text("Уклон", "labelSmall", color="muted"),
+                        ui.text(f"{slope:.1f}%", "titleLarge", color="primary")
+                    ], spacing=2)
+                ], spacing=8),
+                ui.spacer(height=6),
+                ui.text("Ось X", "labelSmall", color="muted"),
+                ui.linear_progress(progress=px, fill_max_width=True),
+                ui.text("Ось Y", "labelSmall", color="muted"),
+                ui.linear_progress(progress=py, fill_max_width=True),
+                ui.text("Ровность", "labelSmall", color="muted"),
+                ui.linear_progress(progress=level_p, fill_max_width=True)
+            ], padding=16),
+            ui.row([
+                ui.button("Калибровка / Ноль", self.calibrate_zero, fill_max_width=True),
+                ui.button("Hold" if not self.held else "Снять Hold", self.toggle_hold,
+                          style="outlined" if not self.held else "filled", fill_max_width=True)
+            ], spacing=8),
+            ui.button("Сохранить замер", self.save_snapshot, style="outlined", fill_max_width=True),
+            ui.text("@frostmench1k · v1.1.0", "bodySmall", color="muted")
+        ], spacing=10)
+
+    def _tab_history(self, ui):
+        rows = [ui.text(line, "bodySmall") for line in self.history[:20]] if self.history else [
+            ui.text("Пока нет замеров — нажми «Сохранить замер» на вкладке Уровень", "bodyMedium", color="muted")
+        ]
+        return ui.column([
+            ui.card([
+                ui.text("История замеров", "titleMedium"),
+                ui.text(f"Сохранено: {len(self.history)} / 30", "bodySmall", color="muted"),
+                ui.spacer(height=6),
+                *rows
+            ], padding=16),
+            ui.row([
+                ui.button("Поделиться", self.share_reading, fill_max_width=True),
+                ui.button("Очистить", self.clear_history, style="outlined", fill_max_width=True)
+            ], spacing=8)
+        ], spacing=10)
+
+    def _tab_settings(self, ui):
+        return ui.column([
+            ui.card([
+                ui.text("Обратная связь", "titleMedium"),
+                ui.switch(self.sound_enabled, self.toggle_sound,
+                          title="Звук", subtitle="Сигнал, когда пузырёк в центре"),
+                ui.switch(self.vibrate_enabled, self.toggle_vibrate,
+                          title="Вибрация", subtitle="Короткий отклик при выравнивании")
+            ], padding=16),
+            ui.card([
+                ui.text("Точность", "titleMedium"),
+                ui.slider(self.threshold, self.set_threshold, minimum=0.2, maximum=2.0,
+                          title=f"Порог «ровно»: {self.threshold:.1f}°", steps=18),
+                ui.text("Меньше порог — строже допуск к идеальной плоскости", "bodySmall", color="muted")
+            ], padding=16),
+            ui.card([
+                ui.text("Ориентация", "titleMedium"),
+                ui.switch(self.invert_x, self.toggle_invert_x,
+                          title="Инвертировать X", subtitle="Если пузырёк едет «не в ту сторону»"),
+                ui.switch(self.invert_y, self.toggle_invert_y,
+                          title="Инвертировать Y", subtitle="Для чехла / нестандартного хвата"),
+                ui.button("Сбросить калибровку", self.reset_calibration, style="outlined", fill_max_width=True),
+                ui.button("Перезапуск датчика", self.restart_sensors, style="outlined", fill_max_width=True)
+            ], padding=16),
+            ui.card([
+                ui.text("Справка режимов", "titleMedium"),
+                ui.text("Пол — телефон плашмя на поверхности", "bodySmall"),
+                ui.text("Стена — прижми телефон вертикально к стене/двери", "bodySmall"),
+                ui.text("Уклон % — показывает наклон как уклон в процентах", "bodySmall", color="muted")
+            ], padding=16)
+        ], spacing=10)
