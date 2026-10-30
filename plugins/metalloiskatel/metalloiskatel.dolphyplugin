@@ -1,0 +1,295 @@
+__id__ = "metal_detector"
+__name__ = "Металлоискатель"
+__version__ = "1.0.4"
+__author__ = "@DobryyPIRATIK"
+__icon__ = "rounded:sensors"
+__description__ = "Поиск металла по магнитному полю"
+__permissions__ = []
+
+import json
+import math
+import threading
+import time
+from java import jclass, dynamic_proxy
+
+_SensorEventListener = jclass("android.hardware.SensorEventListener")
+_SensorManager = jclass("android.hardware.SensorManager")
+_Sensor = jclass("android.hardware.Sensor")
+
+
+class _MagneticListener(dynamic_proxy(_SensorEventListener)):
+    def __init__(self, plugin):
+        super().__init__()
+        self._plugin = plugin
+
+    def onSensorChanged(self, event):
+        try:
+            v = event.values
+            arr = [float(v[i]) for i in range(len(v))]
+        except Exception:
+            return
+        try:
+            self._plugin._on_values(arr)
+        except Exception:
+            pass
+
+    def onAccuracyChanged(self, sensor, accuracy):
+        pass
+
+
+class MetalDetector(BasePlugin):
+    def on_plugin_load(self):
+        self.running = False
+        self.listener = None
+        self.sensor = None
+        self.sensor_manager = None
+        self.sensor_kind = "mag"
+        self.baseline = None
+        self.magnitude = 0.0
+        self.deviation = 0.0
+        self.detected = False
+        self.threshold = float(self.get_setting("threshold", 15))
+        self.vibrate_enabled = bool(self.get_setting("vibrate", True))
+        self.sound_enabled = bool(self.get_setting("sound", False))
+
+        self._beep_thread = None
+        self._beep_stop = threading.Event()
+
+        self.add_module(
+            title="Металлоискатель",
+            description="Поиск металла @DobryyPIRATIK",
+            icon="sensors",
+            screen="main",
+            section="PLUGINS"
+        )
+
+        self.api.registerSettings("Металлоискатель", json.dumps([
+            {"type": "slider", "key": "threshold", "title": "Порог",
+             "min": 1, "max": 100, "default": 15, "steps": 98},
+            {"type": "switch", "key": "vibrate", "title": "Вибрация", "default": True},
+            {"type": "switch", "key": "sound", "title": "Звук", "default": False}
+        ]), 10)
+
+    def on_setting_changed(self, payload):
+        key = payload["key"]
+        value = payload["value"]
+        if key == "threshold":
+            self.threshold = float(value)
+        elif key == "vibrate":
+            self.vibrate_enabled = bool(value)
+        elif key == "sound":
+            self.sound_enabled = bool(value)
+            if self.sound_enabled and self.running:
+                self._start_beeping()
+            elif not self.sound_enabled:
+                self._stop_beeping()
+        self.refresh()
+
+    def on_plugin_unload(self):
+        self.stop_scan()
+
+    def screen_main(self, ui, api, state):
+        status = "Обнаружено" if self.detected else ("Поиск" if self.running else "Стоп")
+        color = "error" if self.detected else ("success" if self.running else "muted")
+        base = "—" if self.baseline is None else f"{self.baseline:.1f}"
+        progress = min(self.deviation / max(self.threshold * 2.0, 1.0), 1.0)
+        kind = "магнитометр" if self.sensor_kind == "mag" else "приближение"
+
+        return ui.scaffold(
+            title="Металлоискатель",
+            content=ui.column([
+                ui.card([
+                    ui.text(f"{self.magnitude:.1f} мкТл", "headlineLarge"),
+                    ui.text(status, "titleMedium", color=color),
+                    ui.text(f"Датчик: {kind}", "bodySmall", color="muted"),
+                    ui.spacer(height=8),
+                    ui.wavy_progress(progress=progress, size=96)
+                ], padding=16),
+                ui.card([
+                    ui.text(f"Отклонение: {self.deviation:.1f}", "titleLarge"),
+                    ui.text(f"База: {base}", "bodySmall", color="muted")
+                ], padding=16),
+                ui.card([
+                    ui.slider(self.threshold, self.set_threshold, 1, 100,
+                              f"Порог: {self.threshold:.0f}", 98),
+                    ui.switch(self.vibrate_enabled, self.toggle_vibrate, title="Вибрация"),
+                    ui.switch(self.sound_enabled, self.toggle_sound, title="Звук")
+                ], padding=12),
+                ui.row([
+                    ui.button("Стоп" if self.running else "Старт",
+                              self.toggle_scan, fill_max_width=True),
+                    ui.button("Калибровка", self.calibrate,
+                              style="outlined", fill_max_width=True)
+                ], spacing=8),
+                ui.text("Автор: @DobryyPIRATIK", "bodySmall", color="muted")
+            ], padding=16, spacing=12, fill_max_size=True)
+        )
+
+    def toggle_scan(self):
+        if self.running:
+            self.stop_scan()
+        else:
+            self.start_scan()
+        self.refresh()
+
+    def start_scan(self):
+        if self.running:
+            return
+        try:
+            sm = self.api.getContext().getSystemService("sensor")
+        except Exception:
+            sm = None
+        if sm is None:
+            self.toast("Нет службы датчиков")
+            return
+
+        sensor = sm.getDefaultSensor(_Sensor.TYPE_MAGNETIC_FIELD)
+        if sensor is not None:
+            self.sensor_kind = "mag"
+        else:
+            sensor = sm.getDefaultSensor(_Sensor.TYPE_PROXIMITY)
+            if sensor is not None:
+                self.sensor_kind = "prox"
+            else:
+                self.toast("Датчиков нет")
+                return
+
+        listener = _MagneticListener(self)
+        if not sm.registerListener(listener, sensor, _SensorManager.SENSOR_DELAY_UI):
+            self.toast("Не удалось подключить датчик")
+            return
+
+        self.sensor_manager = sm
+        self.listener = listener
+        self.sensor = sensor
+        self.running = True
+        if self.sound_enabled:
+            self._start_beeping()
+
+    def stop_scan(self):
+        self._stop_beeping()
+        if self.sensor_manager is not None and self.listener is not None:
+            try:
+                self.sensor_manager.unregisterListener(self.listener)
+            except Exception:
+                pass
+        self.sensor_manager = None
+        self.listener = None
+        self.sensor = None
+        self.running = False
+        self.detected = False
+
+    def _on_values(self, values):
+        if not values:
+            return
+        if self.sensor_kind == "mag" and len(values) >= 3:
+            x, y, z = values[0], values[1], values[2]
+            self.magnitude = math.sqrt(x * x + y * y + z * z)
+        else:
+            self.magnitude = float(values[0])
+
+        if self.baseline is None:
+            self.baseline = self.magnitude
+
+        self.deviation = abs(self.magnitude - self.baseline)
+        was = self.detected
+        self.detected = self.deviation >= self.threshold
+        if self.detected and not was and self.vibrate_enabled:
+            try:
+                self.api.getAndroid().vibrate(220)
+            except Exception:
+                pass
+        self.refresh()
+
+    def _start_beeping(self):
+        if self._beep_thread is not None:
+            return
+        self._beep_stop.clear()
+        self._beep_thread = threading.Thread(target=self._beep_loop, daemon=True)
+        self._beep_thread.start()
+
+    def _stop_beeping(self):
+        self._beep_stop.set()
+        if self._beep_thread is not None:
+            try:
+                self._beep_thread.join(timeout=0.6)
+            except Exception:
+                pass
+            self._beep_thread = None
+
+    def _beep_loop(self):
+        while not self._beep_stop.is_set():
+            if not (self.sound_enabled and self.running):
+                time.sleep(0.1)
+                continue
+
+            dev = self.deviation
+            floor = self.threshold * 0.12
+            if dev < floor:
+                time.sleep(0.08)
+                continue
+
+            intensity = min(dev / max(self.threshold, 1.0), 1.0)
+
+            if intensity > 0.75:
+                pulses = 3
+                duration = 70
+                tone = 26
+                gap = 0.035
+            elif intensity > 0.40:
+                pulses = 2
+                duration = 75
+                tone = 25
+                gap = 0.04
+            else:
+                pulses = 1
+                duration = 70
+                tone = 24
+                gap = 0.0
+
+            interval = 0.60 - 0.52 * intensity
+
+            android = None
+            try:
+                android = self.api.getAndroid()
+            except Exception:
+                pass
+
+            for i in range(pulses):
+                if self._beep_stop.is_set():
+                    break
+                if android is not None:
+                    try:
+                        android.audioTone(tone, duration)
+                    except Exception:
+                        pass
+                if i < pulses - 1:
+                    time.sleep(gap)
+
+            time.sleep(interval)
+
+    def calibrate(self):
+        if self.magnitude > 0:
+            self.baseline = self.magnitude
+            self.deviation = 0.0
+            self.detected = False
+            self.toast("База установлена")
+        else:
+            self.toast("Ждём сигнал датчика")
+        self.refresh()
+
+    def set_threshold(self, value):
+        self.threshold = float(value)
+        self.set_setting("threshold", self.threshold)
+
+    def toggle_vibrate(self, value):
+        self.vibrate_enabled = bool(value)
+        self.set_setting("vibrate", self.vibrate_enabled)
+
+    def toggle_sound(self, value):
+        self.sound_enabled = bool(value)
+        self.set_setting("sound", self.sound_enabled)
+        if self.sound_enabled and self.running:
+            self._start_beeping()
+        elif not self.sound_enabled:
+            self._stop_beeping()
