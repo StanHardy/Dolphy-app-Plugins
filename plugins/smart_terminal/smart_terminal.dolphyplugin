@@ -1,0 +1,1376 @@
+__id__ = "smart_terminal"
+__name__ = "Smart Terminal"
+__version__ = "1.12.2"
+__author__ = "dzemikreal"
+__icon__ = "rounded:terminal"
+__description__ = "Несколько терминалов через Root или Shizuku с Ctrl+C и живым выводом"
+__permissions__ = ["root", "shizuku"]
+
+import base64
+import colorsys
+import json
+import re
+import threading
+import time
+import uuid
+
+MODES = ["Root", "Shizuku", "Обычный"]
+MAX_TERMS = 8
+MAX_OUTPUT = 30000
+MAX_HISTORY = 50
+MAX_SNIPPETS = 30
+PALETTE = [
+    ("Стандарт", ""),
+    ("Розовый", "#F48FB1"),
+    ("Голубой", "#4FC3F7"),
+    ("Зелёный", "#81C784"),
+    ("Оранжевый", "#FFB74D"),
+    ("Фиолетовый", "#B39DDB"),
+    ("Красный", "#EF5350"),
+    ("Жёлтый", "#FFF176")
+]
+DEFAULT_SNIPPETS = [
+    "ls -la",
+    "pwd",
+    "id",
+    "df -h",
+    "ps -A",
+    "getprop ro.product.model",
+    "dumpsys battery",
+    "pm list packages -3"
+]
+POLL_DELAY = 0.7
+SU_CMD = re.compile(r"^su(\s+(-|-l|--login))?(\s+(root|0))?$")
+SU_USER = re.compile(r"^su\s+(?:(?:-|-l|--login)\s+)?([A-Za-z0-9_.\-]+)$")
+EXIT_CMD = re.compile(r"^(exit|logout)$")
+LOGIN_RE = re.compile(r"^[A-Za-z0-9_.\-]{1,32}$")
+MARKER = re.compile(r"@@DCWD@@([^\n]*)\n")
+TMP = "/data/local/tmp/.dolphy_term_"
+APP_USER = re.compile(r"^u\d+_[ai]\d+$")
+ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07")
+ACCESS_DENIED = re.compile(
+    r"permission denied|operation not permitted|access denied|not permitted|eacces|eperm",
+    re.IGNORECASE
+)
+
+
+def quote(value):
+    return "'" + str(value).replace("'", "'\\''") + "'"
+
+
+def clean(text):
+    text = ANSI.sub("", text).replace("\r\n", "\n")
+    return "\n".join(line.split("\r")[-1] for line in text.split("\n"))
+
+
+class SmartTerminal(BasePlugin):
+    def __init__(self):
+        super().__init__()
+        self.history = []
+        self.snippets = list(DEFAULT_SNIPPETS)
+        self.accent = ""
+        self.rgb_on = False
+        self.rgb_hue = 0.0
+        self.rgb_running = False
+        self.alive = True
+        self.root_ok = False
+        self.shizuku_ok = False
+        self.shizuku_perm = False
+        self.shizuku_root = False
+        self.shizuku_checked = False
+        self.shizuku_uid = ""
+        self.htop = {
+            "backend": None,
+            "sort": "cpu",
+            "auto": False,
+            "scope": "all",
+            "seen": 0.0,
+            "summary": "",
+            "header": "",
+            "rows": [],
+            "raw": "",
+            "text": "",
+            "pid": ""
+        }
+        self.htop_running = False
+        self.default_mode = "Root"
+        self.terms = []
+        self.terms = [self.new_term()]
+        self.active = 0
+
+    def new_term(self, mode=None):
+        return {
+            "mode": mode if mode in MODES else self.default_mode,
+            "command": "",
+            "output": "",
+            "cwd": "",
+            "su": False,
+            "user": "",
+            "login": "",
+            "job": None,
+            "hist_pos": len(self.history)
+        }
+
+    def cur(self):
+        if self.active >= len(self.terms):
+            self.active = len(self.terms) - 1
+        return self.terms[self.active]
+
+    def on_plugin_load(self):
+        self.alive = True
+        self.add_module(
+            title="Smart Terminal",
+            description="Терминалы через Root, Shizuku или обычные права",
+            icon="terminal",
+            screen="main",
+            section="PLUGINS"
+        )
+        self.detect(True)
+        saved_mode = str(self.get_setting("mode", ""))
+        if saved_mode in MODES:
+            self.default_mode = saved_mode
+        else:
+            self.default_mode = "Root" if self.root_ok else "Shizuku"
+        self.accent = str(self.get_setting("accent", "") or "")
+        self.rgb_on = bool(self.get_setting("rgb", False))
+        if self.rgb_on:
+            self.start_rgb()
+        saved_snippets = self.get_setting("snippets", None)
+        if isinstance(saved_snippets, list):
+            self.snippets = [str(item) for item in saved_snippets][:MAX_SNIPPETS]
+        else:
+            self.snippets = list(DEFAULT_SNIPPETS)
+        saved_history = self.get_setting("history", [])
+        try:
+            self.history = [str(item) for item in saved_history][-MAX_HISTORY:]
+        except Exception:
+            self.history = []
+        self.terms = []
+        self.terms = [self.new_term()]
+        self.active = 0
+
+    def detect(self, force=False):
+        device = self.api.getDevice()
+        try:
+            self.root_ok = bool(device.rootAvailable())
+        except Exception:
+            self.root_ok = False
+        try:
+            self.shizuku_ok = bool(device.shizukuAvailable())
+        except Exception:
+            self.shizuku_ok = False
+        try:
+            self.shizuku_perm = bool(device.shizukuHasPermission())
+        except Exception:
+            self.shizuku_perm = False
+        if not (self.shizuku_ok and self.shizuku_perm):
+            self.shizuku_root = False
+            self.shizuku_checked = False
+            self.shizuku_uid = ""
+        elif force or not self.shizuku_checked:
+            try:
+                raw = self.exec_raw("shizuku", "id -u")
+                text, _ = self.extract(raw)
+                self.shizuku_uid = text.strip().split("\n")[0].strip()
+                self.shizuku_root = self.shizuku_uid == "0"
+                self.shizuku_checked = True
+            except Exception:
+                self.shizuku_root = False
+
+    def can_su(self):
+        return bool(self.root_ok or (self.shizuku_root and self.shizuku_ok and self.shizuku_perm))
+
+    def su_backend(self):
+        return "root" if self.root_ok else "shizuku"
+
+    def resolve_backend(self, term):
+        if term.get("su") or term.get("user"):
+            if self.can_su():
+                return self.su_backend(), None
+            term["su"] = False
+            term["user"] = ""
+        if term["mode"] == "Root":
+            if self.root_ok:
+                return "root", None
+            return None, "Root недоступен"
+        if term["mode"] == "Обычный":
+            return "shell", None
+        if not self.shizuku_ok:
+            return None, "ошибка доступа: Shizuku не запущен"
+        if not self.shizuku_perm:
+            return None, "ошибка доступа: нет разрешения Shizuku"
+        return "shizuku", None
+
+    def tmp_prefix(self, backend):
+        if backend == "shell":
+            try:
+                cache = str(self.api.getContext().getCacheDir().getAbsolutePath())
+                if cache:
+                    return cache + "/.dolphy_term_"
+            except Exception:
+                pass
+        return TMP
+
+    def status_text(self, term):
+        root = "да" if self.root_ok else "нет"
+        if not self.shizuku_ok:
+            shizuku = "не запущен"
+        elif self.shizuku_perm:
+            if self.shizuku_root:
+                shizuku = "да (root)"
+            elif self.shizuku_uid == "2000":
+                shizuku = "да (shell)"
+            elif self.shizuku_uid:
+                shizuku = "да (uid " + self.shizuku_uid + ")"
+            else:
+                shizuku = "да"
+        else:
+            shizuku = "нет разрешения"
+        backend, error = self.resolve_backend(term)
+        state = "готов" if backend else str(error)
+        label = term["mode"]
+        if term.get("user"):
+            label += " → " + term["user"]
+        elif term.get("su") and term["mode"] != "Root":
+            label += " (su)"
+        return "Root: " + root + "  |  Shizuku: " + shizuku + "  |  " + label + ": " + state
+
+    def prompt(self, term):
+        is_root = (term.get("su") or term["mode"] == "Root") and not term.get("user")
+        sign = " # " if is_root else " $ "
+        who = (term["user"] + ":") if term.get("user") else ""
+        return who + (term["cwd"] if term["cwd"] else "~") + sign
+
+    def append_output(self, term, text):
+        term["output"] = (term["output"] + text)[-MAX_OUTPUT:]
+
+    def exec_raw(self, backend, command):
+        if backend == "root":
+            return self.root(command)
+        if backend == "shell":
+            return self.shell(command)
+        return self.shizuku(command)
+
+    def extract(self, raw):
+        data = raw
+        if not isinstance(data, dict):
+            text = str(raw)
+            try:
+                data = json.loads(text)
+            except Exception:
+                return text, None
+        if isinstance(data, dict):
+            out = str(data.get("out") or "")
+            err = str(data.get("err") or "")
+            code = data.get("code")
+            combined = out
+            if err:
+                separator = "\n" if combined and not combined.endswith("\n") else ""
+                combined = combined + separator + err
+            return combined, code
+        return str(data), None
+
+    def select_term(self, index):
+        def handler():
+            self.active = index
+            self.refresh()
+        return handler
+
+    def add_term(self):
+        if len(self.terms) >= MAX_TERMS:
+            self.toast("Максимум терминалов: " + str(MAX_TERMS))
+            return
+        term = self.new_term(self.cur()["mode"])
+        self.terms.append(term)
+        self.active = len(self.terms) - 1
+        self.refresh()
+
+    def close_at(self, index):
+        def handler():
+            if len(self.terms) <= 1:
+                self.toast("Нельзя закрыть последний терминал")
+                return
+            if index >= len(self.terms):
+                return
+            term = self.terms[index]
+            if term["job"]:
+                self.send_signal(term, 9)
+            del self.terms[index]
+            if index < self.active:
+                self.active -= 1
+            elif index == self.active:
+                self.active = min(index, len(self.terms) - 1)
+            self.refresh()
+        return handler
+
+    def set_mode(self, mode):
+        def handler():
+            term = self.cur()
+            term["mode"] = mode
+            term["su"] = False
+            term["user"] = ""
+            self.default_mode = mode
+            self.set_setting("mode", mode)
+            self.refresh()
+        return handler
+
+    def recheck(self):
+        self.detect(True)
+        self.refresh()
+
+    def request_shizuku(self):
+        try:
+            self.api.getDevice().shizukuRequestPermission()
+        except Exception as error:
+            self.toast("Ошибка: " + str(error))
+        self.detect(True)
+        self.refresh()
+
+    def user_runner(self, usr):
+        return (
+            "ok() { case \"$1\" in ''|0|*[!0-9]*) return 1;; esac; return 0; }\n"
+            "q=$(su " + usr + " -c 'id -u' 2>/dev/null < /dev/null)\n"
+            'if ok "$q"; then\n'
+            '  su ' + usr + ' -c "$U"\n'
+            "else\n"
+            "  q=$(su -c 'id -u' " + usr + " 2>/dev/null < /dev/null)\n"
+            '  if ok "$q"; then\n'
+            '    su -c "$U" ' + usr + "\n"
+            "  else\n"
+            "    echo \"su: не удалось войти под '" + usr + "' (пользователь не найден)\"\n"
+            "    exit 1\n"
+            "  fi\n"
+            "fi\n"
+        )
+
+    def run_as(self, backend, user, command):
+        if not user:
+            return self.exec_raw(backend, command)
+        script = "U=$(echo " + self.encode(command) + " | base64 -d)\n" + self.user_runner(user)
+        return self.exec_raw(backend, "echo " + self.encode(script) + " | base64 -d | sh")
+
+    def check_script(self, name):
+        script = (
+            "command -v su >/dev/null 2>&1 || { echo NOSU; exit 0; }\n"
+            "ok() { case \"$1\" in ''|0|*[!0-9]*) return 1;; esac; return 0; }\n"
+            "q=$(su " + name + " -c 'id -u' 2>/dev/null < /dev/null)\n"
+            'if ok "$q"; then echo "OK:$q"; exit 0; fi\n'
+            "q=$(su -c 'id -u' " + name + " 2>/dev/null < /dev/null)\n"
+            'if ok "$q"; then echo "OK:$q"; exit 0; fi\n'
+            "echo NO\n"
+        )
+        return "echo " + self.encode(script) + " | base64 -d | sh"
+
+    def begin_switch(self, term, name):
+        if name.isdigit() and int(name) % 100000 >= 20000:
+            self.append_output(term, "su: UID " + name + " вне допустимого диапазона (0-19999)\n")
+            return
+        if term.get("switching"):
+            self.toast("Проверка логина уже идёт")
+            return
+        term["switching"] = True
+        self.append_output(term, "[проверка пользователя " + name + "...]\n")
+        thread = threading.Thread(target=self.switch_main, args=(term, name))
+        thread.daemon = True
+        thread.start()
+
+    def switch_main(self, term, name):
+        try:
+            raw = self.exec_raw(self.su_backend(), self.check_script(name))
+            text, _ = self.extract(raw)
+            text = str(text)
+        except Exception as error:
+            text = "ERR:" + str(error)
+        uid = ""
+        for line in text.split("\n"):
+            line = line.strip()
+            if line.startswith("OK:"):
+                uid = line[3:].strip()
+                break
+        if uid:
+            term["user"] = name
+            term["su"] = True
+            self.append_output(term, "[вход: " + name + ", uid " + uid + "]\n")
+        elif "NOSU" in text:
+            self.append_output(term, "su: в этой среде нет команды su, смена пользователя недоступна\n")
+        elif text.startswith("ERR:"):
+            self.append_output(term, "su: ошибка проверки: " + text[4:] + "\n")
+        else:
+            self.append_output(term, "su: пользователь '" + name + "' не найден\n")
+        term["switching"] = False
+        try:
+            self.refresh()
+        except Exception:
+            pass
+
+    def on_login_input(self, value):
+        self.cur()["login"] = str(value).strip()
+
+    def apply_login(self):
+        term = self.cur()
+        self.detect()
+        name = str(term.get("login") or "").strip()
+        if not self.can_su():
+            self.toast("Нужен Root или Shizuku от root")
+            return
+        if not name:
+            self.toast("Введите логин")
+            return
+        if not LOGIN_RE.match(name):
+            self.toast("Недопустимый логин")
+            return
+        if term["job"]:
+            self.toast("В этом терминале процесс ещё выполняется")
+            return
+        self.append_output(term, self.prompt(term) + "su " + name + "\n")
+        if name in ("root", "0"):
+            term["user"] = ""
+            term["su"] = term["mode"] != "Root"
+        else:
+            self.begin_switch(term, name)
+        self.refresh()
+
+    def reset_login(self):
+        term = self.cur()
+        if term["job"]:
+            self.toast("В этом терминале процесс ещё выполняется")
+            return
+        term["user"] = ""
+        term["su"] = False
+        self.refresh()
+
+    def on_input(self, value):
+        term = self.cur()
+        value = str(value)
+        if "\n" in value:
+            term["command"] = value.split("\n", 1)[0]
+            self.run_command(term)
+        else:
+            term["command"] = value
+
+    def run_active(self):
+        self.run_command(self.cur())
+
+    def remember(self, term, command):
+        if command in self.history:
+            self.history.remove(command)
+        self.history.append(command)
+        self.history = self.history[-MAX_HISTORY:]
+        term["hist_pos"] = len(self.history)
+        self.set_setting("history", self.history)
+
+    def run_command(self, term):
+        command = term["command"].strip()
+        if term["job"]:
+            self.toast("В этом терминале процесс ещё выполняется")
+            return
+        if not command:
+            self.append_output(term, self.prompt(term) + "\n")
+            term["command"] = ""
+            self.refresh()
+            return
+        self.detect()
+        if command == "htop":
+            self.remember(term, command)
+            self.append_output(term, self.prompt(term) + command + "\n")
+            term["command"] = ""
+            backend, error = self.htop_check(term)
+            if backend is None:
+                self.append_output(term, "htop: " + error + "\n")
+                self.refresh()
+            else:
+                self.start_htop(backend, term.get("user") or "")
+            return
+        root_match = SU_CMD.match(command)
+        user_match = None if root_match else SU_USER.match(command)
+        if root_match or user_match:
+            self.remember(term, command)
+            self.append_output(term, self.prompt(term) + command + "\n")
+            term["command"] = ""
+            if not self.can_su():
+                if self.shizuku_ok and self.shizuku_perm and self.shizuku_uid:
+                    self.append_output(term, "su: заблокировано, Shizuku запущен не от root (uid " + self.shizuku_uid + ")\n")
+                else:
+                    self.append_output(term, "su: нужен Root или Shizuku от root (uid 0)\n")
+            elif user_match:
+                self.begin_switch(term, user_match.group(1))
+            else:
+                term["user"] = ""
+                if term["mode"] != "Root":
+                    term["su"] = True
+            self.refresh()
+            return
+        if (term.get("su") or term.get("user")) and EXIT_CMD.match(command):
+            self.remember(term, command)
+            self.append_output(term, self.prompt(term) + command + "\n")
+            term["su"] = False
+            term["user"] = ""
+            term["command"] = ""
+            self.refresh()
+            return
+        backend, error = self.resolve_backend(term)
+        if backend is None:
+            self.append_output(term, "[" + str(error) + "]\n")
+            self.refresh()
+            return
+        self.remember(term, command)
+        self.append_output(term, self.prompt(term) + command + "\n")
+        base = self.tmp_prefix(backend) + uuid.uuid4().hex[:10]
+        job = {
+            "backend": backend,
+            "command": command,
+            "base": base,
+            "offset": 0,
+            "fails": 0,
+            "paused": False,
+            "seen": "",
+            "user": term.get("user") or "",
+            "ucwd": ""
+        }
+        term["job"] = job
+        term["command"] = ""
+        self.refresh()
+        thread = threading.Thread(target=self.job_main, args=(term, job))
+        thread.daemon = True
+        thread.start()
+
+    def encode(self, text):
+        return base64.b64encode(text.encode("utf-8")).decode("ascii")
+
+    def start_command(self, term, job):
+        b = job["base"]
+        ctl = (
+            "B=" + b + "\n"
+            'case "$1" in\n'
+            "start)\n"
+            "  rm -f $B.out $B.pid $B.ret $B.cwd\n"
+            "  if [ -x /system/bin/nohup ]; then\n"
+            "    nohup sh $B.run > $B.out 2>&1 < /dev/null &\n"
+            "  else\n"
+            "    sh $B.run > $B.out 2>&1 < /dev/null &\n"
+            "  fi\n"
+            "  echo $! > $B.pid\n"
+            "  ;;\n"
+            "poll)\n"
+            "  exec 2>/dev/null\n"
+            "  p=$(cat $B.pid)\n"
+            "  z=$(sed 's|.*) ||' /proc/$p/stat | cut -c1)\n"
+            "  if [ -f $B.ret ]; then\n"
+            '    echo "DONE:$(cat $B.ret):$(cat $B.cwd)"\n'
+            '  elif [ "$z" != Z ] && kill -0 $p 2>/dev/null; then\n'
+            "    echo RUN\n"
+            "  else\n"
+            "    echo DEAD\n"
+            "  fi\n"
+            "  tail -n +$2 $B.out\n"
+            "  ;;\n"
+            "kill)\n"
+            "  exec 2>/dev/null\n"
+            "  SIG=$2\n"
+            "  p=$(cat $B.pid)\n"
+            '  [ -n "$p" ] || exit 1\n'
+            "  PS=$(ps -A -o pid,ppid 2>/dev/null)\n"
+            '  [ -n "$PS" ] || PS=$(ps -A -o PID,PPID 2>/dev/null)\n'
+            '  if [ -z "$PS" ]; then\n'
+            "    PS=$(for d in /proc/[0-9]*; do\n"
+            "      set -- $(sed 's|.*) ||' $d/stat 2>/dev/null)\n"
+            '      echo "${d#/proc/} $2"\n'
+            "    done)\n"
+            "  fi\n"
+            "  k() {\n"
+            '    for c in $(echo "$PS" | while read a b; do\n'
+            '      [ "$b" = "$1" ] && echo $a\n'
+            "    done); do\n"
+            "      k $c $2\n"
+            "    done\n"
+            "    kill -$2 $1\n"
+            "  }\n"
+            "  k $p $SIG\n"
+            "  ;;\n"
+            "clean)\n"
+            "  rm -f $B.out $B.pid $B.ret $B.cwd $B.run $B.cmd $B.ctl\n"
+            "  ;;\n"
+            "esac\n"
+        )
+        run = ""
+        if term["cwd"]:
+            run += "cd " + quote(term["cwd"]) + " 2>/dev/null\n"
+        run += "trap 'c=$?; pwd > " + b + ".cwd; echo $c > " + b + ".ret' EXIT\n"
+        if job.get("user"):
+            usr = job["user"]
+            run += "U=$(cat " + b + ".cmd)\n"
+            run += self.user_runner(usr)
+            user = ""
+            if term["cwd"]:
+                user += "cd " + quote(term["cwd"]) + " 2>/dev/null\n"
+            user += job["command"] + "\n"
+            user += "__r=$?\nprintf '@@DCWD@@%s\\n' \"$(pwd)\"\nexit $__r\n"
+        else:
+            run += ". " + b + ".cmd\n"
+            user = job["command"] + "\n"
+        return (
+            "echo " + self.encode(ctl) + " | base64 -d > " + b + ".ctl; "
+            + "echo " + self.encode(run) + " | base64 -d > " + b + ".run; "
+            + "echo " + self.encode(user) + " | base64 -d > " + b + ".cmd; "
+            + "sh " + b + ".ctl start"
+        )
+
+    def poll_command(self, job):
+        return "sh " + job["base"] + ".ctl poll " + str(job["offset"] + 1)
+
+    def signal_command(self, job, sig):
+        return "sh " + job["base"] + ".ctl kill " + str(sig)
+
+    def clean_command(self, job):
+        return "sh " + job["base"] + ".ctl clean"
+
+    def strip_marker(self, job, text):
+        match = MARKER.search(text)
+        if not match:
+            return text
+        job["ucwd"] = match.group(1).strip()
+        head = text[:match.start()]
+        tail = text[match.end():]
+        if head and not head.endswith("\n"):
+            head += "\n"
+        return head + tail
+
+    def note_output(self, job, text):
+        job["seen"] = (job["seen"] + text)[-20000:]
+
+    def job_main(self, term, job):
+        try:
+            raw = self.exec_raw(job["backend"], self.start_command(term, job))
+        except Exception as error:
+            self.end_job(term, job, "[ошибка: " + str(error) + "]\n")
+            return
+        started, _ = self.extract(raw)
+        started = self.strip_marker(job, started)
+        if started.strip():
+            self.note_output(job, clean(started))
+            self.append_output(term, clean(started).rstrip("\n") + "\n")
+            self.refresh()
+        while self.alive and term["job"] is job:
+            time.sleep(POLL_DELAY)
+            try:
+                raw = self.exec_raw(job["backend"], self.poll_command(job))
+            except Exception as error:
+                self.end_job(term, job, "[ошибка: " + str(error) + "]\n")
+                return
+            text, code = self.extract(raw)
+            head, _, body = text.partition("\n")
+            status = head.strip()
+            if status == "RUN":
+                cut = body.rfind("\n")
+                chunk = body[:cut + 1] if cut >= 0 else ""
+                if chunk:
+                    job["offset"] += chunk.count("\n")
+                    chunk = self.strip_marker(job, chunk)
+                    self.note_output(job, clean(chunk))
+                    self.append_output(term, clean(chunk))
+                    self.refresh()
+            elif status.startswith("DONE") or status == "DEAD":
+                body = self.strip_marker(job, body)
+                if body and not body.endswith("\n"):
+                    body += "\n"
+                self.note_output(job, clean(body))
+                self.append_output(term, clean(body))
+                self.finish_job(term, job, status)
+                return
+            else:
+                job["fails"] += 1
+                if job["fails"] >= 5:
+                    self.end_job(term, job, "[потеряна связь с процессом]\n")
+                    return
+
+    def finish_job(self, term, job, status):
+        message = ""
+        failed = True
+        code = ""
+        if status.startswith("DONE"):
+            parts = status.split(":", 2)
+            code = parts[1].strip() if len(parts) > 1 else "0"
+            path = parts[2].strip() if len(parts) > 2 else ""
+            if job.get("ucwd"):
+                term["cwd"] = job["ucwd"]
+            elif path:
+                term["cwd"] = path
+            failed = code not in ("", "0")
+        if job.get("user") and "su: не удалось войти" in job["seen"]:
+            term["user"] = ""
+            message += "[логин сброшен]\n"
+        if job["backend"] == "shizuku" and failed and ACCESS_DENIED.search(job["seen"]):
+            message += "[ошибка доступа]\n"
+        if status.startswith("DONE"):
+            if failed:
+                message += "[код выхода: " + code + "]\n"
+        else:
+            message += "[процесс прерван]\n"
+        self.end_job(term, job, message)
+
+    def end_job(self, term, job, message=""):
+        if message:
+            self.append_output(term, message)
+        if term["job"] is job:
+            term["job"] = None
+        try:
+            self.exec_raw(job["backend"], self.clean_command(job))
+        except Exception:
+            pass
+        self.refresh()
+
+    def send_signal(self, term, sig):
+        job = term["job"]
+        if not job:
+            return
+
+        def work():
+            try:
+                self.exec_raw(job["backend"], self.signal_command(job, sig))
+            except Exception as error:
+                self.append_output(term, "[ошибка: " + str(error) + "]\n")
+                self.refresh()
+
+        thread = threading.Thread(target=work)
+        thread.daemon = True
+        thread.start()
+
+    def key_ctrl_c(self):
+        term = self.cur()
+        if term["job"]:
+            self.append_output(term, "^C\n")
+            self.send_signal(term, 15)
+        else:
+            self.append_output(term, self.prompt(term) + term["command"] + "^C\n")
+            term["command"] = ""
+        self.refresh()
+
+    def key_ctrl_z(self):
+        term = self.cur()
+        if not term["job"]:
+            self.toast("Нет запущенного процесса")
+            return
+        term["job"]["paused"] = True
+        self.append_output(term, "^Z [остановлено, fg — продолжить]\n")
+        self.send_signal(term, 19)
+        self.refresh()
+
+    def key_fg(self):
+        term = self.cur()
+        if not term["job"]:
+            return
+        term["job"]["paused"] = False
+        self.append_output(term, "[продолжение]\n")
+        self.send_signal(term, 18)
+        self.refresh()
+
+    def key_kill(self):
+        term = self.cur()
+        if not term["job"]:
+            self.toast("Нет запущенного процесса")
+            return
+        self.append_output(term, "[kill -9]\n")
+        self.send_signal(term, 9)
+        self.refresh()
+
+    def key_clear_screen(self):
+        self.cur()["output"] = ""
+        self.refresh()
+
+    def key_clear_line(self):
+        self.cur()["command"] = ""
+        self.refresh()
+
+    def key_up(self):
+        term = self.cur()
+        pos = min(term["hist_pos"], len(self.history))
+        if pos > 0:
+            pos -= 1
+            term["command"] = self.history[pos]
+        term["hist_pos"] = pos
+        self.refresh()
+
+    def key_down(self):
+        term = self.cur()
+        pos = min(term["hist_pos"], len(self.history))
+        if pos < len(self.history) - 1:
+            pos += 1
+            term["command"] = self.history[pos]
+        else:
+            pos = len(self.history)
+            term["command"] = ""
+        term["hist_pos"] = pos
+        self.refresh()
+
+    def accent_color(self, fallback="muted"):
+        if self.rgb_on:
+            red, green, blue = colorsys.hsv_to_rgb(self.rgb_hue % 1.0, 0.6, 1.0)
+            return "#%02X%02X%02X" % (int(red * 255), int(green * 255), int(blue * 255))
+        if self.accent:
+            return self.accent
+        return fallback
+
+    def start_rgb(self):
+        if self.rgb_running:
+            return
+        self.rgb_running = True
+        thread = threading.Thread(target=self.rgb_loop)
+        thread.daemon = True
+        thread.start()
+
+    def rgb_loop(self):
+        while self.alive and self.rgb_on:
+            time.sleep(1.0)
+            self.rgb_hue = (self.rgb_hue + 0.05) % 1.0
+            try:
+                self.refresh()
+            except Exception:
+                pass
+        self.rgb_running = False
+
+    def set_accent(self, color):
+        def handler():
+            self.accent = color
+            self.rgb_on = False
+            self.set_setting("accent", color)
+            self.set_setting("rgb", False)
+            self.refresh()
+        return handler
+
+    def set_rgb(self, value):
+        self.rgb_on = bool(value)
+        self.set_setting("rgb", self.rgb_on)
+        if self.rgb_on:
+            self.start_rgb()
+        self.refresh()
+
+    def open_theme(self):
+        self.navigate("theme")
+
+    def screen_theme(self, ui, api, state):
+        chips = [
+            ui.chip(name, (not self.rgb_on) and self.accent == color, self.set_accent(color))
+            for name, color in PALETTE
+        ]
+        items = [
+            ui.text("Цвет текста и иконок плагина", "titleMedium", self.accent_color("primary")),
+            ui.text("Кнопки, карточки, фон и окно вывода задаёт само приложение, их цвет плагин менять не может.", "bodySmall", "muted"),
+            ui.lazy_row(chips[:4], spacing=8),
+            ui.lazy_row(chips[4:], spacing=8),
+            ui.switch(self.rgb_on, self.set_rgb, "RGB режим", "Цвет плавно переливается, страница обновляется раз в секунду"),
+            ui.spacer(height=96)
+        ]
+        return ui.scaffold(
+            title="Оформление",
+            content=ui.lazy_column(items, padding=12, spacing=10)
+        )
+
+    def copy_output(self):
+        text = self.cur()["output"]
+        if not text.strip():
+            self.toast("Вывод пуст")
+            return
+        try:
+            ok = self.api.getAndroid().clipboardSet(text)
+        except Exception:
+            ok = False
+        self.toast("Вывод скопирован" if ok else "Не удалось скопировать")
+
+    def paste_clipboard(self):
+        try:
+            text = self.api.getAndroid().clipboardGet()
+        except Exception:
+            text = ""
+        text = str(text or "").replace("\r", "")
+        lines = [line for line in text.split("\n") if line.strip()]
+        if not lines:
+            self.toast("Буфер обмена пуст")
+            return
+        term = self.cur()
+        term["command"] = term["command"] + lines[0]
+        if len(lines) > 1:
+            self.toast("Вставлена только первая строка")
+        self.refresh()
+
+    def share_output(self):
+        text = self.cur()["output"]
+        if not text.strip():
+            self.toast("Вывод пуст")
+            return
+        try:
+            self.api.getAndroid().shareText(text, "Вывод терминала")
+        except Exception as error:
+            self.toast("Ошибка: " + str(error))
+
+    def save_output(self):
+        text = self.cur()["output"]
+        if not text.strip():
+            self.toast("Вывод пуст")
+            return
+        path = "/sdcard/Download/terminal_" + time.strftime("%Y%m%d_%H%M%S") + ".txt"
+        try:
+            self.api.getAndroid().filesWrite(path, text, False)
+            self.toast("Сохранено: " + path)
+        except Exception as error:
+            self.toast("Ошибка: " + str(error))
+
+    def clear_history(self):
+        self.history = []
+        self.set_setting("history", self.history)
+        for term in self.terms:
+            term["hist_pos"] = 0
+        self.toast("История очищена")
+
+    def open_snippets(self):
+        self.navigate("snippets")
+
+    def use_snippet(self, command):
+        def handler():
+            self.cur()["command"] = command
+            self.toast("Команда вставлена, вернитесь назад")
+        return handler
+
+    def delete_snippet(self, command):
+        def handler():
+            if command in self.snippets:
+                self.snippets.remove(command)
+                self.set_setting("snippets", self.snippets)
+            self.refresh()
+        return handler
+
+    def save_snippet(self):
+        command = self.cur()["command"].strip()
+        if not command:
+            self.toast("Сначала введите команду в терминале")
+            return
+        if command in self.snippets:
+            self.toast("Такая команда уже сохранена")
+            return
+        if len(self.snippets) >= MAX_SNIPPETS:
+            self.toast("Максимум быстрых команд: " + str(MAX_SNIPPETS))
+            return
+        self.snippets.append(command)
+        self.set_setting("snippets", self.snippets)
+        self.refresh()
+
+    def screen_snippets(self, ui, api, state):
+        current = self.cur()["command"].strip()
+        items = [
+            ui.text("Нажмите на команду, чтобы вставить её в текущий терминал", "bodySmall", self.accent_color()),
+            ui.text("Сейчас в поле: " + (current if current else "пусто"), "bodySmall", "muted", 2),
+            ui.button("Сохранить команду из поля", self.save_snippet, style="tonal", fill_max_width=True)
+        ]
+        for command in self.snippets:
+            items.append(
+                ui.card([
+                    ui.row([
+                        ui.text(command, "bodyMedium", None, 2),
+                        ui.icon_button("delete", self.delete_snippet(command))
+                    ], spacing=8)
+                ], padding=8, on_click=self.use_snippet(command))
+            )
+        if not self.snippets:
+            items.append(ui.text("Список пуст", "bodyMedium", "muted"))
+        items.append(ui.spacer(height=96))
+        return ui.scaffold(
+            title="Быстрые команды",
+            content=ui.lazy_column(items, padding=12, spacing=8)
+        )
+
+    def htop_check(self, term):
+        backend, error = self.resolve_backend(term)
+        if backend is None:
+            return None, str(error)
+        return backend, ""
+
+    def htop_button(self, ui, term):
+        return [ui.button("htop", self.open_htop, style="tonal")]
+
+    def open_htop(self):
+        term = self.cur()
+        self.detect()
+        backend, error = self.htop_check(term)
+        if backend is None:
+            self.toast(error)
+            return
+        self.start_htop(backend, term.get("user") or "")
+
+    def is_app_user(self, user):
+        if not user:
+            return False
+        if APP_USER.match(user):
+            return True
+        if user.isdigit():
+            return int(user) % 100000 >= 10000
+        return False
+
+    def start_htop(self, backend, user=""):
+        self.htop["backend"] = backend
+        self.htop["user"] = user
+        self.htop["scope"] = "user" if self.is_app_user(user) else "all"
+        self.htop["auto"] = False
+        self.htop["seen"] = time.time()
+        self.htop["rows"] = []
+        self.htop["text"] = ""
+        self.htop["summary"] = ""
+        self.htop_refresh_now()
+        self.navigate("htop")
+
+    def ensure_htop_loop(self):
+        if self.htop_running:
+            return
+        self.htop_running = True
+        thread = threading.Thread(target=self.htop_loop)
+        thread.daemon = True
+        thread.start()
+
+    def htop_loop(self):
+        try:
+            while self.alive and self.htop["auto"]:
+                if time.time() - self.htop["seen"] > 8:
+                    self.htop["auto"] = False
+                    break
+                self.htop_fetch()
+                try:
+                    self.refresh()
+                except Exception:
+                    pass
+                time.sleep(3.0)
+        finally:
+            self.htop_running = False
+
+    def htop_refresh_now(self):
+        def work():
+            self.htop_fetch()
+            try:
+                self.refresh()
+            except Exception:
+                pass
+
+        thread = threading.Thread(target=work)
+        thread.daemon = True
+        thread.start()
+
+    def htop_fetch(self):
+        h = self.htop
+        backend = h.get("backend")
+        if not backend:
+            return
+        cmd = (
+            "cat /proc/loadavg; "
+            "grep -E '^(MemTotal|MemAvailable|SwapTotal|SwapFree):' /proc/meminfo; "
+            "echo @@PS; "
+            "ps -A -o PID,USER,%CPU,%MEM,RSS,S,NAME 2>/dev/null || ps -A"
+        )
+        try:
+            list_user = (h.get("user") or "") if h.get("scope") == "user" else ""
+            raw = self.run_as(backend, list_user, cmd)
+            text, _ = self.extract(raw)
+        except Exception as error:
+            h["summary"] = "Ошибка: " + str(error)
+            return
+        head, _, body = str(text).partition("@@PS")
+        load = ""
+        mem = {}
+        for line in head.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            if ":" in line:
+                key, _, val = line.partition(":")
+                parts = val.split()
+                try:
+                    mem[key.strip()] = int(parts[0])
+                except Exception:
+                    pass
+            elif not load:
+                load = " ".join(line.split()[:3])
+        rows = []
+        lines = body.strip().split("\n")
+        for line in lines[1:]:
+            parts = line.split(None, 6)
+            if len(parts) < 7:
+                continue
+            try:
+                rows.append({
+                    "pid": int(parts[0]),
+                    "user": parts[1],
+                    "cpu": float(parts[2].replace(",", ".")),
+                    "mem": float(parts[3].replace(",", ".")),
+                    "rss": int(parts[4]),
+                    "state": parts[5],
+                    "name": parts[6].strip()
+                })
+            except Exception:
+                continue
+        h["rows"] = rows
+        h["raw"] = body.strip()[:3000] if not rows else ""
+        total = mem.get("MemTotal", 0)
+        avail = mem.get("MemAvailable", 0)
+        swap_total = mem.get("SwapTotal", 0)
+        swap_free = mem.get("SwapFree", 0)
+        summary = ""
+        if h.get("user"):
+            summary = "Пользователь: " + h["user"] + (" (список: все)" if h.get("scope") != "user" else " (список: как у него)") + "  |  "
+        summary += "Load: " + (load or "?")
+        if total:
+            summary += "  |  RAM: %.2f/%.2f ГБ" % ((total - avail) / 1048576.0, total / 1048576.0)
+        if swap_total:
+            summary += "  |  Swap: %.2f/%.2f ГБ" % ((swap_total - swap_free) / 1048576.0, swap_total / 1048576.0)
+        summary += "  |  Процессов: " + str(len(rows))
+        if backend == "shell":
+            summary += "  |  Обычный режим: видны не все процессы"
+        h["summary"] = summary
+        self.htop_render()
+
+    def htop_sorted(self):
+        rows = list(self.htop["rows"])
+        mode = self.htop["sort"]
+        if mode == "mem":
+            rows.sort(key=lambda r: (-r["mem"], -r["rss"]))
+        elif mode == "pid":
+            rows.sort(key=lambda r: r["pid"])
+        else:
+            rows.sort(key=lambda r: (-r["cpu"], -r["rss"]))
+        return rows
+
+    def htop_pick(self, pid):
+        def handler():
+            self.htop["pid"] = str(pid)
+            self.refresh()
+        return handler
+
+    def htop_render(self):
+        h = self.htop
+        rows = list(h["rows"])
+        if not rows:
+            h["text"] = h["raw"] or "Нет данных"
+            return
+        if h["sort"] == "mem":
+            rows.sort(key=lambda r: (-r["mem"], -r["rss"]))
+        elif h["sort"] == "pid":
+            rows.sort(key=lambda r: r["pid"])
+        else:
+            rows.sort(key=lambda r: (-r["cpu"], -r["rss"]))
+        out = ["%6s %-8s %5s %5s %6s S NAME" % ("PID", "USER", "CPU%", "MEM%", "RES")]
+        for row in rows[:40]:
+            out.append("%6d %-8s %5.1f %5.1f %5dM %s %s" % (
+                row["pid"], row["user"][:8], row["cpu"], row["mem"],
+                row["rss"] // 1024, row["state"][:1], row["name"][:24]
+            ))
+        h["text"] = "\n".join(out)
+
+    def htop_sort(self, mode):
+        def handler():
+            self.htop["sort"] = mode
+            self.htop_render()
+            self.refresh()
+        return handler
+
+    def htop_scope(self):
+        self.htop["scope"] = "user" if self.htop.get("scope") != "user" else "all"
+        self.htop_refresh_now()
+
+    def htop_auto(self):
+        self.htop["auto"] = not self.htop["auto"]
+        if self.htop["auto"]:
+            self.htop["seen"] = time.time()
+            self.ensure_htop_loop()
+        self.refresh()
+
+    def htop_pid_input(self, value):
+        self.htop["pid"] = str(value).strip()
+
+    def htop_kill(self, sig):
+        def handler():
+            pid = self.htop["pid"].strip()
+            if not pid.isdigit() or int(pid) < 2:
+                self.toast("Введите корректный PID")
+                return
+            backend = self.htop.get("backend")
+            if not backend:
+                return
+
+            def work():
+                try:
+                    raw = self.run_as(backend, self.htop.get("user") or "", "kill -" + str(sig) + " " + pid + " 2>&1; echo CODE:$?")
+                    text, _ = self.extract(raw)
+                    text = str(text).strip()
+                    if text.endswith("CODE:0"):
+                        self.toast("PID " + pid + ": сигнал " + str(sig) + " отправлен")
+                    else:
+                        self.toast("Ошибка: " + text.replace("CODE:", "код ")[:80])
+                except Exception as error:
+                    self.toast("Ошибка: " + str(error))
+
+            thread = threading.Thread(target=work)
+            thread.daemon = True
+            thread.start()
+        return handler
+
+    def screen_htop(self, ui, api, state):
+        self.htop["seen"] = time.time()
+        h = self.htop
+        auto = h["auto"]
+        items = [
+            ui.text(h["summary"] if h["summary"] else "Загрузка...", "bodySmall", self.accent_color()),
+            ui.lazy_row([
+                ui.chip("CPU", h["sort"] == "cpu", self.htop_sort("cpu")),
+                ui.chip("MEM", h["sort"] == "mem", self.htop_sort("mem")),
+                ui.chip("PID", h["sort"] == "pid", self.htop_sort("pid")),
+                ui.chip("Авто: вкл" if auto else "Авто: выкл", auto, self.htop_auto)
+            ], spacing=8),
+            ui.lazy_row(
+                [ui.button("Обновить", self.htop_refresh_now, style="filled")]
+                + (
+                    [ui.chip(
+                        "Список: как у " + h["user"] if h.get("scope") == "user" else "Список: все процессы",
+                        h.get("scope") == "user",
+                        self.htop_scope
+                    )]
+                    if h.get("user") else []
+                ),
+                spacing=8
+            ),
+            ui.text_field(h["pid"], self.htop_pid_input, label="PID (или нажмите на процесс)", single_line=True),
+            ui.lazy_row([
+                ui.button("Kill -15", self.htop_kill(15), style="tonal"),
+                ui.button("Kill -9", self.htop_kill(9), style="tonal")
+            ], spacing=8)
+        ]
+        rows = self.htop_sorted()
+        if not rows:
+            items.append(ui.text(h["raw"] if h["raw"] else "Загрузка...", "bodySmall", "muted"))
+        for row in rows:
+            selected = str(row["pid"]) == h["pid"]
+            color = self.accent_color("primary") if selected else None
+            info = "PID %d  |  %s  |  CPU %.1f%%  |  MEM %.1f%%  |  %d МБ  |  %s" % (
+                row["pid"], row["user"][:10], row["cpu"], row["mem"],
+                row["rss"] // 1024, row["state"][:1]
+            )
+            items.append(
+                ui.card([
+                    ui.text(row["name"][:40], "bodyMedium", color, 1),
+                    ui.text(info, "bodySmall", "muted", 2)
+                ], padding=8, on_click=self.htop_pick(row["pid"]))
+            )
+        items.append(ui.spacer(height=96))
+        return ui.scaffold(
+            title="htop",
+            content=ui.lazy_column(items, padding=12, spacing=6)
+        )
+
+    def screen_main(self, ui, api, state):
+        term = self.cur()
+        job = term["job"]
+
+        tabs = []
+        for index, item in enumerate(self.terms):
+            label = "Терминал " + str(index + 1) + (" ●" if item["job"] else "")
+            tabs.append(
+                ui.card([
+                    ui.row([
+                        ui.chip(label, index == self.active, self.select_term(index)),
+                        ui.icon_button("close", self.close_at(index))
+                    ], spacing=0, fill_max_width=False)
+                ], padding=0)
+            )
+        tabs.append(ui.chip("+", False, self.add_term))
+
+        mode_row = [
+            ui.button(mode, self.set_mode(mode), style="filled" if term["mode"] == mode else "tonal")
+            for mode in MODES
+        ]
+        mode_row.append(ui.icon_button("refresh", self.recheck))
+        top_items = [
+            ui.row(mode_row, spacing=8),
+            ui.text(self.status_text(term), "bodySmall", self.accent_color())
+        ]
+        if self.shizuku_ok and not self.shizuku_perm:
+            top_items.append(
+                ui.button("Запросить разрешение Shizuku", self.request_shizuku, style="tonal")
+            )
+
+        login_items = [
+            ui.text("Свой логин (нужен Root или Shizuku от root)", "titleSmall", self.accent_color()),
+            ui.text_field(term["login"], self.on_login_input, label="Логин", single_line=True, fill_max_width=False)
+        ]
+        login_buttons = [ui.button("Войти", self.apply_login, style="filled", enabled=self.can_su())]
+        if term.get("user"):
+            login_buttons.append(ui.button("Выйти", self.reset_login, style="tonal"))
+            login_items.append(ui.text("Сейчас: " + term["user"], "bodySmall", self.accent_color()))
+        login_items.append(ui.row(login_buttons, spacing=8))
+        if not self.can_su():
+            if self.shizuku_ok and self.shizuku_perm and self.shizuku_uid:
+                warn = "Shizuku запущен не от root: root и смена пользователя заблокированы"
+            else:
+                warn = "Нужен Root или Shizuku, запущенный от root"
+            login_items.append(ui.text(warn, "bodySmall", "error"))
+
+        keys = [
+            ui.button("Ctrl+C", self.key_ctrl_c, style="tonal"),
+            ui.button("Ctrl+Z", self.key_ctrl_z, style="tonal")
+        ]
+        if job and job["paused"]:
+            keys.append(ui.button("fg", self.key_fg, style="tonal"))
+        keys.extend([
+            ui.button("Kill -9", self.key_kill, style="tonal"),
+            ui.button("Ctrl+L", self.key_clear_screen, style="tonal"),
+            ui.button("Ctrl+U", self.key_clear_line, style="tonal")
+        ])
+
+        if job:
+            screen_text = term["output"]
+        else:
+            screen_text = term["output"] + self.prompt(term)
+
+        terminal = [
+            ui.log_panel(screen_text if screen_text else self.prompt(term), max_height=320)
+        ]
+        if job:
+            terminal.append(ui.wavy_progress())
+            terminal.append(ui.text("Выполняется. Ctrl+C останавливает процесс.", "bodySmall", self.accent_color()))
+        else:
+            terminal.append(
+                ui.text_field(term["command"], self.on_input, label=self.prompt(term), single_line=True)
+            )
+            terminal.append(
+                ui.lazy_row([ui.button("Исполнить", self.run_active, style="filled")] + self.htop_button(ui, term) + [
+                    ui.button("↑", self.key_up, style="tonal"),
+                    ui.button("↓", self.key_down, style="tonal"),
+                    ui.button("Копировать", self.copy_output, style="tonal"),
+                    ui.button("Вставить", self.paste_clipboard, style="tonal"),
+                    ui.button("Поделиться", self.share_output, style="tonal"),
+                    ui.button("Быстрые", self.open_snippets, style="tonal"),
+                    ui.button("В файл", self.save_output, style="tonal"),
+                    ui.button("Сброс истории", self.clear_history, style="tonal")
+                ], spacing=8)
+            )
+
+        children = [
+            ui.lazy_row(tabs, spacing=8),
+            ui.card(top_items, padding=12),
+            ui.card(login_items, padding=12),
+            ui.lazy_row(keys, spacing=8),
+            ui.card(terminal, padding=8),
+            ui.spacer(height=88)
+        ]
+        return ui.scaffold(
+            title="Smart Terminal",
+            actions=[ui.icon_button("palette", self.open_theme)],
+            content=ui.lazy_column(children, padding=12, spacing=10)
+        )
+
+    def on_plugin_unload(self):
+        self.alive = False
+        self.rgb_on = False
+        for term in self.terms:
+            job = term["job"]
+            if not job:
+                continue
+            try:
+                self.exec_raw(job["backend"], self.signal_command(job, 9))
+                self.exec_raw(job["backend"], self.clean_command(job))
+            except Exception:
+                pass
+            term["job"] = None
