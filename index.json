@@ -1,6 +1,6 @@
 {
   "format": "dolphy-plugins-v1",
-  "count": 1,
+  "count": 2,
   "plugins": [
     {
       "id": 1,
@@ -15,6 +15,20 @@
       "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/ble_scanner_dex_md3e/ble_scanner_dex_md3e.dolphyplugin",
       "post_url": "https://t.me/c/3966541757/20058",
       "updated_at": "2026-08-27 12:16:44"
+    },
+    {
+      "id": 2,
+      "name": "USB-C IR Backend",
+      "version": "1.0.4",
+      "author": "Pinaplast",
+      "description": {
+        "ru": "Отправляет штатные IR-сигналы через внешний USB-C IR-донгл, если он подключен. Плагин работает, но требует теста на разных устройствах; если вы смогли протестить его на своем устройстве, просьба отписать мне @Pinaplast457",
+        "en": "Sends standard IR signals via an external USB-C IR dongle if connected. The plugin works, but requires testing on different devices. If you've tested it on your device, please let me know @Pinaplast457"
+      },
+      "file": "plugins/usb_c_ir_backend/usb_c_ir_backend.dolphyplugin",
+      "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/usb_c_ir_backend/usb_c_ir_backend.dolphyplugin",
+      "post_url": "https://t.me/c/3966541757/20533",
+      "updated_at": "2026-08-28 08:53:03"
     }
   ]
 }
