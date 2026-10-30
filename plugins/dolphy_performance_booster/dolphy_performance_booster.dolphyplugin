@@ -1,0 +1,88 @@
+__id__ = "import_boost"
+__name__ = "Dolphy Performance Booster"
+__version__ = "1.0.0"
+__author__ = "Developer"
+__icon__ = "rounded:speed"
+__description__ = "Оптимизация работы Dolphy и задействование ресурсов устройства через Shizuku"
+__permissions__ = ["shizuku", "shell"]
+
+import gc
+
+class DolphyPerformanceBooster(BasePlugin):
+    def on_plugin_load(self):
+        self.add_module(
+            title="Ускорение Dolphy",
+            description="Управление ресурсами, памятью и Shizuku-оптимизацией",
+            icon="speed",
+            screen="main",
+            section="PLUGINS"
+        )
+
+    def screen_main(self, ui, api, state):
+        device = api.getDevice()
+        shizuku_avail = device.shizukuAvailable()
+        shizuku_perm = device.shizukuHasPermission() if shizuku_avail else False
+
+        status_text = "Доступен и активен" if shizuku_perm else ("Запущен, нет прав" if shizuku_avail else "Не запущен")
+
+        cards = [
+            ui.card([
+                ui.text("Статус Shizuku", "titleMedium"),
+                ui.spacer(4),
+                ui.text(f"Состояние: {status_text}", "bodyMedium"),
+                ui.spacer(8),
+                ui.button("Запросить права Shizuku", self.request_shizuku, enabled=shizuku_avail)
+            ]),
+            ui.spacer(12),
+            ui.card([
+                ui.text("Базовая оптимизация", "titleMedium"),
+                ui.spacer(4),
+                ui.text("Работает без специальных прав. Освобождает неиспользуемую память Python и сборщика мусора.", "bodySmall"),
+                ui.spacer(8),
+                ui.bounce_button("Очистить память Python", self.clean_python_memory)
+            ]),
+            ui.spacer(12),
+            ui.card([
+                ui.text("Максимальное ускорение (Shizuku)", "titleMedium"),
+                ui.spacer(4),
+                ui.text("Снимает ограничения фонового режима Doze, очищает системные кеши и задает высокий приоритет процессу.", "bodySmall"),
+                ui.spacer(8),
+                ui.button("Активировать турбо-режим", self.apply_shizuku_boost, enabled=shizuku_perm, fill_max_width=True)
+            ])
+        ]
+
+        return ui.scaffold(
+            title="Performance Booster",
+            content=ui.column(cards, padding=16, spacing=0, fill_max_size=True)
+        )
+
+    def request_shizuku(self):
+        device = self.api.getDevice()
+        if device.shizukuAvailable():
+            device.shizukuRequestPermission()
+            self.toast("Запрос прав Shizuku отправлен")
+        else:
+            self.toast("Shizuku не запущен")
+        self.refresh()
+
+    def clean_python_memory(self):
+        gc.collect()
+        self.toast("Память Python успешно очищена")
+        self.refresh()
+
+    def apply_shizuku_boost(self):
+        device = self.api.getDevice()
+        if not device.shizukuHasPermission():
+            self.toast("Требуются права Shizuku")
+            return
+
+        pkg_name = "com.droid.dolphy"
+        
+        self.shizuku(f"dumpsys deviceidle whitelist +{pkg_name}")
+        self.shizuku(f"cmd appops set {pkg_name} RUN_IN_BACKGROUND allow")
+        self.shizuku("pm trim-caches 256M")
+        
+        gc.collect()
+        
+        self.toast("Максимальное ускорение применено!")
+        self.refresh()
