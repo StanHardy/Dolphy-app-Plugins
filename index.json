@@ -1,6 +1,6 @@
 {
   "format": "dolphy-plugins-v1",
-  "count": 15,
+  "count": 16,
   "plugins": [
     {
       "id": 16,
@@ -197,6 +197,20 @@
       "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/wi_fi_info/wi_fi_info.dolphyplugin",
       "post_url": "https://t.me/c/3966541757/21197",
       "updated_at": "2026-08-30 13:03:01"
+    },
+    {
+      "id": 3,
+      "name": "WiFi Stresser",
+      "version": "3.0",
+      "author": "Pixel Floppa",
+      "description": {
+        "ru": "Аудит и стресс-тест Wi-Fi шлюзов: L4/L7 флуд (UDP, TCP, HTTP, Slowloris), обход WAF/Rate-limit и L2-скан. До 2048 потоков, автоопределение IP, живой счётчик пак/сек, пинг цели и журнал ошибок. Работает без Root (нужен только для L2).",
+        "en": "Audit & stress-test Wi-Fi gateways: L4/L7 flood (UDP, TCP, HTTP, Slowloris), WAF/rate-limit bypass, and L2 scan. Up to 2048 threads, auto IP detection, live PPS counter, target ping, and error log. Works without Root (needed only for L2)."
+      },
+      "file": "plugins/wifi_stresser/wifi_stresser.dolphyplugin",
+      "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/wifi_stresser/wifi_stresser.dolphyplugin",
+      "post_url": "https://t.me/c/3966541757/28207",
+      "updated_at": "2026-10-01 04:46:31"
     },
     {
       "id": 12,
