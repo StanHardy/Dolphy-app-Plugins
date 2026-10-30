@@ -1,6 +1,6 @@
 {
   "format": "dolphy-plugins-v1",
-  "count": 19,
+  "count": 20,
   "plugins": [
     {
       "id": 16,
@@ -155,6 +155,20 @@
       "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/morse_code/morse_code.dolphyplugin",
       "post_url": "https://t.me/c/3966541757/29279",
       "updated_at": "2026-10-03 09:21:29"
+    },
+    {
+      "id": 15,
+      "name": "Smart Terminal",
+      "version": "1.12.2",
+      "author": "@dzemikreal",
+      "description": {
+        "ru": "Умный терминал для выполнения команд Android прямо в Dolphy. Поддержка Root и Shizuku, несколько терминалов, живой вывод команд и управление запущенными процессами.\nДо 8 терминалов одновременно, история команд, сохранение рабочей директории, переключение Root/Shizuku, остановка и управление процессами.",
+        "en": "A smart terminal for executing Android commands directly in Dolphy. Supports Root and Shizuku, multiple terminals, live command output, and running process management.\n\nUp to 8 terminals simultaneously, command history, working directory persistence, Root/Shizuku switching, and process stopping and management."
+      },
+      "file": "plugins/smart_terminal/smart_terminal.dolphyplugin",
+      "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/smart_terminal/smart_terminal.dolphyplugin",
+      "post_url": "https://t.me/c/3966541757/30948",
+      "updated_at": "2026-10-05 13:09:15"
     },
     {
       "id": 18,
