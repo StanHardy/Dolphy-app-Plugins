@@ -1,5 +1,20 @@
 {
   "format": "dolphy-plugins-v1",
-  "count": 0,
-  "plugins": []
+  "count": 1,
+  "plugins": [
+    {
+      "id": 1,
+      "name": "BLE Scanner DEX MD3E",
+      "version": "1.0.0",
+      "author": "@its_droid",
+      "description": {
+        "ru": "Тестовый плагин с ble сканером и подробной информацией о найденных устройствах",
+        "en": "A test plugin with a BL scanner and detailed information about found devices."
+      },
+      "file": "plugins/ble_scanner_dex_md3e/ble_scanner_dex_md3e.dolphyplugin",
+      "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/ble_scanner_dex_md3e/ble_scanner_dex_md3e.dolphyplugin",
+      "post_url": "https://t.me/c/3966541757/20058",
+      "updated_at": "2026-08-27 12:16:44"
+    }
+  ]
 }
