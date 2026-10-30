@@ -1,6 +1,6 @@
 {
   "format": "dolphy-plugins-v1",
-  "count": 13,
+  "count": 14,
   "plugins": [
     {
       "id": 16,
@@ -99,6 +99,20 @@
       "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/hardware_status/hardware_status.dolphyplugin",
       "post_url": "https://t.me/c/3966541757/27020",
       "updated_at": "2026-09-27 12:38:57"
+    },
+    {
+      "id": 17,
+      "name": "iCloud Spoof",
+      "version": "1.0.0",
+      "author": "WinterBalls",
+      "description": {
+        "ru": "Улучшенный BLE-спам для iOS 17+ через iCloud и Nearby Info сервисы.",
+        "en": "Enhanced BLE spam for iOS 17+ via iCloud and Nearby Info services."
+      },
+      "file": "plugins/icloud_spoof/icloud_spoof.dolphyplugin",
+      "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/icloud_spoof/icloud_spoof.dolphyplugin",
+      "post_url": "https://t.me/c/3966541757/27874",
+      "updated_at": "2026-09-29 18:24:29"
     },
     {
       "id": 7,
