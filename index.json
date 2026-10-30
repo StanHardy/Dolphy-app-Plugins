@@ -1,6 +1,6 @@
 {
   "format": "dolphy-plugins-v1",
-  "count": 23,
+  "count": 24,
   "plugins": [
     {
       "id": 16,
@@ -85,6 +85,20 @@
       "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/ble_scanner_dex_md3e/ble_scanner_dex_md3e.dolphyplugin",
       "post_url": "https://t.me/c/3966541757/20058",
       "updated_at": "2026-08-27 12:16:44"
+    },
+    {
+      "id": 24,
+      "name": "BT PWN Lab",
+      "version": "4.3",
+      "author": "antimage",
+      "description": {
+        "ru": "Джемер, бле сканер, много уязвимостей используется, мой первый плагин, думаю дальше развивать, там все вайб код, но я проверял, нормально вроде. ТРЕБУЕТСЯ: АНДРОИД 13, РУТ, БЛЮТУЗ++ МОДУЛЬ",
+        "en": "Jammer, BLE scanner, many exploits/CVE are used. This is my first plugin and I plan to develop it further. It's pure vibe code, but I've tested it and everything works fine. REQUIREMENTS: ANDROID 13, ROOT, BLUETOOTH++ MODULE (BlueZ tools)."
+      },
+      "file": "plugins/bt_pwn_lab/bt_pwn_lab.dolphyplugin",
+      "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/bt_pwn_lab/bt_pwn_lab.dolphyplugin",
+      "post_url": "https://t.me/c/3966541757/34342",
+      "updated_at": "2026-10-16 04:43:38"
     },
     {
       "id": 6,
