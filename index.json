@@ -1,6 +1,6 @@
 {
   "format": "dolphy-plugins-v1",
-  "count": 20,
+  "count": 21,
   "plugins": [
     {
       "id": 16,
@@ -57,6 +57,20 @@
       "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/ble_guard/ble_guard.dolphyplugin",
       "post_url": "https://t.me/c/3966541757/26832",
       "updated_at": "2026-09-25 22:01:33"
+    },
+    {
+      "id": 23,
+      "name": "BLE Radar Locator",
+      "version": "1.5.3",
+      "author": "@Da_koroche",
+      "description": {
+        "ru": "BLE Radar Locator 1.5.3\nЧто нового:\n- компас: точки и роза крутятся вместе с телефоном\n- свип больше не дёргается при обновлении\n- фильтры, сортировка, CSV, логи\nРаньше был просто список, теперь реальный радар",
+        "en": "BLE Radar Locator 1.5.3\nWhat's new:\n- compass: dots and rose spin with your phone\n- sweep no longer jerks on refresh\n- filters, sorting, CSV, logs\nUsed to be just a list, now an actual radar"
+      },
+      "file": "plugins/ble_radar_locator/ble_radar_locator.dolphyplugin",
+      "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/ble_radar_locator/ble_radar_locator.dolphyplugin",
+      "post_url": "https://t.me/c/3966541757/31450",
+      "updated_at": "2026-10-07 02:26:07"
     },
     {
       "id": 1,
