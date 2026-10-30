@@ -1,6 +1,6 @@
 {
   "format": "dolphy-plugins-v1",
-  "count": 9,
+  "count": 10,
   "plugins": [
     {
       "id": 8,
@@ -127,6 +127,20 @@
       "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/wi_fi_info/wi_fi_info.dolphyplugin",
       "post_url": "https://t.me/c/3966541757/21197",
       "updated_at": "2026-08-30 13:03:01"
+    },
+    {
+      "id": 12,
+      "name": "Металлоискатель",
+      "version": "1.0.4",
+      "author": "@DobryyPIRATIK",
+      "description": {
+        "ru": "Металлоискатель для Dolphy @DobryyPIRATIK\n\nДетектор металла на магнитном сенсоре. Точное поле в мкТл, калибровка в одно нажатие, регулируемый порог. Чем ближе цель — тем чаще и громче треск. Вибрация.\n\nПоиск проводки и труб в стенах, монет, гвоздей, проверка сумок и мебели.\n\nСтарт → Калибровка → медленно ведите к цели.",
+        "en": "Metal Detector for Dolphy @DobryyPIRATIK\n\nMetal detector using magnetic sensor. Accurate field in µT, one-tap calibration, adjustable threshold. Closer target — faster and louder clicks. Vibration.\n\nFind wiring and pipes in walls, metal coins, nails, check bags and furniture.\n\nStart → Calibrate → slowly move to target."
+      },
+      "file": "plugins/metalloiskatel/metalloiskatel.dolphyplugin",
+      "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/metalloiskatel/metalloiskatel.dolphyplugin",
+      "post_url": "https://t.me/c/3966541757/26999",
+      "updated_at": "2026-09-27 06:02:51"
     }
   ]
 }
