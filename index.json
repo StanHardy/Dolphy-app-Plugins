@@ -1,6 +1,6 @@
 {
   "format": "dolphy-plugins-v1",
-  "count": 11,
+  "count": 12,
   "plugins": [
     {
       "id": 8,
@@ -71,6 +71,20 @@
       "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/dolphy_performance_booster/dolphy_performance_booster.dolphyplugin",
       "post_url": "https://t.me/c/3966541757/27000",
       "updated_at": "2026-09-27 06:03:04"
+    },
+    {
+      "id": 14,
+      "name": "Hardware Status",
+      "version": "1.4",
+      "author": "Bluemod",
+      "description": {
+        "ru": "Проверка  NFC ble ик gps",
+        "en": "NFC ble IR  GPS check"
+      },
+      "file": "plugins/hardware_status/hardware_status.dolphyplugin",
+      "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/hardware_status/hardware_status.dolphyplugin",
+      "post_url": "https://t.me/c/3966541757/27020",
+      "updated_at": "2026-09-27 12:38:57"
     },
     {
       "id": 7,
