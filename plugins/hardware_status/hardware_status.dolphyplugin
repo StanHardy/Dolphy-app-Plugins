@@ -1,0 +1,241 @@
+__id__ = "hw_status_checker"
+__name__ = "Hardware Status"
+__version__ = "1.4"
+__author__ = "Bluemod"
+__icon__ = "rounded:memory"
+__description__ = "Проверка состояния NFC, GPS, Wi-Fi, Bluetooth LE/Classic, Wi-Fi Direct, USB, камеры, Root, ИК-передатчика и версии Android"
+__permissions__ = ["nfc", "location", "bluetooth", "wifi", "usb", "camera", "root", "infrared"]
+
+import json
+
+class HardwareStatus(BasePlugin):
+    def on_plugin_load(self):
+        self.add_module(
+            title="Hardware Status",
+            description="NFC, GPS, Wi-Fi, BLE, Root и другое",
+            icon="memory",
+            screen="main",
+            section="PLUGINS"
+        )
+
+    def to_bool(self, value):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            v = value.strip().lower()
+            if v in ("false", "0", "null", "none", ""):
+                return False
+            if v in ("true", "1"):
+                return True
+            try:
+                parsed = json.loads(v)
+                return self.to_bool(parsed)
+            except Exception:
+                return bool(v)
+        return bool(value)
+
+    def get_nfc_status(self):
+        try:
+            data = json.loads(self.api.getDevice().nfcCapabilitiesJson())
+            available = self.to_bool(data.get("available", False))
+            enabled = self.to_bool(data.get("enabled", False))
+        except Exception:
+            available = False
+            enabled = False
+        return available, enabled
+
+    def get_gps_status(self):
+        try:
+            return self.to_bool(self.api.getAndroid().locationIsEnabled())
+        except Exception:
+            return False
+
+    def get_wifi_status(self):
+        try:
+            return self.to_bool(self.api.getAndroid().wifiIsEnabled())
+        except Exception:
+            return False
+
+    def get_bt_enabled(self):
+        try:
+            return self.to_bool(self.api.getAndroid().btIsEnabled())
+        except Exception:
+            return False
+
+    def get_ble_status(self, bt_enabled):
+        android = self.api.getAndroid()
+        try:
+            scanner = self.to_bool(android.btLeScannerAvailable())
+        except Exception:
+            scanner = False
+        try:
+            advertiser = self.to_bool(android.btLeAdvertiserAvailable())
+        except Exception:
+            advertiser = False
+        return bt_enabled and (scanner or advertiser)
+
+    def get_wifi_direct_status(self):
+        try:
+            return self.to_bool(self.api.getAndroid().wifiIsP2pSupported())
+        except Exception:
+            return False
+
+    def get_usb_status(self):
+        try:
+            return self.to_bool(self.api.getAndroid().hasFeature("android.hardware.usb.host"))
+        except Exception:
+            return False
+
+    def get_camera_status(self):
+        try:
+            return self.to_bool(self.api.getAndroid().hasCamera())
+        except Exception:
+            return False
+
+    def get_root_status(self):
+        try:
+            return self.to_bool(self.api.getDevice().rootAvailable())
+        except Exception:
+            return False
+
+    def get_ir_status(self):
+        try:
+            return self.to_bool(self.api.getAndroid().irHasEmitter())
+        except Exception:
+            return False
+
+    def get_android_version_info(self):
+        release = None
+        sdk = None
+        release_keys = ("androidVersion", "osVersion", "release", "versionRelease", "android_release")
+        sdk_keys = ("sdkInt", "apiLevel", "sdk", "api_level")
+
+        def scan(data):
+            found_release = None
+            found_sdk = None
+            for key in release_keys:
+                if key in data and data.get(key):
+                    found_release = str(data.get(key))
+                    break
+            for key in sdk_keys:
+                if key in data and data.get(key):
+                    found_sdk = str(data.get(key))
+                    break
+            return found_release, found_sdk
+
+        try:
+            data = json.loads(self.api.getAndroid().deviceInfoExtendedJson())
+            release, sdk = scan(data)
+        except Exception:
+            pass
+
+        if release is None and sdk is None:
+            try:
+                data = json.loads(self.api.getDevice().deviceInfoJson())
+                release, sdk = scan(data)
+            except Exception:
+                pass
+
+        return release, sdk
+
+    def status_card(self, ui, icon, title, ok, ok_text, fail_text):
+        return ui.card([
+            ui.row([
+                ui.icon(icon, size=28, tint="success" if ok else "error"),
+                ui.column([
+                    ui.text(title, "titleMedium"),
+                    ui.text(ok_text if ok else fail_text, "bodyMedium", color="muted")
+                ], spacing=2)
+            ], spacing=12)
+        ])
+
+    def screen_main(self, ui, api, state):
+        nfc_available, nfc_enabled = self.get_nfc_status()
+        gps_enabled = self.get_gps_status()
+        wifi_enabled = self.get_wifi_status()
+        bt_enabled = self.get_bt_enabled()
+        ble_ok = self.get_ble_status(bt_enabled)
+        wifi_direct_ok = self.get_wifi_direct_status()
+        usb_ok = self.get_usb_status()
+        camera_ok = self.get_camera_status()
+        root_ok = self.get_root_status()
+        ir_available = self.get_ir_status()
+        android_release, android_sdk = self.get_android_version_info()
+
+        return ui.scaffold(
+            title="Hardware Status",
+            content=ui.lazy_column([
+                self.status_card(
+                    ui, "android", "Android",
+                    android_release is not None,
+                    "Версия " + android_release + (" (API " + android_sdk + ")" if android_sdk else "") if android_release else "",
+                    "Не удалось определить версию"
+                ),
+                self.status_card(
+                    ui, "nfc", "NFC",
+                    nfc_available and nfc_enabled,
+                    "Доступен и включён",
+                    "Недоступен на устройстве" if not nfc_available else "Выключен"
+                ),
+                self.status_card(
+                    ui, "location_on", "GPS",
+                    gps_enabled,
+                    "Включён",
+                    "Выключен"
+                ),
+                self.status_card(
+                    ui, "wifi", "Wi-Fi",
+                    wifi_enabled,
+                    "Включён",
+                    "Выключен"
+                ),
+                self.status_card(
+                    ui, "bluetooth", "Bluetooth LE",
+                    ble_ok,
+                    "Доступен и включён",
+                    "Недоступен" if not bt_enabled else "Сканер BLE недоступен"
+                ),
+                self.status_card(
+                    ui, "bluetooth_connected", "Bluetooth Classic",
+                    bt_enabled,
+                    "Включён",
+                    "Выключен"
+                ),
+                self.status_card(
+                    ui, "wifi_tethering", "Wi-Fi Direct (P2P)",
+                    wifi_direct_ok,
+                    "Поддерживается",
+                    "Не поддерживается"
+                ),
+                self.status_card(
+                    ui, "usb", "USB",
+                    usb_ok,
+                    "Поддерживается (USB host)",
+                    "Не поддерживается"
+                ),
+                self.status_card(
+                    ui, "photo_camera", "Камера",
+                    camera_ok,
+                    "Доступна",
+                    "Недоступна"
+                ),
+                self.status_card(
+                    ui, "security", "Root",
+                    root_ok,
+                    "Доступен",
+                    "Недоступен"
+                ),
+                self.status_card(
+                    ui, "settings_remote", "ИК-передатчик",
+                    ir_available,
+                    "Доступен",
+                    "Недоступен на устройстве"
+                ),
+                ui.button("Обновить", self.on_refresh, style="filled", fill_max_width=True)
+            ], padding=16, spacing=12, fill_max_size=True)
+        )
+
+    def on_refresh(self):
+        self.refresh()
