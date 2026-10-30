@@ -1,6 +1,6 @@
 {
   "format": "dolphy-plugins-v1",
-  "count": 16,
+  "count": 17,
   "plugins": [
     {
       "id": 16,
@@ -29,6 +29,20 @@
       "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/battery_level_changer_gps_spoofer/battery_level_changer_gps_spoofer.dolphyplugin",
       "post_url": "https://t.me/c/3966541757/23929",
       "updated_at": "2026-09-16 13:53:59"
+    },
+    {
+      "id": 20,
+      "name": "Battery Visual",
+      "version": "1.1",
+      "author": "@aowahub",
+      "description": {
+        "ru": "Battery Visual — плагин для DOLPHY, позволяющий через Shizuku визуально устанавливать процент батареи от 0% до 100% и возвращать реальное значение.",
+        "en": "Battery Visual – is a plugin for DOLPHY that allows you to visually set the battery percentage (from 0% to 100%) via Shizuku and revert to the actual value."
+      },
+      "file": "plugins/battery_visual/battery_visual.dolphyplugin",
+      "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/battery_visual/battery_visual.dolphyplugin",
+      "post_url": "https://t.me/c/3966541757/28274",
+      "updated_at": "2026-10-01 05:59:27"
     },
     {
       "id": 10,
