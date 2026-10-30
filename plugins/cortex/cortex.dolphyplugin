@@ -1,0 +1,202 @@
+__id__ = "cortex"
+__name__ = "Cortex"
+__version__ = "1.0.0"
+__author__ = "h3rovnik"
+__icon__ = "rounded:palette"
+__description__ = "Преобразователь текста в стилизованные шрифты"
+__permissions__ = []
+
+fonts = {
+  "Capital": {
+    'а':'ᴀ','б':'б','в':'ʙ','г':'ᴦ','д':'д','е':'ᴇ','ё':'ё',
+    'ж':'ж','з':'з','и':'и','й':'й','к':'ᴋ','л':'ᴧ','м':'ʍ',
+    'н':'н','о':'о','п':'ᴨ','р':'ᴩ','с':'ᴄ','т':'ᴛ','у':'у',
+    'ф':'ɸ','х':'х','ц':'ц','ч':'ч','ш':'ɯ','щ':'щ','ъ':'ъ',
+    'ы':'ы','ь':'ь','э':'϶','ю':'ю','я':'я',
+    'a':'ᴀ','b':'ʙ','c':'ᴄ','d':'ᴅ','e':'ᴇ','f':'ꜰ','g':'ɢ',
+    'h':'ʜ','i':'ɪ','j':'ᴊ','k':'ᴋ','l':'ʟ','m':'ᴍ','n':'ɴ',
+    'o':'ᴏ','p':'ᴘ','q':'ǫ','r':'ʀ','s':'s','t':'ᴛ','u':'ᴜ',
+    'v':'ᴠ','w':'ᴡ','x':'x','y':'ʏ','z':'ᴢ'
+  },
+  "Flowing": {
+    'а':'ᥲ','б':'ⳝ','в':'ⲃ','г':'𐔏','д':'ⲇ','е':'ᥱ','ё':'ᥱ',
+    'ж':'ⲿ','з':'ⳅ','и':'υ','й':'ύ','к':'ⲕ','л':'᥈','м':'ⲙ',
+    'н':'ⲏ','о':'𐔖','п':'ᥒ','р':'ρ','с':'ᥴ','т':'ⲧ','у':'𐔤',
+    'ф':'ⲫ','х':'ⲭ','ц':'ц','ч':'ɥ','ш':'ɯ','щ':'պ','ъ':'𐔊',
+    'ы':'ы','ь':'ь','э':'ⲉ','ю':'ю','я':'я',
+    'a':'ᥲ','b':'b','c':'ᥴ','d':'ᦔ','e':'ᥱ','f':'𐔥','g':'ⳋ',
+    'h':'h','i':'ι','j':'j','k':'k','l':'ᥣ','m':'ⲙ','n':'ᥒ',
+    'o':'𐔖','p':'ρ','q':'q','r':'r','s':'᥉','t':'t','u':'ᥙ',
+    'v':'᥎','w':'ᥕ','x':'᥊','y':'𐔤','z':'z'
+  },
+  "Coptic": {
+    'а':'ⲁ','б':'ⳝ','в':'ⲃ','г':'ⲅ','д':'ⲇ','е':'ⲉ','ё':'ⲉ',
+    'ж':'ⲿ','з':'ⳅ','и':'υ','й':'ύ','к':'ⲕ','л':'ⲗ','м':'ⲙ',
+    'н':'ⲏ','о':'ⲟ','п':'ⲡ','р':'ⲣ','с':'ⲥ','т':'ⲧ','у':'ⲩ',
+    'ф':'φ','х':'ⲭ','ц':'ⳡ','ч':'ɥ','ш':'ɯ','щ':'պ','ъ':'ъ',
+    'ы':'ы','ь':'ь','э':'ⲉ','ю':'ю','я':'я',
+    'a':'ⲁ','b':'ϭ','c':'ⲥ','d':'ⲇ','e':'ⲉ','f':'ғ','g':'ⳋ',
+    'h':'ⲏ','i':'ⲓ','j':'ᴊ','k':'ⲕ','l':'ⳑ','m':'ⲙ','n':'ⲛ',
+    'o':'ⲟ','p':'ⲣ','q':'q','r':'r','s':'s','t':'ⲧ','u':'υ',
+    'v':'ᴠ','w':'ⲱ','x':'ⲭ','y':'ⲩ','z':'ⲍ'
+  },
+  "Canada": {
+    'а':'ᗣ','б':'ᘜ','в':'ᙖ','г':'ᒋ','д':'ᗪ','е':'ᙓ','ё':'ᕧ',
+    'ж':'ᙧ','з':'ᙐ','и':'ᑌ','й':'ᕫ','к':'Ꮶ','л':'ᙁ','м':'ᗰ',
+    'н':'ᕼ','о':'ᗝ','п':'ᑎ','р':'ᖘ','с':'ᙅ','т':'ᙢ','у':'Ꮍ',
+    'ф':'ᙨ','х':'ⵋ','ц':'ᘈ','ч':'ᔦ','ш':'ᗯ','щ':'ᘺ','ъ':'ᕹ',
+    'ы':'ᕠ','ь':'ᖚ','э':'ᑓ','ю':'ᕡ','я':'ᖆ',
+    'a':'ᗣ','b':'ᙖ','c':'ᙅ','d':'ᙃ','e':'ᙓ','f':'ꘘ','g':'ᘜ',
+    'h':'ᕼ','i':'Ꙇ','j':'ᒍ','k':'К','l':'ᒐ','m':'ᙏ','n':'ᙁ',
+    'o':'O','p':'ᖘ','q':'Ҩ','r':'ᖇ','s':'ᔑ','t':'੮','u':'ᙀ',
+    'v':'ᘎ','w':'ᙎ','x':'X','y':'Ƴ','z':'Z'
+  },
+  "Gothic": {
+    'a':'𝕬','b':'𝕭','c':'𝕮','d':'𝕯','e':'𝕰','f':'𝕱','g':'𝕲',
+    'h':'𝕳','i':'𝕴','j':'𝕵','k':'𝕶','l':'𝕷','m':'𝕸','n':'𝕹',
+    'o':'𝕺','p':'𝕻','q':'𝕼','r':'𝕽','s':'𝕾','t':'𝕿','u':'𝖀',
+    'v':'𝖁','w':'𝖂','x':'𝖃','y':'𝖄','z':'𝖅'
+  },
+  "Greek": {
+    'а':'Α','б':'Β','в':'Γ','г':'Δ','д':'Ε','е':'Ζ','ё':'Η',
+    'ж':'Θ','з':'Ι','и':'Κ','й':'Λ','к':'Μ','л':'Ν','м':'Ξ',
+    'н':'Ο','о':'Π','п':'Ρ','р':'Σ','с':'Τ','т':'Υ','у':'Φ',
+    'ф':'Χ','х':'Ψ','ц':'Ω','ч':'Α','ш':'Β','щ':'Γ','ъ':'Δ',
+    'ы':'Ε','ь':'Ζ','э':'Η','ю':'Θ','я':'Ι',
+    'a':'Α','b':'Β','c':'Χ','d':'Δ','e':'Ε','f':'Φ','g':'Γ',
+    'h':'Η','i':'Ι','j':'Ι','k':'Κ','l':'Λ','m':'Μ','n':'Ν',
+    'o':'Ο','p':'Π','q':'Θ','r':'Ρ','s':'Σ','t':'Τ','u':'Υ',
+    'v':'V','w':'Ω','x':'Χ','y':'Υ','z':'Ζ'
+  },
+  "Chinese": {
+    'а':'丹','б':'万','в':'乃','г':'厂','д':'冎','е':'仨','ё':'仨',
+    'ж':'水','з':'弓','и':'丩','й':'以','к':'⻓','л':'入','м':'从',
+    'н':'什','о':'口','п':'丌','р':'尸','с':'仁','т':'丁','у':'丫',
+    'ф':'中','х':'乂','ц':'㇉','ч':'나','ш':'山','щ':'山','ъ':'⻜',
+    'ы':'⻜|','ь':'⻜','э':'彐','ю':'扣','я':'牙',
+    'a':'刄','b':'乃','c':'匚','d':'冂','e':'㠪','f':'乇','g':'彑',
+    'h':'卄','i':'エ','j':'丿','k':'片','l':'し','m':'冊','n':'力',
+    'o':'口','p':'戶','q':'디','r':'尺','s':'丂','t':'匕','u':'나',
+    'v':'ᜠ','w':'丗','x':'义','y':'ソ','z':'之'
+  },
+  "Runes": {
+    'a':'ᚣ','b':'ᛒ','c':'ᛈ','d':'ᚦ','e':'ᛊ','f':'ᚪ','g':'ᛩ',
+    'h':'ᚺ','i':'ᛙ','j':'ᛇ','k':'ᛕ','l':'ᚳ','m':'ᛖ','n':'ᚻ',
+    'o':'ᛜ','p':'ᚹ','q':'ᛟ','r':'ᚱ','s':'ᛢ','t':'ᛠ','u':'ᛋ',
+    'v':'ᚴ','w':'ᛞ','x':'ᚷ','y':'ᛉ','z':'ᛪ'
+  },
+  "Ethiopia": {
+    'а':'ል','б':'ፔ','в':'ፎ','г':'ና','д':'ሏ','е':'ይ','ё':'ይ',
+    'ж':'ሦ','з':'ን','и':'ሀ','й':'ህ','к':'ኸ','л':'በ','м':'ጠ',
+    'н':'ዘ','о':'ዐ','п':'ከ','р':'የ','с':'ር','т':'ፐ','у':'ነ',
+    'ф':'ዋ','х':'ጰ','ц':'ህ','ч':'ሃ','ш':'ሠ','щ':'ሡ','ъ':'ፘ',
+    'ы':'ፊ','ь':'ሪ','э':'ጓ','ю':'ሬ','я':'ጸ',
+    'a':'a','b':'b','c':'c','d':'d','e':'e','f':'f','g':'g',
+    'h':'h','i':'i','j':'j','k':'k','l':'l','m':'m','n':'n',
+    'o':'o','p':'p','q':'q','r':'r','s':'s','t':'t','u':'u',
+    'v':'v','w':'w','x':'x','y':'y','z':'z'
+  }
+}
+
+class Cortex(BasePlugin):
+    def on_plugin_load(self):
+        self.add_module(
+            title="Cortex",
+            description="Created by h3rovnik",
+            icon="palette",
+            screen="main",
+            section="PLUGINS"
+        )
+        self.input_text = ""
+        self.output_text = ""
+        self.active_font = "Capital"
+
+    def _transform_text(self, text, font_name):
+        if not text:
+            return ""
+        mapping = fonts.get(font_name, fonts["Capital"])
+        result = []
+        for ch in text:
+            lower = ch.lower()
+            if lower in mapping:
+                result.append(mapping[lower])
+            else:
+                result.append(ch)
+        return "".join(result)
+
+    def _get_font_display(self, font_name):
+        mapping = fonts.get(font_name, fonts["Capital"])
+        result = []
+        for ch in font_name:
+            lower = ch.lower()
+            if lower in mapping:
+                result.append(mapping[lower])
+            else:
+                result.append(ch)
+        return "".join(result)
+
+    def screen_main(self, ui, api, state):
+        if state is None:
+            state = {}
+        self.input_text = state.get("input", self.input_text)
+        self.output_text = state.get("output", self.output_text)
+        self.active_font = state.get("active_font", self.active_font)
+
+        def update_input(new_text):
+            self.input_text = new_text
+            self.output_text = self._transform_text(new_text, self.active_font)
+            self.refresh()
+
+        def set_font(font_name):
+            self.active_font = font_name
+            self.output_text = self._transform_text(self.input_text, font_name)
+            self.refresh()
+
+        def copy_output():
+            if self.output_text:
+                api.getAndroid().clipboardSet(self.output_text)
+                self.toast("Скопировано")
+            else:
+                self.toast("Нет текста")
+
+        def clear_all():
+            self.input_text = ""
+            self.output_text = ""
+            self.refresh()
+
+        items = []
+
+        row1 = ui.row([
+            ui.button(self._get_font_display("Capital"), on_click=lambda: set_font("Capital"), style="filled" if self.active_font == "Capital" else "outlined"),
+            ui.button(self._get_font_display("Flowing"), on_click=lambda: set_font("Flowing"), style="filled" if self.active_font == "Flowing" else "outlined"),
+            ui.button(self._get_font_display("Coptic"), on_click=lambda: set_font("Coptic"), style="filled" if self.active_font == "Coptic" else "outlined")
+        ], spacing=4)
+        items.append(row1)
+
+        row2 = ui.row([
+            ui.button(self._get_font_display("Canada"), on_click=lambda: set_font("Canada"), style="filled" if self.active_font == "Canada" else "outlined"),
+            ui.button(self._get_font_display("Gothic"), on_click=lambda: set_font("Gothic"), style="filled" if self.active_font == "Gothic" else "outlined"),
+            ui.button(self._get_font_display("Greek"), on_click=lambda: set_font("Greek"), style="filled" if self.active_font == "Greek" else "outlined")
+        ], spacing=4)
+        items.append(row2)
+
+        row3 = ui.row([
+            ui.button(self._get_font_display("Chinese"), on_click=lambda: set_font("Chinese"), style="filled" if self.active_font == "Chinese" else "outlined"),
+            ui.button(self._get_font_display("Runes"), on_click=lambda: set_font("Runes"), style="filled" if self.active_font == "Runes" else "outlined"),
+            ui.button(self._get_font_display("Ethiopia"), on_click=lambda: set_font("Ethiopia"), style="filled" if self.active_font == "Ethiopia" else "outlined")
+        ], spacing=4)
+        items.append(row3)
+
+        items.append(ui.text_field(value=self.input_text, label="Введите текст", on_change=update_input))
+
+        items.append(ui.text(self.output_text if self.output_text else "Преобразованный текст", style="bodyMedium"))
+
+        items.append(ui.row([
+            ui.button("Копировать", on_click=copy_output, style="text"),
+            ui.button("Очистить", on_click=clear_all, style="text")
+        ], spacing=8))
+
+        return ui.scaffold(
+            title="Cortex",
+            content=ui.column(items, padding=12, spacing=8)
+        )
