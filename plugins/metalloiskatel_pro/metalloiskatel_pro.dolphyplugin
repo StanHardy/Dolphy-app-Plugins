@@ -1,0 +1,739 @@
+__id__ = "metal_detector"
+__name__ = "Металлоискатель PRO"
+__version__ = "2.0"
+__author__ = "@frostmench1k & @DobryyPIRATIK"
+__icon__ = "rounded:sensors"
+__description__ = "PRO радар металла, скрытой проводки и жучков с умной калибровкой"
+__permissions__ = []
+
+import json
+import math
+import threading
+import time
+from java import jclass, dynamic_proxy
+
+_SensorEventListener = jclass("android.hardware.SensorEventListener")
+_SensorManager = jclass("android.hardware.SensorManager")
+_Sensor = jclass("android.hardware.Sensor")
+
+
+class _MagneticListener(dynamic_proxy(_SensorEventListener)):
+    def __init__(self, plugin):
+        super().__init__()
+        self._plugin = plugin
+
+    def onSensorChanged(self, event):
+        try:
+            v = event.values
+            arr = [float(v[i]) for i in range(len(v))]
+        except Exception:
+            return
+        try:
+            self._plugin._on_values(arr)
+        except Exception:
+            pass
+
+    def onAccuracyChanged(self, sensor, accuracy):
+        try:
+            self._plugin._on_accuracy(int(accuracy))
+        except Exception:
+            pass
+
+
+class MetalDetectorPro(BasePlugin):
+    def on_plugin_load(self):
+        self._lock = threading.Lock()
+        self.running = False
+        self.paused = False
+        self.listener = None
+        self.sensor = None
+        self.sensor_manager = None
+        self.sensor_kind = "mag"
+        self.accuracy = 3
+        self.tab_index = 0
+
+        self.x = 0.0
+        self.y = 0.0
+        self.z = 0.0
+        self.base_x = 0.0
+        self.base_y = 0.0
+        self.base_z = 0.0
+
+        self.raw_magnitude = 0.0
+        self.magnitude = 0.0
+        self.prev_deviation = 0.0
+        self.trend = 0.0
+        self.max_magnitude = 0.0
+        self.min_magnitude = 9999.0
+        self.baseline = None
+        self.deviation = 0.0
+        self.signed_delta = 0.0
+        self.ac_level = 0.0
+        self.noise_floor = 0.8
+        self.hit_count = 0
+
+        self.calibrating = False
+        self.calib_samples = []
+        self.calib_target = 20
+
+        self.recent_samples = []
+        self.detected = False
+        self.history = []
+        self._last_ui_update = 0.0
+        self._last_log_time = 0.0
+
+        self.preset = str(self.get_setting("preset", "Обычный"))
+        self.threshold = float(self.get_setting("threshold", 15.0))
+        self.vibrate_enabled = bool(self.get_setting("vibrate", True))
+        self.sound_enabled = bool(self.get_setting("sound", False))
+        self.smooth_enabled = bool(self.get_setting("smooth", True))
+        self.wiring_mode = bool(self.get_setting("wiring_mode", False))
+        self.auto_zero = bool(self.get_setting("auto_zero", False))
+        self.notify_alert = bool(self.get_setting("notify_alert", False))
+
+        self._worker_thread = None
+        self._worker_stop = threading.Event()
+
+        self.add_module(
+            title="Металлоискатель PRO 2.0",
+            description="Металл, проводка и жучки | @frostmench1k",
+            icon="sensors",
+            screen="main",
+            section="PLUGINS"
+        )
+
+        self.api.registerSettings("Металлоискатель PRO 2.0", json.dumps([
+            {"type": "slider", "key": "threshold", "title": "Порог срабатывания (мкТл)",
+             "min": 2, "max": 150, "default": 15, "steps": 147},
+            {"type": "switch", "key": "vibrate", "title": "Тактильная вибрация (Гейгер)", "default": True},
+            {"type": "switch", "key": "sound", "title": "Звуковой радар", "default": False},
+            {"type": "switch", "key": "smooth", "title": "Фильтр шумов датчика", "default": True},
+            {"type": "switch", "key": "wiring_mode", "title": "Детектор скрытой проводки", "default": False},
+            {"type": "switch", "key": "auto_zero", "title": "Авто-подстройка фона", "default": False}
+        ]), 10)
+
+    def on_setting_changed(self, payload):
+        key = payload.get("key", "")
+        value = payload.get("value")
+        if key == "threshold":
+            self.threshold = max(2.0, float(value))
+        elif key == "vibrate":
+            self.vibrate_enabled = bool(value)
+        elif key == "sound":
+            self.sound_enabled = bool(value)
+        elif key == "smooth":
+            self.smooth_enabled = bool(value)
+        elif key == "wiring_mode":
+            self.wiring_mode = bool(value)
+        elif key == "auto_zero":
+            self.auto_zero = bool(value)
+        self._sync_worker()
+        self.refresh()
+
+    def on_plugin_disable(self):
+        self.stop_scan()
+
+    def on_plugin_unload(self):
+        self.stop_scan()
+
+    def _get_hot_cold_hint(self):
+        if not self.running or self.calibrating:
+            return "Ожидание сканирования..."
+        if self.paused:
+            return "Экран на паузе (Показания зафиксированы)"
+        if self.deviation < max(2.0, self.noise_floor * 1.5):
+            return "Спокойный магнитный фон"
+        if self.trend > 0.6:
+            return "ГОРЯЧО: Вы приближаетесь к цели!"
+        if self.trend < -0.6:
+            return "ХОЛОДНО: Вы удаляетесь от цели"
+        return "Стабильное удержание над целью"
+
+    def _classify_target(self):
+        if not self.running:
+            return "Радар выключен", "muted", "Нажмите «Старт» для запуска датчика"
+        if self.paused:
+            return "ПАУЗА (HOLD)", "warning", "Нажмите на иконку паузы сверху для продолжения"
+        if self.calibrating:
+            pct = int((len(self.calib_samples) / max(self.calib_target, 1)) * 100)
+            return f"Калибровка нуля... {pct}%", "primary", "Не двигайте телефон и уберите металл"
+
+        if self.wiring_mode and self.ac_level >= 3.0:
+            return "Скрытая проводка / ЭМП 50 Гц!", "warning", "Обнаружено переменное электромагнитное поле"
+
+        if self.deviation < self.threshold * 0.45:
+            return "Чисто (Фоновая норма)", "success", self._get_hot_cold_hint()
+
+        polarity = "Северный (+N)" if self.signed_delta >= 0 else "Южный (-S)"
+        if self.deviation >= self.threshold * 4.0:
+            dist = "ВПЛОТНУЮ: Мощный магнит / Крупная сталь"
+            col = "error"
+        elif self.deviation >= self.threshold * 2.0:
+            dist = "БЛИЗКО: Чёрный металл / Арматура"
+            col = "error"
+        elif self.deviation >= self.threshold:
+            dist = "ОБНАРУЖЕНО: Металл или динамик"
+            col = "error"
+        else:
+            dist = "СЛАБЫЙ СИГНАЛ: Мелкий объект / Далеко"
+            col = "warning"
+
+        return dist, col, f"{self._get_hot_cold_hint()} | Полюс: {polarity}"
+
+    def _accuracy_label(self):
+        if self.accuracy >= 3:
+            return "Идеальная (3/3)", "success"
+        if self.accuracy == 2:
+            return "Нормальная (2/3)", "warning"
+        if self.accuracy == 1:
+            return "Низкая (1/3) — покрутите телефон восьмёркой!", "error"
+        return "Сбита (0/3) — требуется вращение восьмёркой!", "error"
+
+    def screen_main(self, ui, api, state):
+        status_title, status_color, status_sub = self._classify_target()
+        progress = min(self.deviation / max(self.threshold * 2.0, 1.0), 1.0)
+        pinpoint = min(self.deviation / max(self.threshold * 4.0, 1.0), 1.0)
+
+        top_actions = [
+            ui.top_action("pause" if not self.paused else "play_arrow", self.toggle_pause),
+            ui.top_action("my_location", self.start_smart_calibration),
+            ui.top_action("share", self.export_and_share_log)
+        ]
+
+        tabs = ui.tabs(
+            ["Радар", "Калибровка", "Спектр и Лог", "Опции"],
+            selected=self.tab_index,
+            on_select=self.select_tab
+        )
+
+        if self.tab_index == 0:
+            page = self._tab_radar(ui, status_title, status_color, status_sub, progress, pinpoint)
+        elif self.tab_index == 1:
+            page = self._tab_calibration(ui)
+        elif self.tab_index == 2:
+            page = self._tab_spectrum(ui)
+        else:
+            page = self._tab_options(ui)
+
+        return ui.scaffold(
+            title="Металлоискатель PRO 2.0",
+            actions=top_actions,
+            content=ui.column([
+                tabs,
+                page
+            ], padding=14, spacing=10, fill_max_size=True)
+        )
+
+    def _tab_radar(self, ui, status_title, status_color, status_sub, progress, pinpoint):
+        base_txt = "—" if self.baseline is None else f"{self.baseline:.1f}"
+        presets = ["Жучки", "Монеты", "Обычный", "Крупный", "Проводка"]
+
+        return ui.column([
+            ui.card([
+                ui.row([
+                    ui.column([
+                        ui.text(f"{self.magnitude:.1f} мкТл", "headlineLarge"),
+                        ui.text(status_title, "titleMedium", color=status_color),
+                        ui.text(status_sub, "bodySmall", color="muted")
+                    ]),
+                    ui.wavy_progress(progress=progress, size=80)
+                ], spacing=12),
+                ui.spacer(height=6),
+                ui.text("Уровень тревоги", "labelSmall", color="muted"),
+                ui.linear_progress(progress=progress, fill_max_width=True),
+                ui.spacer(height=4),
+                ui.text("Пинпоинтер (Точный эпицентр объекта)", "labelSmall", color="muted"),
+                ui.linear_progress(progress=pinpoint, fill_max_width=True)
+            ], padding=14),
+            ui.card([
+                ui.row([
+                    ui.column([
+                        ui.text("Отклонение", "labelSmall", color="muted"),
+                        ui.text(f"{self.signed_delta:+.1f}", "titleLarge",
+                                color="error" if self.detected else "primary")
+                    ]),
+                    ui.column([
+                        ui.text("База (0)", "labelSmall", color="muted"),
+                        ui.text(base_txt, "titleLarge")
+                    ]),
+                    ui.column([
+                        ui.text("Пик (Max)", "labelSmall", color="muted"),
+                        ui.text(f"{self.max_magnitude:.1f}", "titleLarge", color="warning")
+                    ]),
+                    ui.column([
+                        ui.text("Находок", "labelSmall", color="muted"),
+                        ui.text(f"{self.hit_count}", "titleLarge", color="success")
+                    ])
+                ], spacing=10),
+                ui.divider(),
+                ui.row([
+                    ui.text(f"Переменный фон AC: {self.ac_level:.2f} мкТл", "bodySmall",
+                            color="warning" if self.ac_level >= 3.0 else "muted"),
+                    ui.text(f"Порог: {self.threshold:.0f} мкТл", "bodySmall", color="primary")
+                ], spacing=8)
+            ], padding=14),
+            ui.button_group(presets, self.preset, self.select_preset),
+            ui.row([
+                ui.bounce_button("Стоп" if self.running else "Старт",
+                                 self.toggle_scan, fill_max_width=True),
+                ui.button("Точный 0", self.start_smart_calibration,
+                          style="outlined", fill_max_width=True)
+            ], spacing=8),
+            ui.text("Авторы: @frostmench1k & @DobryyPIRATIK | v2.0", "bodySmall", color="muted")
+        ], spacing=10)
+
+    def _tab_calibration(self, ui):
+        acc_text, acc_color = self._accuracy_label()
+        base_txt = "Не откалибровано" if self.baseline is None else f"{self.baseline:.2f} мкТл"
+        calib_progress = len(self.calib_samples) / max(float(self.calib_target), 1.0) if self.calibrating else 1.0
+
+        return ui.column([
+            ui.card([
+                ui.text("Мастер калибровки (Умный ноль)", "titleMedium"),
+                ui.text(f"Системная точность датчика: {acc_text}", "bodyMedium", color=acc_color),
+                ui.spacer(height=4),
+                ui.linear_progress(progress=calib_progress, fill_max_width=True),
+                ui.spacer(height=4),
+                ui.text(f"Базовый фон: {base_txt} | Шум: ±{self.noise_floor:.2f} мкТл", "bodySmall"),
+                ui.text(f"Вектор нуля X/Y/Z: {self.base_x:.1f} / {self.base_y:.1f} / {self.base_z:.1f}", "bodySmall", color="muted"),
+                ui.spacer(height=8),
+                ui.row([
+                    ui.button("Умная калибровка", self.start_smart_calibration, fill_max_width=True),
+                    ui.button("Сброс пика", self.reset_stats, style="outlined", fill_max_width=False)
+                ], spacing=8)
+            ], padding=14),
+            ui.card([
+                ui.text("Рекомендации по правильной калибровке", "titleMedium"),
+                ui.text("1. Снимите чехол с магнитным кольцом (MagSafe) или застёжкой — он завышает фон с 48 до 200+ мкТл.", "bodySmall"),
+                ui.text("2. Поднимите телефон в воздух вдали от столов с металлическими ножками, ноутбуков и розеток.", "bodySmall"),
+                ui.text("3. Плавно покрутите телефон в воздухе по траектории восьмёрки (∞) 4–5 раз с переворотом корпуса.", "bodySmall"),
+                ui.text("4. Во время поиска держите телефон под одним и тем же углом наклона (поворот телефона в пространстве меняет проекцию магнитного поля Земли на оси X/Y/Z).", "bodySmall"),
+                ui.spacer(height=4),
+                ui.switch(self.auto_zero, self.toggle_auto_zero,
+                          title="Авто-компенсация наклона",
+                          subtitle="Плавно подстраивать базу при медленном повороте рук")
+            ], padding=14)
+        ], spacing=10)
+
+    def _tab_spectrum(self, ui):
+        dx = self.x - self.base_x
+        dy = self.y - self.base_y
+        dz = self.z - self.base_z
+        px = min(abs(dx) / 100.0, 1.0)
+        py = min(abs(dy) / 100.0, 1.0)
+        pz = min(abs(dz) / 100.0, 1.0)
+        log_str = "\n".join(self.history) if self.history else "Находок пока нет. Нажмите «Старт» и наведите верхний край телефона на проверяемую поверхность."
+
+        return ui.column([
+            ui.card([
+                ui.text("3D-оси (Направление на цель)", "titleMedium"),
+                ui.text(f"Ось X (Боковая грань): {self.x:.1f} мкТл (Δ {dx:+.1f})", "bodySmall"),
+                ui.linear_progress(progress=px, fill_max_width=True),
+                ui.text(f"Ось Y (Верхний торец): {self.y:.1f} мкТл (Δ {dy:+.1f})", "bodySmall"),
+                ui.linear_progress(progress=py, fill_max_width=True),
+                ui.text(f"Ось Z (Спинка / Экран): {self.z:.1f} мкТл (Δ {dz:+.1f})", "bodySmall"),
+                ui.linear_progress(progress=pz, fill_max_width=True)
+            ], padding=14),
+            ui.card([
+                ui.row([
+                    ui.text(f"Журнал находок ({len(self.history)})", "titleMedium"),
+                    ui.button("Копировать", self.copy_report, style="outlined"),
+                    ui.button("Очистить", self.clear_history, style="outlined")
+                ], spacing=6),
+                ui.log_panel(log_str, max_height=150)
+            ], padding=14)
+        ], spacing=10)
+
+    def _tab_options(self, ui):
+        return ui.column([
+            ui.card([
+                ui.slider(self.threshold, self.set_threshold, 2, 150,
+                          f"Порог срабатывания: {self.threshold:.0f} мкТл", 147),
+                ui.switch(self.vibrate_enabled, self.toggle_vibrate,
+                          title="Тактильный Гейгер",
+                          subtitle="Частота и сила вибрации растут по мере приближения"),
+                ui.switch(self.sound_enabled, self.toggle_sound,
+                          title="Звуковой радар",
+                          subtitle="Тональный писк с ускорением"),
+                ui.switch(self.smooth_enabled, self.toggle_smooth,
+                          title="Сглаживание помех (Low-Pass)",
+                          subtitle="Отсекает случайные одиночные шумы сенсора"),
+                ui.switch(self.wiring_mode, self.toggle_wiring,
+                          title="Детектор скрытой проводки (50/60 Гц)",
+                          subtitle="Анализ высокочастотного дрожания магнитного поля"),
+                ui.switch(self.notify_alert, self.toggle_notify,
+                          title="Пуш-уведомления о находках",
+                          subtitle="Отправлять уведомление при мощном всплеске поля")
+            ], padding=12)
+        ], spacing=10)
+
+    def select_tab(self, idx):
+        self.tab_index = int(idx)
+        self.refresh()
+
+    def toggle_pause(self):
+        if not self.running:
+            self.toast("Сначала запустите сканирование")
+            return
+        self.paused = not self.paused
+        self.toast("Экран зафиксирован (Пауза)" if self.paused else "Сканирование продолжено")
+        self.refresh()
+
+    def select_preset(self, name):
+        self.preset = str(name)
+        self.set_setting("preset", self.preset)
+        if self.preset == "Жучки":
+            self.threshold = 6.0
+            self.wiring_mode = True
+        elif self.preset == "Монеты":
+            self.threshold = 9.0
+            self.wiring_mode = False
+        elif self.preset == "Обычный":
+            self.threshold = 15.0
+            self.wiring_mode = False
+        elif self.preset == "Крупный":
+            self.threshold = 35.0
+            self.wiring_mode = False
+        elif self.preset == "Проводка":
+            self.threshold = 12.0
+            self.wiring_mode = True
+
+        self.set_setting("threshold", self.threshold)
+        self.set_setting("wiring_mode", self.wiring_mode)
+        self.toast(f"Пресет «{self.preset}»: порог {self.threshold:.0f} мкТл")
+        self.refresh()
+
+    def toggle_scan(self):
+        if self.running:
+            self.stop_scan()
+        else:
+            self.start_scan()
+        self.refresh()
+
+    def start_scan(self):
+        with self._lock:
+            if self.running:
+                return
+            try:
+                sm = self.api.getContext().getSystemService("sensor")
+            except Exception:
+                sm = None
+            if sm is None:
+                self.toast("Служба датчиков недоступна")
+                return
+
+            sensor = sm.getDefaultSensor(_Sensor.TYPE_MAGNETIC_FIELD)
+            if sensor is not None:
+                self.sensor_kind = "mag"
+            else:
+                sensor = sm.getDefaultSensor(_Sensor.TYPE_PROXIMITY)
+                if sensor is not None:
+                    self.sensor_kind = "prox"
+                else:
+                    self.toast("Магнитометр не найден в устройстве")
+                    return
+
+            listener = _MagneticListener(self)
+            try:
+                ok = sm.registerListener(listener, sensor, _SensorManager.SENSOR_DELAY_GAME)
+            except Exception:
+                ok = False
+
+            if not ok:
+                self.toast("Ошибка подключения к магнитометру")
+                return
+
+            self.sensor_manager = sm
+            self.listener = listener
+            self.sensor = sensor
+            self.running = True
+            self.paused = False
+
+        self._sync_worker()
+
+    def stop_scan(self):
+        self._stop_worker()
+        with self._lock:
+            if self.sensor_manager is not None and self.listener is not None:
+                try:
+                    self.sensor_manager.unregisterListener(self.listener)
+                except Exception:
+                    pass
+            self.sensor_manager = None
+            self.listener = None
+            self.sensor = None
+            self.running = False
+            self.paused = False
+            self.detected = False
+            self.calibrating = False
+        try:
+            self.api.getAndroid().vibrateCancel()
+        except Exception:
+            pass
+
+    def start_smart_calibration(self):
+        if not self.running:
+            self.start_scan()
+        if not self.running:
+            return
+        self.paused = False
+        self.calib_samples = []
+        self.calibrating = True
+        self.toast("Калибровка нуля... Держите телефон ровно")
+        self.refresh()
+
+    def reset_stats(self):
+        self.max_magnitude = self.magnitude
+        self.min_magnitude = self.magnitude if self.magnitude > 0 else 9999.0
+        self.hit_count = 0
+        self.deviation = 0.0
+        self.detected = False
+        self.toast("Статистика и пики сброшены")
+        self.refresh()
+
+    def clear_history(self):
+        self.history = []
+        self.hit_count = 0
+        self.toast("Журнал очищен")
+        self.refresh()
+
+    def _build_report_text(self):
+        return (
+            f"Металлоискатель PRO v2.0 (@frostmench1k)\n"
+            f"Текущее поле: {self.magnitude:.1f} мкТл | База: {0.0 if self.baseline is None else self.baseline:.1f} мкТл\n"
+            f"Отклонение: {self.signed_delta:+.1f} мкТл | Максимум: {self.max_magnitude:.1f} мкТл\n"
+            f"Векторы X/Y/Z: {self.x:.1f} / {self.y:.1f} / {self.z:.1f}\n"
+            f"Пульсация AC: {self.ac_level:.2f} мкТл | Находок за сессию: {self.hit_count}\n"
+            f"Журнал срабатываний:\n" + ("\n".join(self.history[-20:]) if self.history else "Пусто")
+        )
+
+    def copy_report(self):
+        try:
+            self.api.getAndroid().clipboardSet(self._build_report_text())
+            self.toast("Отчёт скопирован в буфер обмена")
+        except Exception:
+            self.toast("Не удалось скопировать")
+
+    def export_and_share_log(self):
+        text = self._build_report_text()
+        try:
+            android = self.api.getAndroid()
+            android.filesWrite("metal_scan_report.txt", text, False)
+            android.shareText(text, "Отчёт Металлоискатель PRO 2.0")
+        except Exception:
+            self.copy_report()
+
+    def _on_accuracy(self, acc):
+        self.accuracy = acc
+
+    def _on_values(self, values):
+        if not values or not self.running or self.paused:
+            return
+        if self.sensor_kind == "mag" and len(values) >= 3:
+            rx, ry, rz = float(values[0]), float(values[1]), float(values[2])
+            raw = math.sqrt(rx * rx + ry * ry + rz * rz)
+        else:
+            rx, ry, rz = float(values[0]), 0.0, 0.0
+            raw = abs(rx)
+
+        self.raw_magnitude = raw
+
+        if self.magnitude == 0.0 or not self.smooth_enabled:
+            self.magnitude = raw
+            self.x, self.y, self.z = rx, ry, rz
+        else:
+            alpha = 0.28
+            self.magnitude = self.magnitude * (1.0 - alpha) + raw * alpha
+            self.x = self.x * (1.0 - alpha) + rx * alpha
+            self.y = self.y * (1.0 - alpha) + ry * alpha
+            self.z = self.z * (1.0 - alpha) + rz * alpha
+
+        if self.calibrating:
+            self.calib_samples.append((self.magnitude, self.x, self.y, self.z))
+            if len(self.calib_samples) >= self.calib_target:
+                cnt = float(len(self.calib_samples))
+                mags = [s[0] for s in self.calib_samples]
+                avg_mag = sum(mags) / cnt
+                self.baseline = avg_mag
+                self.base_x = sum(s[1] for s in self.calib_samples) / cnt
+                self.base_y = sum(s[2] for s in self.calib_samples) / cnt
+                self.base_z = sum(s[3] for s in self.calib_samples) / cnt
+                variance = sum((m - avg_mag) ** 2 for m in mags) / cnt
+                self.noise_floor = max(0.3, math.sqrt(variance) * 2.2)
+                self.max_magnitude = avg_mag
+                self.min_magnitude = avg_mag
+                self.deviation = 0.0
+                self.signed_delta = 0.0
+                self.calibrating = False
+                self.calib_samples = []
+                self.toast(f"Ноль установлен: {self.baseline:.1f} мкТл")
+            self._throttled_refresh(force=not self.calibrating)
+            return
+
+        if self.baseline is None:
+            self.baseline = self.magnitude
+            self.base_x, self.base_y, self.base_z = self.x, self.y, self.z
+            self.max_magnitude = self.magnitude
+            self.min_magnitude = self.magnitude
+
+        if self.magnitude > self.max_magnitude:
+            self.max_magnitude = self.magnitude
+        if self.magnitude < self.min_magnitude:
+            self.min_magnitude = self.magnitude
+
+        self.recent_samples.append(raw)
+        if len(self.recent_samples) > 16:
+            self.recent_samples.pop(0)
+        if len(self.recent_samples) >= 5:
+            mean = sum(self.recent_samples) / float(len(self.recent_samples))
+            var = sum((s - mean) ** 2 for s in self.recent_samples) / float(len(self.recent_samples))
+            self.ac_level = math.sqrt(var)
+
+        self.signed_delta = self.magnitude - self.baseline
+        new_dev = abs(self.signed_delta)
+        self.trend = self.trend * 0.7 + (new_dev - self.prev_deviation) * 0.3
+        self.prev_deviation = new_dev
+        self.deviation = new_dev
+
+        if self.auto_zero and not self.detected and self.deviation < (self.threshold * 0.35):
+            self.baseline = self.baseline * 0.994 + self.magnitude * 0.006
+            self.base_x = self.base_x * 0.994 + self.x * 0.006
+            self.base_y = self.base_y * 0.994 + self.y * 0.006
+            self.base_z = self.base_z * 0.994 + self.z * 0.006
+
+        was_detected = self.detected
+        is_wire_hit = self.wiring_mode and (self.ac_level >= 3.0)
+        self.detected = (self.deviation >= self.threshold) or is_wire_hit
+
+        now = time.time()
+        if self.detected and not was_detected:
+            self.hit_count += 1
+
+        if self.detected and (not was_detected or (now - self._last_log_time >= 3.5)):
+            self._last_log_time = now
+            stamp = time.strftime("%H:%M:%S")
+            kind_tag = "Проводка" if is_wire_hit else ("Магнит/Сталь" if self.deviation >= self.threshold * 2.0 else "Металл")
+            pol = "+" if self.signed_delta >= 0 else "-"
+            self.history.append(f"[{stamp}] #{self.hit_count} {kind_tag}: {self.magnitude:.1f} мкТл ({pol}{self.deviation:.1f})")
+            if len(self.history) > 60:
+                self.history.pop(0)
+
+            if self.notify_alert and self.deviation >= self.threshold * 2.0:
+                try:
+                    self.api.getAndroid().notifyShow(
+                        702,
+                        "Металлоискатель PRO 2.0",
+                        f"Обнаружена цель #{self.hit_count}: {self.magnitude:.1f} мкТл",
+                        "dolphy_plugins"
+                    )
+                except Exception:
+                    pass
+
+        self._throttled_refresh(force=(self.detected != was_detected))
+
+    def _throttled_refresh(self, force=False):
+        now = time.time()
+        if force or (now - self._last_ui_update >= 0.14):
+            self._last_ui_update = now
+            try:
+                self.refresh()
+            except Exception:
+                pass
+
+    def _sync_worker(self):
+        if self.running and (self.sound_enabled or self.vibrate_enabled):
+            if self._worker_thread is None or not self._worker_thread.is_alive():
+                self._worker_stop.clear()
+                self._worker_thread = threading.Thread(target=self._feedback_loop, daemon=True)
+                self._worker_thread.start()
+        else:
+            self._stop_worker()
+
+    def _stop_worker(self):
+        self._worker_stop.set()
+        t = self._worker_thread
+        if t is not None and t.is_alive():
+            try:
+                t.join(timeout=0.4)
+            except Exception:
+                pass
+        self._worker_thread = None
+
+    def _feedback_loop(self):
+        while not self._worker_stop.is_set():
+            if not self.running or self.calibrating or self.paused:
+                time.sleep(0.1)
+                continue
+
+            dev = self.deviation
+            if self.wiring_mode and self.ac_level >= 3.0:
+                dev = max(dev, self.threshold * 1.3)
+
+            floor = max(self.threshold * 0.25, self.noise_floor * 1.5)
+            if dev < floor:
+                time.sleep(0.08)
+                continue
+
+            intensity = min(dev / max(self.threshold * 2.0, 1.0), 1.0)
+            interval = max(0.07, 0.52 - 0.43 * intensity)
+
+            android = None
+            try:
+                android = self.api.getAndroid()
+            except Exception:
+                pass
+
+            if android is not None:
+                if self.sound_enabled:
+                    tone = 26 if intensity > 0.75 else (25 if intensity > 0.4 else 24)
+                    dur = 80 if intensity > 0.75 else 60
+                    try:
+                        android.audioTone(tone, dur)
+                    except Exception:
+                        pass
+
+                if self.vibrate_enabled and (self.detected or intensity > 0.35):
+                    vib_ms = int(25 + 65 * intensity)
+                    try:
+                        android.vibrate(vib_ms)
+                    except Exception:
+                        pass
+
+            time.sleep(interval)
+
+    def set_threshold(self, value):
+        self.threshold = max(2.0, float(value))
+        self.preset = "Свой"
+        self.set_setting("threshold", self.threshold)
+
+    def toggle_vibrate(self, value):
+        self.vibrate_enabled = bool(value)
+        self.set_setting("vibrate", self.vibrate_enabled)
+        self._sync_worker()
+        self.refresh()
+
+    def toggle_sound(self, value):
+        self.sound_enabled = bool(value)
+        self.set_setting("sound", self.sound_enabled)
+        self._sync_worker()
+        self.refresh()
+
+    def toggle_smooth(self, value):
+        self.smooth_enabled = bool(value)
+        self.set_setting("smooth", self.smooth_enabled)
+        self.refresh()
+
+    def toggle_wiring(self, value):
+        self.wiring_mode = bool(value)
+        self.set_setting("wiring_mode", self.wiring_mode)
+        self.refresh()
+
+    def toggle_auto_zero(self, value):
+        self.auto_zero = bool(value)
+        self.set_setting("auto_zero", self.auto_zero)
+        self.refresh()
+
+    def toggle_notify(self, value):
+        self.notify_alert = bool(value)
+        self.set_setting("notify_alert", self.notify_alert)
+        self.refresh()
