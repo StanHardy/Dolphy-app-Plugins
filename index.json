@@ -1,6 +1,6 @@
 {
   "format": "dolphy-plugins-v1",
-  "count": 27,
+  "count": 28,
   "plugins": [
     {
       "id": 16,
@@ -141,6 +141,20 @@
       "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/droidmonitor/droidmonitor.dolphyplugin",
       "post_url": "https://t.me/c/3966541757/34677",
       "updated_at": "2026-10-17 16:09:35"
+    },
+    {
+      "id": 28,
+      "name": "Fake Battery",
+      "version": "1.0.0",
+      "author": "Rimitech",
+      "description": {
+        "ru": "плагин может использоваться для подделки уровня заряда батареи",
+        "en": "My plugin can be used to fake your Phone battery level"
+      },
+      "file": "plugins/fake_battery/fake_battery.dolphyplugin",
+      "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/fake_battery/fake_battery.dolphyplugin",
+      "post_url": "https://t.me/c/3966541757/40279",
+      "updated_at": "2026-10-31 09:20:41"
     },
     {
       "id": 9,
