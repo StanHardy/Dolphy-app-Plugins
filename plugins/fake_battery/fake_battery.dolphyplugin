@@ -1,0 +1,281 @@
+__id__ = "fake_battery"
+__name__ = "Fake Battery"
+__version__ = "1.0.0"
+__author__ = "Dolphy User"
+__icon__ = "rounded:battery_charging_full"
+__description__ = "Spoof the Android BatteryManager service: fake battery percentage, charging status and AC/USB power source via Shizuku (with root fallback). Reset anytime."
+__permissions__ = ["shizuku", "root"]
+
+import json
+
+
+class FakeBattery(BasePlugin):
+    STATUS_VALUES = [
+        ("Unknown", 1),
+        ("Charging", 2),
+        ("Discharging", 3),
+        ("Not charging", 4),
+        ("Full", 5),
+    ]
+    PRESETS = [5, 15, 25, 50, 75, 100]
+
+    def __init__(self):
+        super().__init__()
+        self.level = 50
+        self.status_index = 2
+        self.ac = True
+        self.usb = False
+        self.log = "Ready.\n\nPick a level, choose a status, toggle power sources, then Apply.\nReset restores real battery values."
+
+    def on_plugin_load(self):
+        self.add_module(
+            title="Fake Battery",
+            description="Spoof battery percentage and charging state",
+            icon="battery_charging_full",
+            screen="main",
+            section="PLUGINS",
+            order=0
+        )
+
+    def screen_main(self, ui, api, state):
+        status_labels = [label for label, _ in self.STATUS_VALUES]
+        return ui.scaffold(
+            title="Fake Battery",
+            content=ui.lazy_column(children=[
+                ui.card([
+                    ui.row(children=[
+                        ui.icon("battery_charging_full", size=32, tint="primary"),
+                        ui.column(children=[
+                            ui.text("Fake Battery", "titleLarge"),
+                            ui.text("Spoof BatteryManager via dumpsys", style="bodySmall", color="muted"),
+                        ], spacing=2),
+                    ], spacing=12),
+                    ui.divider(),
+                    ui.text("Sets the values the Android system battery service reports. Effects appear in the status bar, lock screen, battery widget and battery settings. Use Reset to return to real values.", style="bodyMedium", color="muted"),
+                ], padding=16),
+
+                ui.card([
+                    ui.row(children=[
+                        ui.text("Level", "titleMedium"),
+                        ui.text("{}%".format(self.level), "headlineLarge", color="primary"),
+                    ], fill_max_width=True),
+                    ui.slider(
+                        value=float(self.level),
+                        minimum=0,
+                        maximum=100,
+                        steps=99,
+                        title="Battery level",
+                        on_change=self.on_level_change
+                    ),
+                    ui.row(
+                        children=[
+                            ui.chip("{}%".format(p), selected=(self.level == p), on_click=(lambda p=p: self.set_level(p)))
+                            for p in self.PRESETS
+                        ],
+                        spacing=8
+                    ),
+                ], padding=16),
+
+                ui.card([
+                    ui.text("Charging state", "titleMedium"),
+                    ui.dropdown(
+                        options=status_labels,
+                        selected=self.status_index,
+                        on_select=self.on_status_select,
+                        label="Status"
+                    ),
+                    ui.switch(
+                        checked=self.ac,
+                        title="AC charging",
+                        subtitle="Pretend a wall charger is connected",
+                        on_change=self.on_ac_change
+                    ),
+                    ui.switch(
+                        checked=self.usb,
+                        title="USB charging",
+                        subtitle="Pretend a USB port is supplying power",
+                        on_change=self.on_usb_change
+                    ),
+                ], padding=16),
+
+                ui.row(children=[
+                    ui.button("Apply", on_click=self.apply, style="filled", enabled=True, fill_max_width=True),
+                    ui.button("Default level", on_click=self.set_default_level, style="tonal", enabled=True, fill_max_width=True),
+                    ui.button("Reset", on_click=self.reset, style="outlined", enabled=True, fill_max_width=True),
+                ], spacing=8),
+
+                ui.card([
+                    ui.text("Output", "titleMedium"),
+                    ui.log_panel(self.log, max_height=260),
+                    ui.row(children=[
+                        ui.icon("info", size=16, tint="muted"),
+                        ui.text("Apply = fake level/status/power. Default level = real level, keep status. Reset = real everything.", style="bodySmall", color="muted"),
+                    ], spacing=6),
+                ], padding=16),
+            ], padding=16, spacing=12, fill_max_size=True)
+        )
+
+    def on_level_change(self, value):
+        self.level = int(round(value))
+        self.refresh()
+
+    def set_level(self, value):
+        self.level = int(value)
+        self.refresh()
+
+    def on_status_select(self, index):
+        self.status_index = int(index)
+        self.refresh()
+
+    def on_ac_change(self, value):
+        self.ac = bool(value)
+        self.refresh()
+
+    def on_usb_change(self, value):
+        self.usb = bool(value)
+        self.refresh()
+
+    def run_command(self, command):
+        result_text = None
+        try:
+            result_text = self.shizuku(command)
+        except Exception:
+            result_text = None
+        if not result_text:
+            try:
+                result_text = self.root(command)
+            except Exception:
+                result_text = None
+        if not result_text:
+            return None
+        try:
+            return json.loads(str(result_text))
+        except Exception:
+            return {"ok": False, "out": str(result_text), "err": "", "code": -1, "via": "raw"}
+
+    def apply(self):
+        status_label, status_value = self.STATUS_VALUES[self.status_index]
+        commands = [
+            "dumpsys battery set level {}".format(self.level),
+            "dumpsys battery set status {}".format(status_value),
+            "dumpsys battery set ac {}".format(1 if self.ac else 0),
+            "dumpsys battery set usb {}".format(1 if self.usb else 0),
+        ]
+        lines = ["Applying fake battery state...", ""]
+        failed = False
+        for cmd in commands:
+            res = self.run_command(cmd)
+            if res is None:
+                lines.append("FAIL  no Shizuku and no root available")
+                lines.append("  > {}".format(cmd))
+                lines.append("")
+                lines.append("Start Shizuku (or grant root) and retry.")
+                failed = True
+                break
+            ok = bool(res.get("ok", False))
+            via = str(res.get("via", "?"))
+            code = res.get("code", -1)
+            out = str(res.get("out") or "").strip()
+            err = str(res.get("err") or "").strip()
+            tag = "OK  " if ok else "FAIL"
+            lines.append("{} ({}, code={})".format(tag, via, code))
+            lines.append("  > {}".format(cmd))
+            if out:
+                lines.append("  " + out)
+            if err:
+                lines.append("  err: " + err)
+            lines.append("")
+            if not ok:
+                failed = True
+                break
+        if not failed:
+            power = "AC + USB" if (self.ac and self.usb) else ("AC" if self.ac else ("USB" if self.usb else "unplugged"))
+            lines.append("BatteryManager now reports {}%, {}, {}.".format(self.level, status_label.lower(), power))
+        self.log = "\n".join(lines)
+        self.toast("Battery spoofed to {}%".format(self.level) if not failed else "Apply failed - see log")
+        self.refresh()
+
+    def set_default_level(self):
+        status_label, status_value = self.STATUS_VALUES[self.status_index]
+        lines = ["Restoring real battery level (keeping charging state)...", ""]
+        res = self.run_command("dumpsys battery reset")
+        if res is None:
+            self.log = "FAIL  no Shizuku and no root available\n\n> dumpsys battery reset\n\nStart Shizuku (or grant root) and retry."
+            self.toast("Need Shizuku or root")
+            self.refresh()
+            return
+        ok = bool(res.get("ok", False))
+        via = str(res.get("via", "?"))
+        code = res.get("code", -1)
+        out = str(res.get("out") or "").strip()
+        err = str(res.get("err") or "").strip()
+        lines.append("{} ({}, code={})".format("OK  " if ok else "FAIL", via, code))
+        lines.append("  > dumpsys battery reset")
+        if out:
+            lines.append("  " + out)
+        if err:
+            lines.append("  err: " + err)
+        lines.append("")
+        if not ok:
+            lines.append("Reset failed - cannot restore real level.")
+            self.log = "\n".join(lines)
+            self.toast("Default level failed")
+            self.refresh()
+            return
+        reapply = [
+            ("status", "dumpsys battery set status {}".format(status_value)),
+            ("ac", "dumpsys battery set ac {}".format(1 if self.ac else 0)),
+            ("usb", "dumpsys battery set usb {}".format(1 if self.usb else 0)),
+        ]
+        for label, cmd in reapply:
+            res = self.run_command(cmd)
+            if res is None:
+                lines.append("FAIL  no Shizuku and no root available")
+                lines.append("  > " + cmd)
+                lines.append("")
+                break
+            ok = bool(res.get("ok", False))
+            via = str(res.get("via", "?"))
+            code = res.get("code", -1)
+            out = str(res.get("out") or "").strip()
+            err = str(res.get("err") or "").strip()
+            lines.append("{} ({}, code={})".format("OK  " if ok else "FAIL", via, code))
+            lines.append("  > " + cmd)
+            if out:
+                lines.append("  " + out)
+            if err:
+                lines.append("  err: " + err)
+            lines.append("")
+        power = "AC + USB" if (self.ac and self.usb) else ("AC" if self.ac else ("USB" if self.usb else "unplugged"))
+        lines.append("Battery level is now real (default). Status still {} ({}).".format(status_label.lower(), power))
+        self.log = "\n".join(lines)
+        self.toast("Battery level restored to default")
+        self.refresh()
+
+    def reset(self):
+        res = self.run_command("dumpsys battery reset")
+        if res is None:
+            self.log = "FAIL  no Shizuku and no root available\n\n> dumpsys battery reset\n\nStart Shizuku (or grant root) and retry."
+            self.toast("Need Shizuku or root")
+            self.refresh()
+            return
+        ok = bool(res.get("ok", False))
+        via = str(res.get("via", "?"))
+        code = res.get("code", -1)
+        out = str(res.get("out") or "").strip()
+        err = str(res.get("err") or "").strip()
+        lines = ["Resetting BatteryManager to real values...", ""]
+        lines.append("{} ({}, code={})".format("OK  " if ok else "FAIL", via, code))
+        lines.append("  > dumpsys battery reset")
+        if out:
+            lines.append("  " + out)
+        if err:
+            lines.append("  err: " + err)
+        lines.append("")
+        lines.append("Battery now reports real values." if ok else "Reset failed - see log above.")
+        self.log = "\n".join(lines)
+        self.toast("Battery reset to real values" if ok else "Reset failed")
+        self.refresh()
+
+    def on_plugin_unload(self):
+        pass
