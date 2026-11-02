@@ -103,7 +103,7 @@
     {
       "id": 6,
       "name": "Cortex",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "author": "h3rovnik",
       "description": {
         "ru": "Плагин для преобразования текста в декоративные шриты. Поддерживает девять стилей. Позволяет копировать результат в буфер обмена и очищать ввод.",
@@ -111,8 +111,8 @@
       },
       "file": "plugins/cortex/cortex.dolphyplugin",
       "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/cortex/cortex.dolphyplugin",
-      "post_url": "https://t.me/c/3966541757/23031",
-      "updated_at": "2026-09-10 15:11:53"
+      "post_url": "https://t.me/c/3966541757/41836",
+      "updated_at": "2026-11-02 15:16:26"
     },
     {
       "id": 13,
