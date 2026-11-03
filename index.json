@@ -341,7 +341,7 @@
     {
       "id": 29,
       "name": "Wi-Fi Wordlist Lab",
-      "version": "2.4.0",
+      "version": "2.4.1",
       "author": "@rvanyiu",
       "description": {
         "ru": "Плагин демонстрирует мою идею из другой ветки: умный брутфорс Wi-Fi. Он адаптируется под SSID и переменные (Wi_Fi_name+123 = ALBIBEK123). Приоритет шаблонов меняется стрелками в редакторе. Есть диапазоны, встроенная база частых паролей и лимит генерации.",
@@ -349,8 +349,8 @@
       },
       "file": "plugins/wi_fi_wordlist_lab/wi_fi_wordlist_lab.dolphyplugin",
       "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/wi_fi_wordlist_lab/wi_fi_wordlist_lab.dolphyplugin",
-      "post_url": "https://t.me/c/3966541757/42064",
-      "updated_at": "2026-11-03 14:15:28"
+      "post_url": "https://t.me/c/3966541757/42179",
+      "updated_at": "2026-11-03 19:38:23"
     },
     {
       "id": 3,
