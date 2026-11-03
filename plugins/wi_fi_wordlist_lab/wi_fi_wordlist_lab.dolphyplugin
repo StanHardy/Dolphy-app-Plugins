@@ -1,0 +1,785 @@
+__id__ = "wifi_wordlist_lab"
+__name__ = "Wi-Fi Wordlist Lab"
+__version__ = "2.4.0"
+__author__ = "DCA"
+__description__ = "SSID-aware WiFi wordlist generator"
+__icon__ = "rounded:key"
+__library__ = False
+__design_library__ = False
+__dependencies__ = []
+__permissions__ = ["files", "clipboard"]
+
+import re
+import time
+import itertools
+
+
+# ============================================================
+#  СЛОВАРИ И КОНСТАНТЫ
+# ============================================================
+
+MAX_PER_LINE = 20000
+MAX_TOTAL = 100000
+
+BUILTIN_ALIASES = {
+    "wi_fi_name": "__ssid__", "wi-fi_name": "__ssid__",
+    "wifi_name": "__ssid__", "wifiname": "__ssid__",
+    "ssid": "__ssid__", "network": "__ssid__", "net": "__ssid__",
+    "net_name": "__ssid__", "имя_сети": "__ssid__",
+    "year": "__year__", "this_year": "__year__", "год": "__year__",
+    "last_year": "__year_minus_1__", "year_1": "__year_minus_1__",
+}
+
+VENDOR_HINTS = {
+    "tp-link": "TP-Link", "tplink": "TP-Link",
+    "keenetic": "Keenetic", "mikrotik": "MikroTik",
+    "asus": "Asus", "zyxel": "Zyxel",
+    "dlink": "D-Link", "d-link": "D-Link",
+    "netgear": "Netgear", "tenda": "Tenda",
+    "xiaomi": "Xiaomi", "redmi": "Xiaomi",
+    "huawei": "Huawei", "honor": "Huawei",
+    "mgts": "MGTS", "rt-": "Rostelecom",
+    "rostelecom": "Rostelecom", "beeline": "Beeline",
+}
+
+BUNDLED_WIFI = [
+    "12345678", "123456789", "1234567890", "11111111", "88888888",
+    "00000000", "87654321", "12341234", "123123123", "12312312",
+    "1111111111", "22222222", "33333333", "55555555", "66666666",
+    "99999999", "11223344", "12121212", "13131313", "1234554321",
+    "0987654321", "09876543210", "987654321", "9876543210",
+    "0000000000", "1234567812", "10203040", "11221122", "55556666",
+    "1212121212", "01010101", "24682468", "147258369", "159357258",
+    "741852963", "852963741", "111111111", "222222222", "333333333",
+    "444444444", "555555555", "666666666", "777777777", "888888888",
+    "999999999", "0123456789", "012345678",
+    "password", "password1", "password12", "password123", "password1234",
+    "Password1", "Password123", "Password1234",
+    "P@ssw0rd", "Passw0rd", "Pa$$w0rd", "Passw0rd!",
+    "P@ssword123", "P@ssword1", "P@ss1234",
+    "qwerty123", "qwertyuiop", "qwerty1234", "qwerty12345", "qwerty1",
+    "qwerty12", "qwerty123456", "QWERTY123", "Qwerty123", "Qwerty1234",
+    "Qwerty!", "Qwerty1!", "Qwerty123!",
+    "123qwe", "qwe123", "1q2w3e4r", "1q2w3e4r5t", "1qaz2wsx",
+    "q1w2e3r4", "q1w2e3r4t5", "qazwsxedc", "qweasdzxc", "qweasd123",
+    "asdfghjkl", "asdf1234", "asdfghjk", "asdfgh123", "zxcvbnm",
+    "zxcvbnm1", "zxcvbnm123", "1qazxsw2", "zaq1zaq1", "zaq12wsx",
+    "qazwsx123", "poiuytrewq", "asdf4321", "qwerasdf", "qwer1234",
+    "1234qwer", "qweasdzxc123",
+    "admin123", "admin1234", "adminadmin", "administrator", "Admin123",
+    "Admin1234", "Admin@123", "Admin@1234", "root123", "root1234",
+    "toor1234", "letmein1", "Root1234", "Root@123",
+    "welcome", "welcome1", "welcome123", "welcome12",
+    "Welcome1", "Welcome@1", "Welcome@123",
+    "hello123", "hello1234", "hellohello", "Hello@123",
+    "iloveyou", "iloveyou1", "iloveyou123",
+    "sunshine", "sunshine1", "sunshine123",
+    "princess", "princess1", "football", "football1",
+    "baseball", "baseball1", "superman", "superman1",
+    "trustno1", "monkey123", "dragon123", "master123",
+    "shadow123", "michael1", "jordan23", "whatever1",
+    "abcdefgh", "abcdefg1", "abcdefg123", "abcd1234", "abcd12345",
+    "abcd123456", "abc12345", "abc123abc", "a1b2c3d4", "a1234567",
+    "aa123456", "a12345678", "1234abcd", "abcd1234!",
+    "abcdefgh123", "aaaaaaaa", "abababab", "qweqweqwe", "asdasdasd",
+    "zxczxczxc", "1234abcd",
+    "default", "default1", "changeme", "Changeme1", "test1234",
+    "testing123", "internet", "internet1", "wireless", "wireless1",
+    "Network1", "network123", "connection1", "modem1234", "router123",
+    "Test@123",
+    "123456789a", "12345678a", "1234567a",
+    "Huawei123", "Xiaomi123", "Redmi1234", "Samsung1",
+    "iPhone1234", "Android123", "ubuntu1234", "windows10", "windows11",
+]
+
+STRINGS = {
+    "ru": {
+        "title": "Wi-Fi Wordlist Lab",
+        "ssid_label": "Имя сети (SSID)",
+        "builtin_hint": "Встроенные: Wi_Fi_name, ssid, year, last_year",
+        "vendor_detected": "Производитель",
+        "limit": "Максимум паролей",
+        "vars": "Переменные",
+        "vars_empty": "Пока нет переменных",
+        "name": "Имя",
+        "value": "Значение",
+        "add": "Добавить",
+        "script_editor": "Редактор скрипта",
+        "script_label": "Скрипт",
+        "script_hint": "Одна строка = один шаблон. Пример: Wi_Fi_name+{0..99}",
+        "resolve": "Резолвить",
+        "clear": "Очистить",
+        "copy": "Копировать",
+        "save": "Сохранить файл",
+        "add_base_rules": "+ Базовые правила",
+        "result": "Результат",
+        "no_results": "Нет результатов",
+        "saved": "Сохранено",
+        "copied": "Скопировано",
+        "empty_name": "Имя пустое",
+        "builtin_alias": "Это встроенный алиас",
+        "invalid_char": "Недопустимые символы",
+        "invalid_ssid": "Сначала укажи SSID",
+        "bundled_count": "Встроенный список: %d паролей",
+        "reload_bundled": "Обновить",
+        "path": "Путь",
+        "error": "Ошибка",
+    },
+    "en": {
+        "title": "Wi-Fi Wordlist Lab",
+        "ssid_label": "Network name (SSID)",
+        "builtin_hint": "Built-in: Wi_Fi_name, ssid, year, last_year",
+        "vendor_detected": "Vendor",
+        "limit": "Max passwords",
+        "vars": "Variables",
+        "vars_empty": "No variables yet",
+        "name": "Name",
+        "value": "Value",
+        "add": "Add",
+        "script_editor": "Script editor",
+        "script_label": "Script",
+        "script_hint": "One line = one template. Example: Wi_Fi_name+{0..99}",
+        "resolve": "Resolve",
+        "clear": "Clear",
+        "copy": "Copy",
+        "save": "Save file",
+        "add_base_rules": "+ Base rules",
+        "result": "Result",
+        "no_results": "No results",
+        "saved": "Saved",
+        "copied": "Copied",
+        "empty_name": "Empty name",
+        "builtin_alias": "Built-in alias",
+        "invalid_char": "Invalid characters",
+        "invalid_ssid": "Set SSID first",
+        "bundled_count": "Bundled list: %d passwords",
+        "reload_bundled": "Reload",
+        "path": "Path",
+        "error": "Error",
+    },
+}
+
+
+# ============================================================
+#  ПЛАГИН
+# ============================================================
+
+class WifiWordlistLab(BasePlugin):
+    def __init__(self):
+        super().__init__()
+        self._ready = False
+        self._ssid = ""
+        self._vars = {}
+        self._script_lines = []
+        self._limit = 3000
+        self._lang = "ru"
+        self._preview = []
+        self._full_list = []
+        self._bundled = []
+        self._new_name = ""
+        self._new_value = ""
+        self._new_line = ""
+        self._editing_line_idx = -1
+
+    # ---------------- lifecycle ----------------
+
+    def on_plugin_load(self):
+        try:
+            self.add_module(
+                title="Wi-Fi Wordlist Lab",
+                description="SSID-aware wordlist",
+                icon="key",
+                screen="main",
+                section="PLUGINS",
+                order=20,
+            )
+            self._load_state()
+            self._init_bundled()
+            self._ready = True
+        except Exception:
+            pass
+
+    def on_plugin_unload(self):
+        self._ready = False
+
+    # ---------------- state ----------------
+
+    def _load_state(self):
+        try:
+            self._ssid = self.get_setting("ssid", "") or ""
+            v = self.get_setting("vars", {})
+            self._vars = dict(v) if isinstance(v, dict) else {}
+            
+            raw_script = self.get_setting("script", "")
+            if isinstance(raw_script, str):
+                self._script_lines = [ln.strip() for ln in raw_script.splitlines() if ln.strip()]
+            elif isinstance(raw_script, list):
+                self._script_lines = [str(ln).strip() for ln in raw_script if str(ln).strip()]
+
+            val_limit = self.get_setting("limit", 3000)
+            try:
+                self._limit = int(val_limit) if val_limit is not None else 3000
+            except Exception:
+                self._limit = 3000
+                
+            if self._limit < 100:
+                self._limit = 100
+            if self._limit > MAX_TOTAL:
+                self._limit = MAX_TOTAL
+            self._lang = "en" if self.get_setting("lang", "ru") == "en" else "ru"
+        except Exception:
+            self._ssid, self._vars, self._script_lines = "", {}, []
+            self._limit = 3000
+            self._lang = "ru"
+
+    def _save_state(self):
+        try:
+            self.set_setting("ssid", self._ssid)
+            self.set_setting("vars", self._vars)
+            self.set_setting("script", "\n".join(self._script_lines))
+            self.set_setting("limit", self._limit)
+            self.set_setting("lang", self._lang)
+        except Exception:
+            pass
+
+    # ---------------- i18n ----------------
+
+    def _t(self, key):
+        try:
+            return STRINGS.get(self._lang, STRINGS["ru"]).get(key, key)
+        except Exception:
+            return key
+
+    def _toggle_lang(self):
+        self._lang = "en" if self._lang == "ru" else "ru"
+        self._save_state()
+        self.refresh()
+
+    # ---------------- bundled file ----------------
+
+    def _bundled_path(self):
+        try:
+            base = self.api.getAndroid().pluginFilesDir()
+            return str(base).rstrip("/") + "/bundled.txt"
+        except Exception:
+            return "bundled.txt"
+
+    def _init_bundled(self):
+        try:
+            android = self.api.getAndroid()
+            path = self._bundled_path()
+            if not android.filesExists(path):
+                android.filesWrite(path, "\n".join(BUNDLED_WIFI))
+            content = android.filesRead(path) or ""
+        except Exception:
+            content = "\n".join(BUNDLED_WIFI)
+        self._bundled = [
+            ln.strip() for ln in content.splitlines()
+            if ln.strip() and not ln.strip().startswith("#")
+        ]
+
+    def _reload_bundled(self):
+        try:
+            android = self.api.getAndroid()
+            content = android.filesRead(self._bundled_path()) or ""
+            self._bundled = [
+                ln.strip() for ln in content.splitlines()
+                if ln.strip() and not ln.strip().startswith("#")
+            ]
+            try:
+                self.toast(self._t("bundled_count") % len(self._bundled))
+            except Exception:
+                pass
+            self.refresh()
+        except Exception:
+            pass
+
+    def _show_path(self):
+        try:
+            path = self._bundled_path()
+            self.api.getAndroid().clipboardSet(path)
+            self.toast(path)
+        except Exception:
+            pass
+
+    # ---------------- callbacks ----------------
+
+    def _on_ssid(self, value):
+        self._ssid = str(value or "")
+        self._save_state()
+
+    def _on_new_name(self, value):
+        self._new_name = str(value or "")
+
+    def _on_new_value(self, value):
+        self._new_value = str(value or "")
+
+    def _on_new_line(self, value):
+        self._new_line = str(value or "")
+
+    def _on_limit(self, value):
+        try:
+            if value is not None:
+                self._limit = int(value)
+                self._save_state()
+                self.refresh()
+        except Exception:
+            pass
+
+    # ---------------- variables CRUD & Reorder ----------------
+
+    def _add_var(self):
+        try:
+            name = (self._new_name or "").strip()
+            if not name:
+                self.toast(self._t("empty_name")); return
+            if name.lower() in BUILTIN_ALIASES:
+                self.toast(self._t("builtin_alias")); return
+            if any(c in name for c in " +={}[]()|"):
+                self.toast(self._t("invalid_char")); return
+            self._vars[name] = self._new_value or ""
+            self._new_name = ""
+            self._new_value = ""
+            self._save_state()
+            self.refresh()
+        except Exception:
+            pass
+
+    def _delete_var(self, name):
+        try:
+            self._vars.pop(name, None)
+            self._save_state()
+            self.refresh()
+        except Exception as e:
+            self.toast("Err: " + str(e))
+
+    def _move_var(self, name, direction):
+        try:
+            keys = list(self._vars.keys())
+            if name not in keys:
+                return
+            idx = keys.index(name)
+            new_idx = idx + direction
+            if 0 <= new_idx < len(keys):
+                keys[idx], keys[new_idx] = keys[new_idx], keys[idx]
+                self._vars = {k: self._vars[k] for k in keys}
+                self._save_state()
+                self.refresh()
+        except Exception as e:
+            self.toast("Err: " + str(e))
+
+    # ---------------- script lines CRUD ----------------
+
+    def _add_line(self):
+        try:
+            line = self._new_line.strip()
+            if self._editing_line_idx >= 0:
+                if line:
+                    self._script_lines[self._editing_line_idx] = line
+                else:
+                    self._script_lines.pop(self._editing_line_idx)
+                self._editing_line_idx = -1
+            else:
+                if line:
+                    self._script_lines.append(line)
+            self._new_line = ""
+            self._save_state()
+            self.refresh()
+        except Exception as e:
+            self.toast("Err: " + str(e))
+
+    def _edit_line(self, idx):
+        try:
+            if 0 <= idx < len(self._script_lines):
+                self._new_line = self._script_lines[idx]
+                self._editing_line_idx = idx
+                self.refresh()
+        except Exception as e:
+            self.toast("Err: " + str(e))
+
+    def _delete_line(self, idx):
+        try:
+            if 0 <= idx < len(self._script_lines):
+                self._script_lines.pop(idx)
+                if self._editing_line_idx == idx:
+                    self._new_line = ""
+                    self._editing_line_idx = -1
+                self._save_state()
+                self.refresh()
+        except Exception as e:
+            self.toast("Err: " + str(e))
+
+    def _move_line(self, idx, direction):
+        try:
+            new_idx = idx + direction
+            if 0 <= new_idx < len(self._script_lines):
+                self._script_lines[idx], self._script_lines[new_idx] = self._script_lines[new_idx], self._script_lines[idx]
+                self._save_state()
+                self.refresh()
+        except Exception as e:
+            self.toast("Err: " + str(e))
+
+    # ---------------- resolver ----------------
+
+    def _split_expr(self, expr):
+        parts, buf, depth = [], "", 0
+        for ch in expr:
+            if ch in "({[":
+                depth += 1; buf += ch
+            elif ch in ")}]":
+                depth = max(0, depth - 1); buf += ch
+            elif ch == "+" and depth == 0:
+                parts.append(buf); buf = ""
+            else:
+                buf += ch
+        parts.append(buf)
+        return [p.strip() for p in parts]
+
+    def _resolve_token(self, tok):
+        if not tok:
+            return [""]
+        if tok in self._vars:
+            return [str(self._vars[tok])]
+        low = tok.lower()
+        if low in BUILTIN_ALIASES:
+            key = BUILTIN_ALIASES[low]
+            if key == "__ssid__":
+                return [self._ssid]
+            if key == "__year__":
+                return [str(time.localtime().tm_year)]
+            if key == "__year_minus_1__":
+                return [str(time.localtime().tm_year - 1)]
+        for k, v in self._vars.items():
+            if k.lower() == low:
+                return [str(v)]
+
+        m = re.match(r'^\{(-?\d+)\.\.(-?\d+)(?::(\d+))?\}$', tok)
+        if m:
+            a, b = int(m.group(1)), int(m.group(2))
+            s = int(m.group(3) or 1)
+            if s <= 0: s = 1
+            r = range(a, b + 1, s) if a <= b else range(a, b - 1, -s)
+            return [str(x) for x in itertools.islice(r, MAX_PER_LINE)]
+
+        m = re.match(r'^\((.+)\)$', tok)
+        if m:
+            return [x.strip() for x in m.group(1).split("|")]
+
+        return [tok]
+
+    def _apply_rules(self, s, rules):
+        for rule in rules:
+            if rule == "c": s = s.capitalize()
+            elif rule == "t": s = s.title()
+            elif rule == "l": s = s.lower()
+            elif rule == "u": s = s.upper()
+            elif rule.startswith("$"): s = s + rule[1:]
+            elif rule.startswith("^"): s = rule[1:] + s
+        return s
+
+    def _resolve_line(self, line):
+        parts = line.split()
+        if not parts: return
+        expr = parts[0]
+        rules = parts[1:]
+
+        tokens = self._split_expr(expr)
+        values = []
+        for tok in tokens:
+            vals = self._resolve_token(tok)
+            if len(vals) > MAX_PER_LINE:
+                vals = vals[:MAX_PER_LINE]
+            values.append(vals)
+
+        count = 0
+        seen = set()
+        for combo in itertools.product(*values):
+            if count >= MAX_PER_LINE: break
+            s = self._apply_rules("".join(combo), rules)
+            if 8 <= len(s) <= 63 and s not in seen:
+                seen.add(s)
+                yield s
+                count += 1
+
+    # ---------------- generator ----------------
+
+    def _generate(self):
+        limit = self._limit
+        seen = set()
+        count = 0
+        
+        # 1. Сначала генерируем строго по порядку из скрипта
+        for text in self._script_lines:
+            for cand in self._resolve_line(text):
+                if cand in seen: continue
+                seen.add(cand)
+                yield cand
+                count += 1
+                if count >= limit: return
+                
+        # 2. Затем встроенный список
+        for pw in self._bundled:
+            if pw in seen: continue
+            seen.add(pw)
+            yield pw
+            count += 1
+            if count >= limit or count >= MAX_TOTAL: return
+
+    # ---------------- actions ----------------
+
+    def _add_base_rules(self):
+        try:
+            if not self._ssid:
+                self.toast(self._t("invalid_ssid")); return
+            base = [
+                "Wi_Fi_name",
+                "Wi_Fi_name+{0..99}",
+                "Wi_Fi_name+!",
+                "Wi_Fi_name c $1 $2 $3",
+                "Wi_Fi_name+{1000..9999}",
+            ]
+            # Добавляем только те, которых еще нет
+            for b in base:
+                if b not in self._script_lines:
+                    self._script_lines.append(b)
+            self._save_state()
+            self.refresh()
+            self.toast("Добавлены базовые правила")
+        except Exception as e:
+            self.toast("Err: " + str(e))
+
+    def _resolve_all(self):
+        try:
+            self._full_list = list(self._generate())
+            self._preview = self._full_list[:200]
+            self.refresh()
+        except Exception as e:
+            try: self.toast(self._t("error") + ": " + str(e))
+            except Exception: pass
+
+    def _clear_preview(self):
+        self._preview = []
+        self._full_list = []
+        self.refresh()
+
+    def _copy_preview(self):
+        try:
+            if not self._full_list:
+                self.toast(self._t("no_results")); return
+            self.api.getAndroid().clipboardSet("\n".join(self._full_list))
+            self.toast(self._t("copied") + ": %d" % len(self._full_list))
+        except Exception as e:
+            try: self.toast(self._t("error") + ": " + str(e))
+            except Exception: pass
+
+    def _save_file(self):
+        try:
+            if not self._full_list:
+                self.toast(self._t("no_results")); return
+            base = self.api.getAndroid().pluginFilesDir()
+            path = str(base).rstrip("/") + "/wordlist.txt"
+            self.api.getAndroid().filesWrite(path, "\n".join(self._full_list))
+            self.toast(self._t("saved") + ": " + path)
+        except Exception as e:
+            try: self.toast(self._t("error") + ": " + str(e))
+            except Exception: pass
+
+    def _detect_vendor(self):
+        s = (self._ssid or "").lower()
+        for k, v in VENDOR_HINTS.items():
+            if s.startswith(k) or k in s[:12]:
+                return v
+        return ""
+
+    def _section_header(self, ui, text):
+        return [
+            ui.divider(),
+            ui.text(text, "titleMedium", color="primary"),
+        ]
+
+    # ---------------- screens ----------------
+
+    def screen_main(self, ui, api, state):
+        try:
+            children = [
+                ui.text_field(
+                    value=self._ssid,
+                    on_change=self._on_ssid,
+                    label=self._t("ssid_label"),
+                    single_line=True,
+                ),
+                ui.text(self._t("builtin_hint"), "bodySmall", color="muted"),
+            ]
+
+            vendor = self._detect_vendor()
+            if vendor:
+                children.append(ui.text(
+                    self._t("vendor_detected") + ": " + vendor,
+                    "bodySmall", color="primary",
+                ))
+
+            children += self._section_header(ui, self._t("limit"))
+            children.append(ui.text("%d" % self._limit, "bodyMedium"))
+            children.append(ui.slider(
+                value=self._limit,
+                on_change=self._on_limit,
+                minimum=100,
+                maximum=100000,
+                steps=98
+            ))
+
+            children += self._section_header(ui, self._t("vars"))
+            if not self._vars:
+                children.append(ui.text(self._t("vars_empty"), "bodySmall", color="muted"))
+            else:
+                for name in self._vars.keys():
+                    children.append(ui.card(
+                        padding=8,
+                        children=[
+                            ui.row([
+                                ui.text("%s = %s" % (name, self._vars[name]), "bodyMedium"),
+                                ui.spacer(width=8),
+                                ui.icon_button("arrow_upward", on_click=lambda *args, n=name: self._move_var(n, -1)),
+                                ui.icon_button("arrow_downward", on_click=lambda *args, n=name: self._move_var(n, 1)),
+                                ui.icon_button("delete", on_click=lambda *args, n=name: self._delete_var(n)),
+                            ], fill_max_width=True, spacing=4)
+                        ]
+                    ))
+
+            children.append(ui.text_field(
+                value=self._new_name, on_change=self._on_new_name,
+                label=self._t("name"), single_line=True,
+            ))
+            children.append(ui.text_field(
+                value=self._new_value, on_change=self._on_new_value,
+                label=self._t("value"), single_line=True,
+            ))
+            children.append(ui.button(
+                self._t("add"), on_click=self._add_var,
+                fill_max_width=True,
+            ))
+
+            children += self._section_header(ui, self._t("script_label"))
+            children.append(ui.button(
+                self._t("script_editor"),
+                on_click=lambda *args: self.navigate("composer"),
+                fill_max_width=True,
+            ))
+
+            children += self._section_header(ui, self._t("bundled_count").split(":")[0])
+            children.append(ui.text(
+                self._t("bundled_count") % len(self._bundled),
+                "bodySmall", color="muted",
+            ))
+            children.append(ui.row([
+                ui.button(
+                    self._t("reload_bundled"),
+                    on_click=self._reload_bundled,
+                    style="outlined", fill_max_width=True,
+                ),
+                ui.button(
+                    self._t("path"),
+                    on_click=self._show_path,
+                    style="outlined", fill_max_width=True,
+                ),
+            ], spacing=8))
+
+            return ui.scaffold(
+                title=self._t("title"),
+                actions=[ui.top_action("translate", on_click=self._toggle_lang)],
+                content=ui.column(children, padding=16, spacing=10),
+            )
+        except Exception as e:
+            return ui.scaffold(title=self._t("error"), content=ui.text(str(e)))
+
+    def screen_composer(self, ui, api, state):
+        try:
+            children = []
+            
+            # Кнопка добавления базовых правил
+            children.append(ui.button(
+                self._t("add_base_rules"),
+                on_click=self._add_base_rules,
+                style="tonal", fill_max_width=True
+            ))
+            
+            # Список строк с кнопками
+            if not self._script_lines:
+                children.append(ui.text("Нет строк. Добавьте ниже.", "bodySmall", color="muted"))
+            else:
+                for i, line in enumerate(self._script_lines):
+                    children.append(ui.card(
+                        padding=8,
+                        children=[
+                            ui.row([
+                                ui.text("%d. %s" % (i+1, line), "bodyMedium"),
+                                ui.spacer(width=8),
+                                ui.icon_button("edit", on_click=lambda *args, idx=i: self._edit_line(idx)),
+                                ui.icon_button("arrow_upward", on_click=lambda *args, idx=i: self._move_line(idx, -1)),
+                                ui.icon_button("arrow_downward", on_click=lambda *args, idx=i: self._move_line(idx, 1)),
+                                ui.icon_button("delete", on_click=lambda *args, idx=i: self._delete_line(idx)),
+                            ], fill_max_width=True, spacing=4)
+                        ]
+                    ))
+            
+            # Поле добавления/редактирования
+            btn_text = "Сохранить" if self._editing_line_idx >= 0 else "Добавить строку"
+            if self._editing_line_idx >= 0:
+                children.append(ui.text("Редактирование строки #%d" % (self._editing_line_idx + 1), "bodySmall", color="primary"))
+                
+            children.append(ui.text_field(
+                value=self._new_line,
+                on_change=self._on_new_line,
+                label="Новая строка",
+                single_line=True,
+            ))
+            children.append(ui.button(
+                btn_text, on_click=self._add_line, fill_max_width=True
+            ))
+            
+            children.append(ui.divider())
+            children.append(ui.row([
+                ui.button(
+                    self._t("resolve"),
+                    on_click=self._resolve_all,
+                    fill_max_width=True,
+                ),
+                ui.button(
+                    self._t("clear"),
+                    on_click=self._clear_preview,
+                    style="outlined",
+                    fill_max_width=True,
+                ),
+            ], spacing=8))
+
+            if self._preview:
+                children.append(ui.divider())
+                children.append(ui.text(
+                    self._t("result") + ": %d" % len(self._full_list),
+                    "titleSmall",
+                ))
+                preview_text = "\n".join(self._preview)
+                if len(self._full_list) > len(self._preview):
+                    preview_text += "\n... (+%d)" % (len(self._full_list) - len(self._preview))
+                children.append(ui.log_panel(preview_text, max_height=300))
+                children.append(ui.row([
+                    ui.button(
+                        self._t("copy"),
+                        on_click=self._copy_preview,
+                        fill_max_width=True,
+                    ),
+                    ui.button(
+                        self._t("save"),
+                        on_click=self._save_file,
+                        style="outlined",
+                        fill_max_width=True,
+                    ),
+                ], spacing=8))
+
+            return ui.scaffold(
+                title=self._t("script_editor"),
+                actions=[ui.top_action("translate", on_click=self._toggle_lang)],
+                content=ui.column(children, padding=16, spacing=10),
+            )
+        except Exception as e:
+            return ui.scaffold(title=self._t("error"), content=ui.text(str(e)))
