@@ -1,6 +1,6 @@
 __id__ = "wifi_wordlist_lab"
 __name__ = "Wi-Fi Wordlist Lab"
-__version__ = "2.4.0"
+__version__ = "2.4.1"
 __author__ = "DCA"
 __description__ = "SSID-aware WiFi wordlist generator"
 __icon__ = "rounded:key"
@@ -124,6 +124,12 @@ STRINGS = {
         "reload_bundled": "Обновить",
         "path": "Путь",
         "error": "Ошибка",
+        "no_lines": "Нет строк. Добавьте ниже.",
+        "edit_line": "Редактирование строки #%d",
+        "new_line": "Новая строка",
+        "btn_add_line": "Добавить строку",
+        "btn_save": "Сохранить",
+        "base_added": "Добавлены базовые правила",
     },
     "en": {
         "title": "Wi-Fi Wordlist Lab",
@@ -156,6 +162,12 @@ STRINGS = {
         "reload_bundled": "Reload",
         "path": "Path",
         "error": "Error",
+        "no_lines": "No lines. Add below.",
+        "edit_line": "Editing line #%d",
+        "new_line": "New line",
+        "btn_add_line": "Add line",
+        "btn_save": "Save",
+        "base_added": "Base rules added",
     },
 }
 
@@ -478,6 +490,8 @@ class WifiWordlistLab(BasePlugin):
         return s
 
     def _resolve_line(self, line):
+        # Убираем пробелы вокруг плюса, чтобы "Wi_Fi_name + base" работало как "Wi_Fi_name+base"
+        line = line.replace(" + ", "+").replace("+ ", "+").replace(" +", "+")
         parts = line.split()
         if not parts: return
         expr = parts[0]
@@ -498,7 +512,7 @@ class WifiWordlistLab(BasePlugin):
             s = self._apply_rules("".join(combo), rules)
             if 8 <= len(s) <= 63 and s not in seen:
                 seen.add(s)
-                yield s
+                yield str(s) # Явное приведение к строке
                 count += 1
 
     # ---------------- generator ----------------
@@ -521,7 +535,7 @@ class WifiWordlistLab(BasePlugin):
         for pw in self._bundled:
             if pw in seen: continue
             seen.add(pw)
-            yield pw
+            yield str(pw)
             count += 1
             if count >= limit or count >= MAX_TOTAL: return
 
@@ -544,7 +558,7 @@ class WifiWordlistLab(BasePlugin):
                     self._script_lines.append(b)
             self._save_state()
             self.refresh()
-            self.toast("Добавлены базовые правила")
+            self.toast(self._t("base_added"))
         except Exception as e:
             self.toast("Err: " + str(e))
 
@@ -637,7 +651,7 @@ class WifiWordlistLab(BasePlugin):
                         padding=8,
                         children=[
                             ui.row([
-                                ui.text("%s = %s" % (name, self._vars[name]), "bodyMedium"),
+                                ui.text("%s = %s" % (name, self._vars[name]), "bodyMedium", max_lines=1),
                                 ui.spacer(width=8),
                                 ui.icon_button("arrow_upward", on_click=lambda *args, n=name: self._move_var(n, -1)),
                                 ui.icon_button("arrow_downward", on_click=lambda *args, n=name: self._move_var(n, 1)),
@@ -655,7 +669,7 @@ class WifiWordlistLab(BasePlugin):
                 label=self._t("value"), single_line=True,
             ))
             children.append(ui.button(
-                self._t("add"), on_click=self._add_var,
+                self._t("add"), on_click=lambda *args: self._add_var(),
                 fill_max_width=True,
             ))
 
@@ -674,12 +688,12 @@ class WifiWordlistLab(BasePlugin):
             children.append(ui.row([
                 ui.button(
                     self._t("reload_bundled"),
-                    on_click=self._reload_bundled,
+                    on_click=lambda *args: self._reload_bundled(),
                     style="outlined", fill_max_width=True,
                 ),
                 ui.button(
                     self._t("path"),
-                    on_click=self._show_path,
+                    on_click=lambda *args: self._show_path(),
                     style="outlined", fill_max_width=True,
                 ),
             ], spacing=8))
@@ -699,20 +713,20 @@ class WifiWordlistLab(BasePlugin):
             # Кнопка добавления базовых правил
             children.append(ui.button(
                 self._t("add_base_rules"),
-                on_click=self._add_base_rules,
+                on_click=lambda *args: self._add_base_rules(),
                 style="tonal", fill_max_width=True
             ))
             
             # Список строк с кнопками
             if not self._script_lines:
-                children.append(ui.text("Нет строк. Добавьте ниже.", "bodySmall", color="muted"))
+                children.append(ui.text(self._t("no_lines"), "bodySmall", color="muted"))
             else:
                 for i, line in enumerate(self._script_lines):
                     children.append(ui.card(
                         padding=8,
                         children=[
                             ui.row([
-                                ui.text("%d. %s" % (i+1, line), "bodyMedium"),
+                                ui.text("%d. %s" % (i+1, line), "bodyMedium", max_lines=1),
                                 ui.spacer(width=8),
                                 ui.icon_button("edit", on_click=lambda *args, idx=i: self._edit_line(idx)),
                                 ui.icon_button("arrow_upward", on_click=lambda *args, idx=i: self._move_line(idx, -1)),
@@ -723,30 +737,30 @@ class WifiWordlistLab(BasePlugin):
                     ))
             
             # Поле добавления/редактирования
-            btn_text = "Сохранить" if self._editing_line_idx >= 0 else "Добавить строку"
+            btn_text = self._t("btn_save") if self._editing_line_idx >= 0 else self._t("btn_add_line")
             if self._editing_line_idx >= 0:
-                children.append(ui.text("Редактирование строки #%d" % (self._editing_line_idx + 1), "bodySmall", color="primary"))
+                children.append(ui.text(self._t("edit_line") % (self._editing_line_idx + 1), "bodySmall", color="primary"))
                 
             children.append(ui.text_field(
                 value=self._new_line,
                 on_change=self._on_new_line,
-                label="Новая строка",
+                label=self._t("new_line"),
                 single_line=True,
             ))
             children.append(ui.button(
-                btn_text, on_click=self._add_line, fill_max_width=True
+                btn_text, on_click=lambda *args: self._add_line(), fill_max_width=True
             ))
             
             children.append(ui.divider())
             children.append(ui.row([
                 ui.button(
                     self._t("resolve"),
-                    on_click=self._resolve_all,
+                    on_click=lambda *args: self._resolve_all(),
                     fill_max_width=True,
                 ),
                 ui.button(
                     self._t("clear"),
-                    on_click=self._clear_preview,
+                    on_click=lambda *args: self._clear_preview(),
                     style="outlined",
                     fill_max_width=True,
                 ),
@@ -765,12 +779,12 @@ class WifiWordlistLab(BasePlugin):
                 children.append(ui.row([
                     ui.button(
                         self._t("copy"),
-                        on_click=self._copy_preview,
+                        on_click=lambda *args: self._copy_preview(),
                         fill_max_width=True,
                     ),
                     ui.button(
                         self._t("save"),
-                        on_click=self._save_file,
+                        on_click=lambda *args: self._save_file(),
                         style="outlined",
                         fill_max_width=True,
                     ),
