@@ -1,6 +1,6 @@
 {
   "format": "dolphy-plugins-v1",
-  "count": 28,
+  "count": 29,
   "plugins": [
     {
       "id": 16,
@@ -337,6 +337,20 @@
       "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/wi_fi_info/wi_fi_info.dolphyplugin",
       "post_url": "https://t.me/c/3966541757/21197",
       "updated_at": "2026-08-30 13:03:01"
+    },
+    {
+      "id": 29,
+      "name": "Wi-Fi Wordlist Lab",
+      "version": "2.4.0",
+      "author": "@rvanyiu",
+      "description": {
+        "ru": "Плагин демонстрирует мою идею из другой ветки: умный брутфорс Wi-Fi. Он адаптируется под SSID и переменные (Wi_Fi_name+123 = ALBIBEK123). Приоритет шаблонов меняется стрелками в редакторе. Есть диапазоны, встроенная база частых паролей и лимит генерации.",
+        "en": "This plugin demos my idea from another forum thread: smart Wi-Fi bruteforce. It adapts to the SSID and variables (Wi_Fi_name+123 = ALBIBEK123). You set template priority using arrows in the editor. Supports ranges, a built-in wordlist, and generation limits."
+      },
+      "file": "plugins/wi_fi_wordlist_lab/wi_fi_wordlist_lab.dolphyplugin",
+      "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/wi_fi_wordlist_lab/wi_fi_wordlist_lab.dolphyplugin",
+      "post_url": "https://t.me/c/3966541757/42064",
+      "updated_at": "2026-11-03 14:15:28"
     },
     {
       "id": 3,
