@@ -1,6 +1,6 @@
 {
   "format": "dolphy-plugins-v1",
-  "count": 29,
+  "count": 30,
   "plugins": [
     {
       "id": 16,
@@ -239,6 +239,20 @@
       "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/morse_code/morse_code.dolphyplugin",
       "post_url": "https://t.me/c/3966541757/29279",
       "updated_at": "2026-10-03 09:21:29"
+    },
+    {
+      "id": 30,
+      "name": "Signal Jammer Root v2",
+      "version": "2.0.0",
+      "author": "@Da_koroche",
+      "description": {
+        "ru": "Плагин-глушилка для Dolphy c root: BLE-флуд, Wi-Fi deauth, ИК-шторм.\n\nНастраиваемое время помех (1-120 сек)\n\nи живое окно логов для проверки работы.\n\nПоказывает статус root, BLE и ИК при\n\nзапуске.",
+        "en": "Dolphy root jammer plugin: BLE flood, Wi-Fi deauth, IR storm. Adjustable duration (1-120 sec) and live log window to verify operation. Shows root, BLE and IR status on load."
+      },
+      "file": "plugins/signal_jammer_root_v2/signal_jammer_root_v2.dolphyplugin",
+      "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/signal_jammer_root_v2/signal_jammer_root_v2.dolphyplugin",
+      "post_url": "https://t.me/c/3966541757/42416",
+      "updated_at": "2026-11-03 21:52:32"
     },
     {
       "id": 15,
