@@ -201,7 +201,7 @@
     {
       "id": 19,
       "name": "IR Transceiver",
-      "version": "2.0.3",
+      "version": "2.1.0",
       "author": "@Abamazanat",
       "description": {
         "ru": "Форк USB-C IR Backend от Pinaplast. Долго допиливал и исправлял ошибки. Умеет отправлять и записывать ИК-сигналы через USB-донглы и 3.5мм джек. Поддерживает файлы Flipper .ir, все протоколы и перебор кодов. На реальном железе ещё не тестировал — обо всех багах обязательно пишите мне",
@@ -209,8 +209,8 @@
       },
       "file": "plugins/ir_transceiver/ir_transceiver.dolphyplugin",
       "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/ir_transceiver/ir_transceiver.dolphyplugin",
-      "post_url": "https://t.me/c/3966541757/33549",
-      "updated_at": "2026-10-15 02:02:14"
+      "post_url": "https://t.me/c/3966541757/42443",
+      "updated_at": "2026-11-04 04:14:53"
     },
     {
       "id": 7,
