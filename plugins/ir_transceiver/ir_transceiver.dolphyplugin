@@ -1,9 +1,9 @@
 __id__ = "ir_transceiver"
 __name__ = "IR Transceiver"
-__version__ = "2.1.0"
+__version__ = "2.1.1"
 __author__ = "RamboDonaT (@Abamazanat)"
-__description__ = "ИК-лаборатория для управления техникой: отправка и захват сигналов через USB OTG, Audio IR 3.5мм и встроенный ИК. Создание виртуальных пультов, библиотека сигналов, импорт/экспорт Flipper Zero, Pronto, LIRC. Подбор кодов (Finder), TV-B-Gone, управление Android TV по Wi-Fi ADB и переворот экрана 180° для донглов."
-__description_en__ = "Universal IR toolkit: transmit and capture signals via USB OTG, 3.5mm Audio IR, and built-in IR. Features virtual remotes, signal library, Flipper Zero/Pronto/LIRC import & export, brute-force IR Finder, TV-B-Gone power sweep, Wi-Fi ADB remote for Android TV, and 180-degree screen flip for bottom-mounted dongles."
+__description__ = "Контролируй технику через ИК. Отправляй и записывай сигналы, создавай виртуальные пульты, импортируй из Flipper/Pronto/LIRC. Поддержка USB OTG, Audio IR, встроенного ИК и Wi-Fi ADB для Android TV."
+__description_en__ = "Control devices via IR. Send and learn signals, create virtual remotes, import from Flipper/Pronto/LIRC. Supports USB OTG, Audio IR, built-in IR, and Wi-Fi ADB for Android TV."
 __icon__ = "rounded:settings_remote"
 __library__ = False
 __design_library__ = False
@@ -1450,7 +1450,7 @@ class MultiFormatRemoteParser:
                     name = signal.get("name", "Signal")
                     try:
                         if signal.get("type", "").lower() == "raw":
-                            add(name, signal.get("frequency", "38000"),
+                            add(name, int(signal.get("frequency", "38000")),
                                 [int(token) for token in signal.get("data", "").replace(",", " ").split()])
                         elif signal.get("type", "").lower() == "parsed":
                             addr = MultiFormatRemoteParser._parse_flipper_hex(signal.get("address", ""))
@@ -2127,6 +2127,7 @@ class UsbCIrBackend(BasePlugin):
         """
         Мгновенно переключает язык интерфейса между RU и EN с сохранением в настройках.
         Также синхронно переводит весь журнал логов на выбранный язык.
+        Race condition fix: атомарная замена _log_lines вместо .clear() + append.
         """
         self._lang = "en" if getattr(self, "_lang", "ru") == "ru" else "ru"
         self.set_setting("lang", self._lang)
@@ -2137,9 +2138,11 @@ class UsbCIrBackend(BasePlugin):
             pass
         with self._refresh_lock:
             if hasattr(self, "_raw_log_entries") and self._raw_log_entries:
-                self._log_lines.clear()
+                # Атомарная замена: создаём новый deque, затем заменяем целиком
+                new_log_lines = deque(maxlen=80)
                 for ts, raw in self._raw_log_entries:
-                    self._log_lines.append(f"[{ts}] {self._translate_log(raw)}")
+                    new_log_lines.append(f"[{ts}] {self._translate_log(raw)}")
+                self._log_lines = new_log_lines
                 self._log_cache_text = "\n".join(self._log_lines)
         self._refresh_ui()
 
@@ -2280,8 +2283,6 @@ class UsbCIrBackend(BasePlugin):
         self._burst_thread = None
         self._burst_running = False
         self._burst_status = "Готов к передаче"
-        # [FLIP_SCREEN_FEATURE] Состояние переворота экрана 180° (из android-ir-blaster) [TODO: REVIEW/FIX BUGS]
-        self._screen_flipped = False
 
     def _load_signal_library(self):
         try:
@@ -2511,8 +2512,16 @@ class UsbCIrBackend(BasePlugin):
         return self._burst_running or (self._burst_thread is not None and self._burst_thread.is_alive())
 
     def _sequence_busy(self):
-        return self._burst_busy() or self._finder_running or self._power_running or any(
-            worker is not None and worker.is_alive() for worker in (self._finder_thread, self._power_thread))
+        """Проверяет, занят ли передатчик какой-либо последовательностью (finder, power, burst)."""
+        if self._burst_running:
+            return True
+        if self._finder_running or self._power_running:
+            return True
+        # Проверка потоков только если флаги активны
+        return any(
+            worker is not None and worker.is_alive()
+            for worker in (self._finder_thread, self._power_thread, self._burst_thread)
+        )
 
     def _send_remote_signal(self, ident):
         self._haptic_tick()
@@ -3166,10 +3175,19 @@ class UsbCIrBackend(BasePlugin):
                      {"value": "ru", "label": "Русский (RU)"},
                      {"value": "en", "label": "English (EN)"}
                  ], "default": "ru"},
+                {"type": "select", "key": "transmitter_mode", "title": self._t("Способ передачи"),
+                 "options": [
+                     {"value": "auto", "label": self._t("Авто: USB → встроенный → Audio")},
+                     {"value": "usb", "label": self._t("Только USB OTG")},
+                     {"value": "builtin", "label": self._t("Только встроенный ИК")},
+                     {"value": "audio", "label": self._t("Только Audio IR")}
+                 ], "default": "auto"},
                 {"type": "switch", "key": "builtin_ir_fallback", "title": self._t("Встроенный ИК-порт"),
                  "subtitle": self._t("Использовать встроенный ИК передатчик телефона (Xiaomi, Poco, Vivo) при отсутствии USB"), "default": True},
                 {"type": "switch", "key": "audio_ir_fallback", "title": self._t("Audio IR (3.5мм адаптеры)"),
                  "subtitle": self._t("Использовать аудиовыход смартфона при отсутствии USB-донгла (установите громкость на 100%)"), "default": False},
+                {"type": "switch", "key": "audio_stereo", "title": self._t("Стерео Audio IR"),
+                 "subtitle": self._t("Выключите для моноадаптера"), "default": True},
                 {"type": "switch", "key": "remote_view_flipped", "title": self._t("Переворот экрана (180°)"),
                  "subtitle": self._t("Поворот экрана на 180° для ИК-донглов (USB / Audio), подключенных снизу"), "default": False},
                 {"type": "switch", "key": "haptic_feedback", "title": self._t("Виброотклик кнопок"),
@@ -3430,7 +3448,11 @@ class UsbCIrBackend(BasePlugin):
             if profile is None:
                 continue
             if dev.getDeviceName() == self._ignored_device_name:
-                continue
+                # Если права появились вручную — сбрасываем игнор и пробуем подключиться
+                if self._usb_manager.hasPermission(dev):
+                    self._ignored_device_name = None
+                else:
+                    continue
             if self._usb_manager.hasPermission(dev):
                 self._open_device(dev, profile)
             else:
@@ -3702,10 +3724,10 @@ class UsbCIrBackend(BasePlugin):
                 self._reader_continuous = True
             else:
                 self._read_until_at = max(self._read_until_at, time.monotonic() + 1.2)
-        if self._reader_thread is not None and self._reader_thread.is_alive():
-            return
-        self._reader_thread = threading.Thread(target=self._reader_loop, args=(session_id,), daemon=True)
-        self._reader_thread.start()
+            if self._reader_thread is not None and self._reader_thread.is_alive():
+                return
+            self._reader_thread = threading.Thread(target=self._reader_loop, args=(session_id,), daemon=True)
+            self._reader_thread.start()
 
     def _reader_loop(self, session_id):
         conn = self._connection
@@ -3940,7 +3962,6 @@ class UsbCIrBackend(BasePlugin):
                 action = "error_not_supported"
             else:
                 self._state = DongleState.LEARNING
-                self._learning_active.set()
                 session_id = self._session_id
                 self._learning_cancel_event.clear()
                 action = "start"
@@ -3962,6 +3983,7 @@ class UsbCIrBackend(BasePlugin):
         self._learning_thread = threading.Thread(target=self._learning_worker, args=(session_id,), daemon=True)
         try:
             self._learning_thread.start()
+            self._learning_active.set()
         except Exception as e:
             with self._state_lock:
                 self._state = DongleState.CONNECTED
@@ -4542,10 +4564,12 @@ class UsbCIrBackend(BasePlugin):
             else:
                 wait = self._refresh_min_interval - elapsed
                 if self._pending_refresh_timer is None:
-                    t = threading.Timer(wait, self._do_deferred_refresh)
-                    t.daemon = True
-                    self._pending_refresh_timer = t
-                    timer_to_start = t
+                    with self._state_lock:
+                        if self._state not in (DongleState.DISCONNECTED, DongleState.CLOSING):
+                            t = threading.Timer(wait, self._do_deferred_refresh)
+                            t.daemon = True
+                            self._pending_refresh_timer = t
+                            timer_to_start = t
         if do_refresh:
             try:
                 self.refresh()
@@ -4771,34 +4795,17 @@ class UsbCIrBackend(BasePlugin):
                 status_sub = f"{self._t('Встроенный ИК')}: {builtin_ir_str} | Audio IR: {audio_ir_str}"
             tab_content = [
                 ui.card([
-                    ui.text(self._t("Передатчик"), "titleMedium"),
-                    ui.dropdown([("auto", self._t("Авто: USB → встроенный → Audio")), ("usb", self._t("Только USB OTG")),
-                                 ("builtin", self._t("Только встроенный ИК")), ("audio", self._t("Только Audio IR"))],
-                                selected=self.get_setting("transmitter_mode", "auto"),
-                                on_select=lambda value: self._set_option("transmitter_mode", value),
-                                label=self._t("Способ передачи")),
-                    ui.text(self._t("Активен: ") + {"usb": "USB OTG", "builtin": self._t("Встроенный ИК"), "audio": "Audio IR"}.get(self._selected_backend(), self._t("нет доступного передатчика")),
-                            "bodyMedium", "accent" if can_tx else "muted"),
-                    ui.switch(checked=bool(self.get_setting("builtin_ir_fallback", True)),
-                              on_change=lambda value: self._set_option("builtin_ir_fallback", value), title=self._t("Разрешить встроенный ИК")),
-                    ui.switch(checked=bool(self.get_setting("audio_ir_fallback", False)),
-                              on_change=lambda value: self._set_option("audio_ir_fallback", value), title=self._t("Разрешить Audio IR"),
-                              subtitle=self._t("Нужен ИК LED-адаптер и проводной аудиовыход")),
-                    ui.switch(checked=bool(self.get_setting("audio_stereo", True)),
-                              on_change=lambda value: self._set_option("audio_stereo", value), title=self._t("Стерео Audio IR"),
-                              subtitle=self._t("Выключите для моноадаптера")),
-                    ui.switch(checked=bool(self.get_setting("haptic_feedback", True)),
-                              on_change=lambda value: self._set_option("haptic_feedback", value),
-                              title=self._t("Виброотклик кнопок"),
-                              subtitle=self._t("Тактильная отдача при нажатии клавиш пульта")),
-                ], padding=16),
-                ui.card([
                     ui.row([
                         ui.text(status_title, "titleMedium"),
                         ui.button(self._t("Откл.") if connected else self._t("Найти адаптер"),
                                   self._manual_disconnect if connected else self._manual_rescan),
                     ], spacing=6),
                     ui.text(status_sub, "bodySmall", "muted"),
+                    ui.switch(
+                        checked=bool(self.get_setting("haptic_feedback", True)),
+                        on_change=lambda value: self._set_option("haptic_feedback", bool(value)),
+                        title=self._t("Виброотклик кнопок")
+                    ),
                     ui.row([
                         ui.button(self._t("Тест NEC"), self._send_nec_test, enabled=can_tx),
                         ui.button(self._t("Тест RC-5"), self._send_rc5_test, enabled=can_tx),
