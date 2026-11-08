@@ -1,6 +1,6 @@
 {
   "format": "dolphy-plugins-v1",
-  "count": 30,
+  "count": 31,
   "plugins": [
     {
       "id": 16,
@@ -239,6 +239,20 @@
       "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/morse_code/morse_code.dolphyplugin",
       "post_url": "https://t.me/c/3966541757/29279",
       "updated_at": "2026-10-03 09:21:29"
+    },
+    {
+      "id": 31,
+      "name": "Network Audit Pro",
+      "version": "1.6.1",
+      "author": "Pinaplast",
+      "description": {
+        "ru": "Аудитор домашних роутеров: доступ к панели (Basic/Digest/форма), Telnet и UPnP-замеры, поиск утечек конфигов, отчёты и журнал событий. Плагин рабочий, но требует тестов на разных роутерах. Если будут баги или ошибки, просьба скидывать их мне в ТГ: @Pinaplast457",
+        "en": "Home router auditor: admin panel access (Basic/Digest/login form), Telnet and UPnP probes, config leak detection, reports and event log. The plugin is working but requires testing on different routers. If you find any bugs or errors, please report them to me on Telegram: @Pinaplast457"
+      },
+      "file": "plugins/network_audit_pro/network_audit_pro.dolphyplugin",
+      "download_url": "https://raw.githubusercontent.com/unvoiddd/Dolphy-app-Plugins/main/plugins/network_audit_pro/network_audit_pro.dolphyplugin",
+      "post_url": "https://t.me/c/3966541757/44647",
+      "updated_at": "2026-11-08 08:59:26"
     },
     {
       "id": 30,
