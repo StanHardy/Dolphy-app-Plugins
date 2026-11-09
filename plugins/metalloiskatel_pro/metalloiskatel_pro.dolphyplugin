@@ -1,9 +1,9 @@
 __id__ = "metal_detector"
-__name__ = "Металлоискатель PRO"
+__name__ = "Metal Detector PRO"
 __version__ = "2.0"
 __author__ = "@frostmench1k & @DobryyPIRATIK"
 __icon__ = "rounded:sensors"
-__description__ = "PRO радар металла, скрытой проводки и жучков с умной калибровкой"
+__description__ = "PRO radar for metal, hidden wiring, and listening devices with smart calibration"
 __permissions__ = []
 
 import json
@@ -82,7 +82,7 @@ class MetalDetectorPro(BasePlugin):
         self._last_ui_update = 0.0
         self._last_log_time = 0.0
 
-        self.preset = str(self.get_setting("preset", "Обычный"))
+        self.preset = str(self.get_setting("preset", "Normal"))
         self.threshold = float(self.get_setting("threshold", 15.0))
         self.vibrate_enabled = bool(self.get_setting("vibrate", True))
         self.sound_enabled = bool(self.get_setting("sound", False))
@@ -95,21 +95,21 @@ class MetalDetectorPro(BasePlugin):
         self._worker_stop = threading.Event()
 
         self.add_module(
-            title="Металлоискатель PRO 2.0",
-            description="Металл, проводка и жучки | @frostmench1k",
+            title="Metal Detector PRO 2.0",
+            description="Metal, wiring, and listening devices | @frostmench1k",
             icon="sensors",
             screen="main",
             section="PLUGINS"
         )
 
-        self.api.registerSettings("Металлоискатель PRO 2.0", json.dumps([
-            {"type": "slider", "key": "threshold", "title": "Порог срабатывания (мкТл)",
+        self.api.registerSettings("Metal Detector PRO 2.0", json.dumps([
+            {"type": "slider", "key": "threshold", "title": "Trigger threshold (uT)",
              "min": 2, "max": 150, "default": 15, "steps": 147},
-            {"type": "switch", "key": "vibrate", "title": "Тактильная вибрация (Гейгер)", "default": True},
-            {"type": "switch", "key": "sound", "title": "Звуковой радар", "default": False},
-            {"type": "switch", "key": "smooth", "title": "Фильтр шумов датчика", "default": True},
-            {"type": "switch", "key": "wiring_mode", "title": "Детектор скрытой проводки", "default": False},
-            {"type": "switch", "key": "auto_zero", "title": "Авто-подстройка фона", "default": False}
+            {"type": "switch", "key": "vibrate", "title": "Tactile vibration (Geiger)", "default": True},
+            {"type": "switch", "key": "sound", "title": "Audio radar", "default": False},
+            {"type": "switch", "key": "smooth", "title": "Sensor noise filter", "default": True},
+            {"type": "switch", "key": "wiring_mode", "title": "Hidden wiring detector", "default": False},
+            {"type": "switch", "key": "auto_zero", "title": "Auto baseline adjust", "default": False}
         ]), 10)
 
     def on_setting_changed(self, payload):
@@ -138,56 +138,56 @@ class MetalDetectorPro(BasePlugin):
 
     def _get_hot_cold_hint(self):
         if not self.running or self.calibrating:
-            return "Ожидание сканирования..."
+            return "Waiting for the scan..."
         if self.paused:
-            return "Экран на паузе (Показания зафиксированы)"
+            return "Screen paused (readings frozen)"
         if self.deviation < max(2.0, self.noise_floor * 1.5):
-            return "Спокойный магнитный фон"
+            return "Calm magnetic background"
         if self.trend > 0.6:
-            return "ГОРЯЧО: Вы приближаетесь к цели!"
+            return "HOT: You are approaching the target!"
         if self.trend < -0.6:
-            return "ХОЛОДНО: Вы удаляетесь от цели"
-        return "Стабильное удержание над целью"
+            return "COLD: You are moving away from the target"
+        return "Stable hold over the target"
 
     def _classify_target(self):
         if not self.running:
-            return "Радар выключен", "muted", "Нажмите «Старт» для запуска датчика"
+            return "Radar off", "muted", "Tap «Start» to run the sensor"
         if self.paused:
-            return "ПАУЗА (HOLD)", "warning", "Нажмите на иконку паузы сверху для продолжения"
+            return "PAUSED (HOLD)", "warning", "Tap the pause icon above to resume"
         if self.calibrating:
             pct = int((len(self.calib_samples) / max(self.calib_target, 1)) * 100)
-            return f"Калибровка нуля... {pct}%", "primary", "Не двигайте телефон и уберите металл"
+            return f"Zero calibration... {pct}%", "primary", "Keep the phone still and remove metal"
 
         if self.wiring_mode and self.ac_level >= 3.0:
-            return "Скрытая проводка / ЭМП 50 Гц!", "warning", "Обнаружено переменное электромагнитное поле"
+            return "Hidden wiring / 50 Hz EMF!", "warning", "Alternating electromagnetic field detected"
 
         if self.deviation < self.threshold * 0.45:
-            return "Чисто (Фоновая норма)", "success", self._get_hot_cold_hint()
+            return "Clear (Normal background)", "success", self._get_hot_cold_hint()
 
-        polarity = "Северный (+N)" if self.signed_delta >= 0 else "Южный (-S)"
+        polarity = "North (+N)" if self.signed_delta >= 0 else "South (-S)"
         if self.deviation >= self.threshold * 4.0:
-            dist = "ВПЛОТНУЮ: Мощный магнит / Крупная сталь"
+            dist = "TOUCHING: Strong magnet / Large steel"
             col = "error"
         elif self.deviation >= self.threshold * 2.0:
-            dist = "БЛИЗКО: Чёрный металл / Арматура"
+            dist = "CLOSE: Ferrous metal / Rebar"
             col = "error"
         elif self.deviation >= self.threshold:
-            dist = "ОБНАРУЖЕНО: Металл или динамик"
+            dist = "DETECTED: Metal or speaker"
             col = "error"
         else:
-            dist = "СЛАБЫЙ СИГНАЛ: Мелкий объект / Далеко"
+            dist = "WEAK SIGNAL: Small object / Far away"
             col = "warning"
 
-        return dist, col, f"{self._get_hot_cold_hint()} | Полюс: {polarity}"
+        return dist, col, f"{self._get_hot_cold_hint()} | Pole: {polarity}"
 
     def _accuracy_label(self):
         if self.accuracy >= 3:
-            return "Идеальная (3/3)", "success"
+            return "Perfect (3/3)", "success"
         if self.accuracy == 2:
-            return "Нормальная (2/3)", "warning"
+            return "Normal (2/3)", "warning"
         if self.accuracy == 1:
-            return "Низкая (1/3) — покрутите телефон восьмёркой!", "error"
-        return "Сбита (0/3) — требуется вращение восьмёркой!", "error"
+            return "Low (1/3) — wave the phone in a figure-eight!", "error"
+        return "Misaligned (0/3) — a figure-eight rotation is required!", "error"
 
     def screen_main(self, ui, api, state):
         status_title, status_color, status_sub = self._classify_target()
@@ -201,7 +201,7 @@ class MetalDetectorPro(BasePlugin):
         ]
 
         tabs = ui.tabs(
-            ["Радар", "Калибровка", "Спектр и Лог", "Опции"],
+            ["Radar", "Calibration", "Spectrum & Log", "Options"],
             selected=self.tab_index,
             on_select=self.select_tab
         )
@@ -216,7 +216,7 @@ class MetalDetectorPro(BasePlugin):
             page = self._tab_options(ui)
 
         return ui.scaffold(
-            title="Металлоискатель PRO 2.0",
+            title="Metal Detector PRO 2.0",
             actions=top_actions,
             content=ui.column([
                 tabs,
@@ -226,92 +226,92 @@ class MetalDetectorPro(BasePlugin):
 
     def _tab_radar(self, ui, status_title, status_color, status_sub, progress, pinpoint):
         base_txt = "—" if self.baseline is None else f"{self.baseline:.1f}"
-        presets = ["Жучки", "Монеты", "Обычный", "Крупный", "Проводка"]
+        presets = ["Bugs", "Coins", "Normal", "Large", "Wiring"]
 
         return ui.column([
             ui.card([
                 ui.row([
                     ui.column([
-                        ui.text(f"{self.magnitude:.1f} мкТл", "headlineLarge"),
+                        ui.text(f"{self.magnitude:.1f} uT", "headlineLarge"),
                         ui.text(status_title, "titleMedium", color=status_color),
                         ui.text(status_sub, "bodySmall", color="muted")
                     ]),
                     ui.wavy_progress(progress=progress, size=80)
                 ], spacing=12),
                 ui.spacer(height=6),
-                ui.text("Уровень тревоги", "labelSmall", color="muted"),
+                ui.text("Alarm level", "labelSmall", color="muted"),
                 ui.linear_progress(progress=progress, fill_max_width=True),
                 ui.spacer(height=4),
-                ui.text("Пинпоинтер (Точный эпицентр объекта)", "labelSmall", color="muted"),
+                ui.text("Pinpointer (Exact object epicenter)", "labelSmall", color="muted"),
                 ui.linear_progress(progress=pinpoint, fill_max_width=True)
             ], padding=14),
             ui.card([
                 ui.row([
                     ui.column([
-                        ui.text("Отклонение", "labelSmall", color="muted"),
+                        ui.text("Deviation", "labelSmall", color="muted"),
                         ui.text(f"{self.signed_delta:+.1f}", "titleLarge",
                                 color="error" if self.detected else "primary")
                     ]),
                     ui.column([
-                        ui.text("База (0)", "labelSmall", color="muted"),
+                        ui.text("Baseline (0)", "labelSmall", color="muted"),
                         ui.text(base_txt, "titleLarge")
                     ]),
                     ui.column([
-                        ui.text("Пик (Max)", "labelSmall", color="muted"),
+                        ui.text("Peak (Max)", "labelSmall", color="muted"),
                         ui.text(f"{self.max_magnitude:.1f}", "titleLarge", color="warning")
                     ]),
                     ui.column([
-                        ui.text("Находок", "labelSmall", color="muted"),
+                        ui.text("Finds", "labelSmall", color="muted"),
                         ui.text(f"{self.hit_count}", "titleLarge", color="success")
                     ])
                 ], spacing=10),
                 ui.divider(),
                 ui.row([
-                    ui.text(f"Переменный фон AC: {self.ac_level:.2f} мкТл", "bodySmall",
+                    ui.text(f"AC background: {self.ac_level:.2f} uT", "bodySmall",
                             color="warning" if self.ac_level >= 3.0 else "muted"),
-                    ui.text(f"Порог: {self.threshold:.0f} мкТл", "bodySmall", color="primary")
+                    ui.text(f"Threshold: {self.threshold:.0f} uT", "bodySmall", color="primary")
                 ], spacing=8)
             ], padding=14),
             ui.button_group(presets, self.preset, self.select_preset),
             ui.row([
-                ui.bounce_button("Стоп" if self.running else "Старт",
+                ui.bounce_button("Stop" if self.running else "Start",
                                  self.toggle_scan, fill_max_width=True),
-                ui.button("Точный 0", self.start_smart_calibration,
+                ui.button("Smart zero", self.start_smart_calibration,
                           style="outlined", fill_max_width=True)
             ], spacing=8),
-            ui.text("Авторы: @frostmench1k & @DobryyPIRATIK | v2.0", "bodySmall", color="muted")
+            ui.text("Authors: @frostmench1k & @DobryyPIRATIK | v2.0", "bodySmall", color="muted")
         ], spacing=10)
 
     def _tab_calibration(self, ui):
         acc_text, acc_color = self._accuracy_label()
-        base_txt = "Не откалибровано" if self.baseline is None else f"{self.baseline:.2f} мкТл"
+        base_txt = "Not calibrated" if self.baseline is None else f"{self.baseline:.2f} uT"
         calib_progress = len(self.calib_samples) / max(float(self.calib_target), 1.0) if self.calibrating else 1.0
 
         return ui.column([
             ui.card([
-                ui.text("Мастер калибровки (Умный ноль)", "titleMedium"),
-                ui.text(f"Системная точность датчика: {acc_text}", "bodyMedium", color=acc_color),
+                ui.text("Calibration wizard (Smart zero)", "titleMedium"),
+                ui.text(f"System sensor accuracy: {acc_text}", "bodyMedium", color=acc_color),
                 ui.spacer(height=4),
                 ui.linear_progress(progress=calib_progress, fill_max_width=True),
                 ui.spacer(height=4),
-                ui.text(f"Базовый фон: {base_txt} | Шум: ±{self.noise_floor:.2f} мкТл", "bodySmall"),
-                ui.text(f"Вектор нуля X/Y/Z: {self.base_x:.1f} / {self.base_y:.1f} / {self.base_z:.1f}", "bodySmall", color="muted"),
+                ui.text(f"Baseline: {base_txt} | Noise: ±{self.noise_floor:.2f} uT", "bodySmall"),
+                ui.text(f"Zero vector X/Y/Z: {self.base_x:.1f} / {self.base_y:.1f} / {self.base_z:.1f}", "bodySmall", color="muted"),
                 ui.spacer(height=8),
                 ui.row([
-                    ui.button("Умная калибровка", self.start_smart_calibration, fill_max_width=True),
-                    ui.button("Сброс пика", self.reset_stats, style="outlined", fill_max_width=False)
+                    ui.button("Smart calibration", self.start_smart_calibration, fill_max_width=True),
+                    ui.button("Reset peak", self.reset_stats, style="outlined", fill_max_width=False)
                 ], spacing=8)
             ], padding=14),
             ui.card([
-                ui.text("Рекомендации по правильной калибровке", "titleMedium"),
-                ui.text("1. Снимите чехол с магнитным кольцом (MagSafe) или застёжкой — он завышает фон с 48 до 200+ мкТл.", "bodySmall"),
-                ui.text("2. Поднимите телефон в воздух вдали от столов с металлическими ножками, ноутбуков и розеток.", "bodySmall"),
-                ui.text("3. Плавно покрутите телефон в воздухе по траектории восьмёрки (∞) 4–5 раз с переворотом корпуса.", "bodySmall"),
-                ui.text("4. Во время поиска держите телефон под одним и тем же углом наклона (поворот телефона в пространстве меняет проекцию магнитного поля Земли на оси X/Y/Z).", "bodySmall"),
+                ui.text("Proper calibration tips", "titleMedium"),
+                ui.text("1. Remove any case with a magnetic ring (MagSafe) or clasp — it inflates the background from 48 to 200+ uT.", "bodySmall"),
+                ui.text("2. Raise the phone in the air away from tables with metal legs, laptops, and power outlets.", "bodySmall"),
+                ui.text("3. Smoothly wave the phone in a figure-eight (∞) path 4-5 times, flipping the body each pass.", "bodySmall"),
+                ui.text("4. While searching, keep the phone at the same tilt angle (rotating the phone in space changes the projection of Earth's magnetic field onto the X/Y/Z axes).", "bodySmall"),
                 ui.spacer(height=4),
                 ui.switch(self.auto_zero, self.toggle_auto_zero,
-                          title="Авто-компенсация наклона",
-                          subtitle="Плавно подстраивать базу при медленном повороте рук")
+                          title="Auto tilt compensation",
+                          subtitle="Smoothly adjust the baseline during slow hand rotation")
             ], padding=14)
         ], spacing=10)
 
@@ -322,23 +322,23 @@ class MetalDetectorPro(BasePlugin):
         px = min(abs(dx) / 100.0, 1.0)
         py = min(abs(dy) / 100.0, 1.0)
         pz = min(abs(dz) / 100.0, 1.0)
-        log_str = "\n".join(self.history) if self.history else "Находок пока нет. Нажмите «Старт» и наведите верхний край телефона на проверяемую поверхность."
+        log_str = "\n".join(self.history) if self.history else "No finds yet. Tap «Start» and point the top edge of the phone at the surface to check."
 
         return ui.column([
             ui.card([
-                ui.text("3D-оси (Направление на цель)", "titleMedium"),
-                ui.text(f"Ось X (Боковая грань): {self.x:.1f} мкТл (Δ {dx:+.1f})", "bodySmall"),
+                ui.text("3D axes (Direction to target)", "titleMedium"),
+                ui.text(f"X axis (Side edge): {self.x:.1f} uT (Δ {dx:+.1f})", "bodySmall"),
                 ui.linear_progress(progress=px, fill_max_width=True),
-                ui.text(f"Ось Y (Верхний торец): {self.y:.1f} мкТл (Δ {dy:+.1f})", "bodySmall"),
+                ui.text(f"Y axis (Top edge): {self.y:.1f} uT (Δ {dy:+.1f})", "bodySmall"),
                 ui.linear_progress(progress=py, fill_max_width=True),
-                ui.text(f"Ось Z (Спинка / Экран): {self.z:.1f} мкТл (Δ {dz:+.1f})", "bodySmall"),
+                ui.text(f"Z axis (Back / Screen): {self.z:.1f} uT (Δ {dz:+.1f})", "bodySmall"),
                 ui.linear_progress(progress=pz, fill_max_width=True)
             ], padding=14),
             ui.card([
                 ui.row([
-                    ui.text(f"Журнал находок ({len(self.history)})", "titleMedium"),
-                    ui.button("Копировать", self.copy_report, style="outlined"),
-                    ui.button("Очистить", self.clear_history, style="outlined")
+                    ui.text(f"Find log ({len(self.history)})", "titleMedium"),
+                    ui.button("Copy", self.copy_report, style="outlined"),
+                    ui.button("Clear", self.clear_history, style="outlined")
                 ], spacing=6),
                 ui.log_panel(log_str, max_height=150)
             ], padding=14)
@@ -348,22 +348,22 @@ class MetalDetectorPro(BasePlugin):
         return ui.column([
             ui.card([
                 ui.slider(self.threshold, self.set_threshold, 2, 150,
-                          f"Порог срабатывания: {self.threshold:.0f} мкТл", 147),
+                          f"Trigger threshold: {self.threshold:.0f} uT", 147),
                 ui.switch(self.vibrate_enabled, self.toggle_vibrate,
-                          title="Тактильный Гейгер",
-                          subtitle="Частота и сила вибрации растут по мере приближения"),
+                          title="Tactile Geiger",
+                          subtitle="Vibration frequency and strength rise as you get closer"),
                 ui.switch(self.sound_enabled, self.toggle_sound,
-                          title="Звуковой радар",
-                          subtitle="Тональный писк с ускорением"),
+                          title="Audio radar",
+                          subtitle="Tonal beeping that speeds up"),
                 ui.switch(self.smooth_enabled, self.toggle_smooth,
-                          title="Сглаживание помех (Low-Pass)",
-                          subtitle="Отсекает случайные одиночные шумы сенсора"),
+                          title="Noise smoothing (Low-Pass)",
+                          subtitle="Filters out random single sensor spikes"),
                 ui.switch(self.wiring_mode, self.toggle_wiring,
-                          title="Детектор скрытой проводки (50/60 Гц)",
-                          subtitle="Анализ высокочастотного дрожания магнитного поля"),
+                          title="Hidden wiring detector (50/60 Hz)",
+                          subtitle="Analyzes high-frequency jitter of the magnetic field"),
                 ui.switch(self.notify_alert, self.toggle_notify,
-                          title="Пуш-уведомления о находках",
-                          subtitle="Отправлять уведомление при мощном всплеске поля")
+                          title="Find push notifications",
+                          subtitle="Send a notification on a strong field spike")
             ], padding=12)
         ], spacing=10)
 
@@ -373,34 +373,34 @@ class MetalDetectorPro(BasePlugin):
 
     def toggle_pause(self):
         if not self.running:
-            self.toast("Сначала запустите сканирование")
+            self.toast("Start the scan first")
             return
         self.paused = not self.paused
-        self.toast("Экран зафиксирован (Пауза)" if self.paused else "Сканирование продолжено")
+        self.toast("Screen frozen (Paused)" if self.paused else "Scan resumed")
         self.refresh()
 
     def select_preset(self, name):
         self.preset = str(name)
         self.set_setting("preset", self.preset)
-        if self.preset == "Жучки":
+        if self.preset == "Bugs":
             self.threshold = 6.0
             self.wiring_mode = True
-        elif self.preset == "Монеты":
+        elif self.preset == "Coins":
             self.threshold = 9.0
             self.wiring_mode = False
-        elif self.preset == "Обычный":
+        elif self.preset == "Normal":
             self.threshold = 15.0
             self.wiring_mode = False
-        elif self.preset == "Крупный":
+        elif self.preset == "Large":
             self.threshold = 35.0
             self.wiring_mode = False
-        elif self.preset == "Проводка":
+        elif self.preset == "Wiring":
             self.threshold = 12.0
             self.wiring_mode = True
 
         self.set_setting("threshold", self.threshold)
         self.set_setting("wiring_mode", self.wiring_mode)
-        self.toast(f"Пресет «{self.preset}»: порог {self.threshold:.0f} мкТл")
+        self.toast(f"Preset «{self.preset}»: threshold {self.threshold:.0f} uT")
         self.refresh()
 
     def toggle_scan(self):
@@ -419,7 +419,7 @@ class MetalDetectorPro(BasePlugin):
             except Exception:
                 sm = None
             if sm is None:
-                self.toast("Служба датчиков недоступна")
+                self.toast("Sensor service unavailable")
                 return
 
             sensor = sm.getDefaultSensor(_Sensor.TYPE_MAGNETIC_FIELD)
@@ -430,7 +430,7 @@ class MetalDetectorPro(BasePlugin):
                 if sensor is not None:
                     self.sensor_kind = "prox"
                 else:
-                    self.toast("Магнитометр не найден в устройстве")
+                    self.toast("No magnetometer found on this device")
                     return
 
             listener = _MagneticListener(self)
@@ -440,7 +440,7 @@ class MetalDetectorPro(BasePlugin):
                 ok = False
 
             if not ok:
-                self.toast("Ошибка подключения к магнитометру")
+                self.toast("Magnetometer connection error")
                 return
 
             self.sensor_manager = sm
@@ -479,7 +479,7 @@ class MetalDetectorPro(BasePlugin):
         self.paused = False
         self.calib_samples = []
         self.calibrating = True
-        self.toast("Калибровка нуля... Держите телефон ровно")
+        self.toast("Zero calibration... Hold the phone level")
         self.refresh()
 
     def reset_stats(self):
@@ -488,38 +488,38 @@ class MetalDetectorPro(BasePlugin):
         self.hit_count = 0
         self.deviation = 0.0
         self.detected = False
-        self.toast("Статистика и пики сброшены")
+        self.toast("Stats and peaks reset")
         self.refresh()
 
     def clear_history(self):
         self.history = []
         self.hit_count = 0
-        self.toast("Журнал очищен")
+        self.toast("Log cleared")
         self.refresh()
 
     def _build_report_text(self):
         return (
-            f"Металлоискатель PRO v2.0 (@frostmench1k)\n"
-            f"Текущее поле: {self.magnitude:.1f} мкТл | База: {0.0 if self.baseline is None else self.baseline:.1f} мкТл\n"
-            f"Отклонение: {self.signed_delta:+.1f} мкТл | Максимум: {self.max_magnitude:.1f} мкТл\n"
-            f"Векторы X/Y/Z: {self.x:.1f} / {self.y:.1f} / {self.z:.1f}\n"
-            f"Пульсация AC: {self.ac_level:.2f} мкТл | Находок за сессию: {self.hit_count}\n"
-            f"Журнал срабатываний:\n" + ("\n".join(self.history[-20:]) if self.history else "Пусто")
+            f"Metal Detector PRO v2.0 (@frostmench1k)\n"
+            f"Current field: {self.magnitude:.1f} uT | Baseline: {0.0 if self.baseline is None else self.baseline:.1f} uT\n"
+            f"Deviation: {self.signed_delta:+.1f} uT | Maximum: {self.max_magnitude:.1f} uT\n"
+            f"Vectors X/Y/Z: {self.x:.1f} / {self.y:.1f} / {self.z:.1f}\n"
+            f"AC ripple: {self.ac_level:.2f} uT | Finds this session: {self.hit_count}\n"
+            f"Trigger log:\n" + ("\n".join(self.history[-20:]) if self.history else "Empty")
         )
 
     def copy_report(self):
         try:
             self.api.getAndroid().clipboardSet(self._build_report_text())
-            self.toast("Отчёт скопирован в буфер обмена")
+            self.toast("Report copied to the clipboard")
         except Exception:
-            self.toast("Не удалось скопировать")
+            self.toast("Failed to copy")
 
     def export_and_share_log(self):
         text = self._build_report_text()
         try:
             android = self.api.getAndroid()
             android.filesWrite("metal_scan_report.txt", text, False)
-            android.shareText(text, "Отчёт Металлоискатель PRO 2.0")
+            android.shareText(text, "Metal Detector PRO 2.0 report")
         except Exception:
             self.copy_report()
 
@@ -566,7 +566,7 @@ class MetalDetectorPro(BasePlugin):
                 self.signed_delta = 0.0
                 self.calibrating = False
                 self.calib_samples = []
-                self.toast(f"Ноль установлен: {self.baseline:.1f} мкТл")
+                self.toast(f"Zero set: {self.baseline:.1f} uT")
             self._throttled_refresh(force=not self.calibrating)
             return
 
@@ -612,9 +612,9 @@ class MetalDetectorPro(BasePlugin):
         if self.detected and (not was_detected or (now - self._last_log_time >= 3.5)):
             self._last_log_time = now
             stamp = time.strftime("%H:%M:%S")
-            kind_tag = "Проводка" if is_wire_hit else ("Магнит/Сталь" if self.deviation >= self.threshold * 2.0 else "Металл")
+            kind_tag = "Wiring" if is_wire_hit else ("Magnet/Steel" if self.deviation >= self.threshold * 2.0 else "Metal")
             pol = "+" if self.signed_delta >= 0 else "-"
-            self.history.append(f"[{stamp}] #{self.hit_count} {kind_tag}: {self.magnitude:.1f} мкТл ({pol}{self.deviation:.1f})")
+            self.history.append(f"[{stamp}] #{self.hit_count} {kind_tag}: {self.magnitude:.1f} uT ({pol}{self.deviation:.1f})")
             if len(self.history) > 60:
                 self.history.pop(0)
 
@@ -622,8 +622,8 @@ class MetalDetectorPro(BasePlugin):
                 try:
                     self.api.getAndroid().notifyShow(
                         702,
-                        "Металлоискатель PRO 2.0",
-                        f"Обнаружена цель #{self.hit_count}: {self.magnitude:.1f} мкТл",
+                        "Metal Detector PRO 2.0",
+                        f"Target detected #{self.hit_count}: {self.magnitude:.1f} uT",
                         "dolphy_plugins"
                     )
                 except Exception:
@@ -703,7 +703,7 @@ class MetalDetectorPro(BasePlugin):
 
     def set_threshold(self, value):
         self.threshold = max(2.0, float(value))
-        self.preset = "Свой"
+        self.preset = "Custom"
         self.set_setting("threshold", self.threshold)
 
     def toggle_vibrate(self, value):

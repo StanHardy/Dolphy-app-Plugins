@@ -2,7 +2,7 @@ __id__ = "ble_radar_locator"
 __name__ = "BLE Radar Locator"
 __version__ = "1.5.3"
 __author__ = "Security Researcher"
-__description__ = "Радар BLE-устройств с компасом и плавным отображением"
+__description__ = "BLE device radar with a compass and smooth rendering"
 __icon__ = "rounded:radar"
 __permissions__ = ["ble_spam", "files"]
 
@@ -81,13 +81,13 @@ class BleRadarLocator(BasePlugin):
         self._last_ui_refresh = 0.0
         self._ui_lock = threading.Lock()
 
-        # ── ФИКС v1.5.3: единая эпоха для свипа и heading ──
-        # Фиксируется один раз при загрузке плагина. Передаётся в HTML
-        # как константа. JS считает Date.now() - EPOCH_MS, что даёт
-        # непрерывную фазу даже при пересоздании WebView каждые 200 мс.
+        # ── FIX v1.5.3: a single epoch for the sweep and heading ──
+        # Fixed once when the plugin loads. Passed to the HTML
+        # as a constant. JS computes Date.now() - EPOCH_MS, which gives
+        # a continuous phase even when the WebView is recreated every 200 ms.
         self._epoch_ms = int(time.time() * 1000)
 
-    # ═══════════════ Жизненный цикл ═══════════════
+    # ═══════════════ Lifecycle ═══════════════
 
     def on_plugin_load(self):
         if self._init_error:
@@ -95,7 +95,7 @@ class BleRadarLocator(BasePlugin):
         try:
             self.add_module(
                 title="BLE Radar Locator",
-                description="Радар BLE-устройств с компасом",
+                description="BLE device radar with a compass",
                 icon="rounded:radar",
                 screen="main",
                 section="PLUGINS",
@@ -104,7 +104,7 @@ class BleRadarLocator(BasePlugin):
             self._init_error = "add_module: " + str(e)[:200]
             raise
         self._ready = True
-        self._log("success", "BLE Radar Locator v1.5.3 загружен")
+        self._log("success", "BLE Radar Locator v1.5.3 loaded")
 
     def on_plugin_unload(self):
         self._ready = False
@@ -122,7 +122,7 @@ class BleRadarLocator(BasePlugin):
         except Exception:
             pass
 
-    # ═══════════════ Логи ═══════════════
+    # ═══════════════ Logs ═══════════════
 
     def _log(self, level, msg):
         try:
@@ -139,7 +139,7 @@ class BleRadarLocator(BasePlugin):
         try:
             with self._log_lock:
                 self._logs = []
-            self._log("info", "Логи очищены")
+            self._log("info", "Logs cleared")
         except Exception:
             pass
 
@@ -149,14 +149,14 @@ class BleRadarLocator(BasePlugin):
             android = self.api.getAndroid()
             ok = android.clipboardSet(text)
             if ok:
-                self.toast("Логи скопированы в буфер")
-                self._log("success", "Логи скопированы в буфер")
+                self.toast("Logs copied to the clipboard")
+                self._log("success", "Logs copied to the clipboard")
             else:
-                self.toast("Не удалось скопировать")
+                self.toast("Failed to copy")
         except Exception as e:
             self._log("error", "copy_logs: " + str(e)[:150])
             try:
-                self.toast("Ошибка копирования")
+                self.toast("Copy error")
             except Exception:
                 pass
 
@@ -165,15 +165,15 @@ class BleRadarLocator(BasePlugin):
             text = self._format_logs(last=self.MAX_LOGS)
             ok, path = self._write_file(self.FILE_LOG, text)
             if ok:
-                self._log("success", "Логи сохранены: " + path)
-                self.toast("Сохранено: " + path)
+                self._log("success", "Logs saved: " + path)
+                self.toast("Saved: " + path)
             else:
-                self._log("error", "Не удалось записать логи")
-                self.toast("Ошибка экспорта логов")
+                self._log("error", "Failed to write the logs")
+                self.toast("Log export error")
         except Exception as e:
             self._log("error", "export_logs: " + str(e)[:150])
             try:
-                self.toast("Ошибка: " + str(e)[:60])
+                self.toast("Error: " + str(e)[:60])
             except Exception:
                 pass
 
@@ -181,7 +181,7 @@ class BleRadarLocator(BasePlugin):
         try:
             devices = self._sorted_devices()
             if not devices:
-                self.toast("Список пуст")
+                self.toast("List is empty")
                 return
             now = time.time()
             lines = ["address,name,rssi_smooth,rssi_last,seen,last_seen_ago_s"]
@@ -197,14 +197,14 @@ class BleRadarLocator(BasePlugin):
                 ))
             ok, path = self._write_file(self.FILE_CSV, "\n".join(lines))
             if ok:
-                self._log("success", "CSV сохранён: " + path)
+                self._log("success", "CSV saved: " + path)
                 self.toast("CSV: " + path)
             else:
-                self.toast("Ошибка записи CSV")
+                self.toast("CSV write error")
         except Exception as e:
             self._log("error", "export_csv: " + str(e)[:150])
             try:
-                self.toast("Ошибка CSV: " + str(e)[:60])
+                self.toast("CSV error: " + str(e)[:60])
             except Exception:
                 pass
 
@@ -242,13 +242,13 @@ class BleRadarLocator(BasePlugin):
         except Exception:
             items = []
         if not items:
-            return "(логи пусты)"
+            return "(logs are empty)"
         out = []
         for lvl, stamp, msg in items:
             out.append("[{}] {}: {}".format(stamp, str(lvl).upper(), msg))
         return "\n".join(out)
 
-    # ═══════════════ UI-хелперы ═══════════════
+    # ═══════════════ UI helpers ═══════════════
 
     def _refresh(self, force=False):
         if not self._ready:
@@ -277,7 +277,7 @@ class BleRadarLocator(BasePlugin):
             except Exception as e:
                 try:
                     self._log("error", "callback: " + str(e)[:200])
-                    self.toast("Ошибка: " + str(e)[:80])
+                    self.toast("Error: " + str(e)[:80])
                 except Exception:
                     pass
             finally:
@@ -325,12 +325,12 @@ class BleRadarLocator(BasePlugin):
                 self._heading_in_html = float(self._heading_deg or 0.0)
             else:
                 self._heading_in_html = 0.0
-            self._log("info", "Компас " + ("включён" if self._compass_enabled
-                                           else "выключен"))
+            self._log("info", "Compass " + ("enabled" if self._compass_enabled
+                                           else "disabled"))
         except Exception:
             pass
 
-    # ═══════════════ Компас ═══════════════
+    # ═══════════════ Compass ═══════════════
 
     def _make_function1(self, py_fn):
         try:
@@ -381,7 +381,7 @@ class BleRadarLocator(BasePlugin):
             return
         if self._compass_attempts >= self.COMPASS_MAX_ATTEMPTS:
             self._compass_failed = True
-            self._log("warning", "Компас отключён после {} попыток".format(
+            self._log("warning", "Compass disabled after {} attempts".format(
                 self._compass_attempts))
             return
 
@@ -392,13 +392,13 @@ class BleRadarLocator(BasePlugin):
         try:
             android = api.getAndroid()
             if not hasattr(android, "sensorStart"):
-                self._log("warning", "sensorStart недоступен")
+                self._log("warning", "sensorStart unavailable")
                 self._compass_failed = True
                 return
 
             cb = self._make_function1(self._dispatch_rotation)
             if cb is None:
-                self._log("warning", "Function1 не создан")
+                self._log("warning", "Function1 not created")
                 self._compass_failed = True
                 return
             self._compass_callback = cb
@@ -411,12 +411,12 @@ class BleRadarLocator(BasePlugin):
 
             if sid_int > 0:
                 self._compass_sensor_id = sid_int
-                self._log("success", "Компас запущен (id={})".format(sid_int))
+                self._log("success", "Compass started (id={})".format(sid_int))
             else:
                 self._log("warning",
-                          "sensorStart(11) вернул: " + str(sid)[:60])
+                          "sensorStart(11) returned: " + str(sid)[:60])
         except Exception as e:
-            self._log("warning", "Компас: " + str(e)[:200])
+            self._log("warning", "Compass: " + str(e)[:200])
 
     def _stop_compass(self):
         try:
@@ -424,7 +424,7 @@ class BleRadarLocator(BasePlugin):
                 api = getattr(self, "api", None)
                 if api is not None:
                     api.getAndroid().sensorStop(self._compass_sensor_id)
-                    self._log("info", "Компас остановлен")
+                    self._log("info", "Compass stopped")
         except Exception:
             pass
         self._compass_sensor_id = None
@@ -489,7 +489,7 @@ class BleRadarLocator(BasePlugin):
         except Exception:
             pass
 
-    # ═══════════════ RSSI-математика ═══════════════
+    # ═══════════════ RSSI math ═══════════════
 
     @staticmethod
     def _rssi_to_distance(rssi, tx_power=-59, n=2.0):
@@ -521,12 +521,12 @@ class BleRadarLocator(BasePlugin):
             if d < 0:
                 return "—"
             if d < 1:
-                return "{:.1f} см".format(d * 100)
+                return "{:.1f} cm".format(d * 100)
             if d < 10:
-                return "{:.1f} м".format(d)
+                return "{:.1f} m".format(d)
             if d < 30:
-                return "{:.0f} м".format(d)
-            return ">30 м"
+                return "{:.0f} m".format(d)
+            return ">30 m"
         except Exception:
             return "—"
 
@@ -582,26 +582,26 @@ class BleRadarLocator(BasePlugin):
             devices = devices[:self.MAX_DEVICES]
         return devices
 
-    # ═══════════════ BLE-сканирование ═══════════════
+    # ═══════════════ BLE scanning ═══════════════
 
     def _start_scan(self):
         if self._scanning:
             try:
-                self.toast("Уже сканируется")
+                self.toast("Already scanning")
             except Exception:
                 pass
             return
         api = getattr(self, "api", None)
         if api is None or not hasattr(api, "bleStartScan"):
-            self._log("error", "api.bleStartScan недоступен")
+            self._log("error", "api.bleStartScan unavailable")
             try:
-                self.toast("BLE API недоступен")
+                self.toast("BLE API unavailable")
             except Exception:
                 pass
             return
 
         try:
-            self._log("info", "Останавливаю прошлый скан (если был)…")
+            self._log("info", "Stopping the previous scan (if any)…")
             self._stop_scan_internal()
 
             with self._devices_lock:
@@ -611,7 +611,7 @@ class BleRadarLocator(BasePlugin):
 
             self._scanning = True
             self._last_scan_started = time.time()
-            self._log("info", "=== Запуск BLE-скана ===")
+            self._log("info", "=== BLE scan start ===")
             self._log("info", "scan_id=" + self._scan_id)
 
             if self._ble_callback is None:
@@ -624,20 +624,20 @@ class BleRadarLocator(BasePlugin):
                       "bleStartScan → " + str(ok))
             if ok:
                 try:
-                    self.toast("Сканирование запущено")
+                    self.toast("Scan started")
                 except Exception:
                     pass
             else:
                 self._scanning = False
                 try:
-                    self.toast("Не удалось запустить скан")
+                    self.toast("Failed to start the scan")
                 except Exception:
                     pass
         except Exception as e:
             self._scanning = False
             self._log("error", "start_scan: " + str(e)[:200])
             try:
-                self.toast("Ошибка: " + str(e)[:80])
+                self.toast("Error: " + str(e)[:80])
             except Exception:
                 pass
 
@@ -651,12 +651,12 @@ class BleRadarLocator(BasePlugin):
         self._scanning = False
 
     def _stop_scan(self):
-        self._log("info", "=== Остановка скана ===")
+        self._log("info", "=== Scan stop ===")
         try:
             self._stop_scan_internal()
-            self._log("success", "bleStopScan выполнен")
+            self._log("success", "bleStopScan done")
             try:
-                self.toast("Остановлено")
+                self.toast("Stopped")
             except Exception:
                 pass
         except Exception as e:
@@ -667,7 +667,7 @@ class BleRadarLocator(BasePlugin):
             with self._devices_lock:
                 self._devices = {}
             self._unique_total = 0
-            self._log("info", "Список устройств очищен")
+            self._log("info", "Device list cleared")
         except Exception:
             pass
 
@@ -687,7 +687,7 @@ class BleRadarLocator(BasePlugin):
                     data = json.loads(data)
                 except Exception:
                     if self._batches_received % 20 == 1:
-                        self._log("warning", "batch: JSON не распарсен")
+                        self._log("warning", "batch: JSON not parsed")
                     return
 
             devices_list = []
@@ -763,10 +763,10 @@ class BleRadarLocator(BasePlugin):
                     }
 
             if new_count > 0:
-                self._log("success", "+{} новых (batch #{}, всего {})".format(
+                self._log("success", "+{} new (batch #{}, total {})".format(
                     new_count, self._batches_received, self._unique_total))
             elif updated > 0 and self._batches_received % 20 == 1:
-                self._log("info", "batch #{}: {} устройств".format(
+                self._log("info", "batch #{}: {} devices".format(
                     self._batches_received, updated))
 
             self._refresh(force=False)
@@ -776,7 +776,7 @@ class BleRadarLocator(BasePlugin):
             except Exception:
                 pass
 
-    # ═══════════════ HTML-радар ═══════════════
+    # ═══════════════ HTML radar ═══════════════
 
     def _build_radar_html(self):
         compass_on = bool(self._compass_enabled)
@@ -812,7 +812,7 @@ class BleRadarLocator(BasePlugin):
         except Exception:
             pass
 
-        # ── ФИКС v1.5.3: передаём epoch из Python ──
+        # ── FIX v1.5.3: passing the epoch from Python ──
         epoch_ms = int(getattr(self, "_epoch_ms", 0) or 0)
         if epoch_ms <= 0:
             epoch_ms = int(time.time() * 1000)
@@ -828,7 +828,7 @@ class BleRadarLocator(BasePlugin):
         p.append('canvas{display:block;width:100%;height:100%}')
         p.append('</style></head><body><canvas id="radar"></canvas><script>')
 
-        # ЕДИНАЯ эпоха — не сбрасывается при пересоздании WebView
+        # SINGLE epoch -- not reset when the WebView is recreated
         p.append('var EPOCH_MS = ' + str(epoch_ms) + ';')
         p.append('function mono_ms(){ return Date.now() - EPOCH_MS; }')
 
@@ -875,10 +875,10 @@ class BleRadarLocator(BasePlugin):
         p.append('  bg.addColorStop(1, "rgba(0, 0, 0, 0.95)");')
         p.append('  ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);')
         p.append('  var rings = [')
-        p.append('    {r: 1.0, label: "30 м"},')
-        p.append('    {r: 0.66, label: "10 м"},')
-        p.append('    {r: 0.33, label: "3 м"},')
-        p.append('    {r: 0.11, label: "0.5 м"}')
+        p.append('    {r: 1.0, label: "30 m"},')
+        p.append('    {r: 0.66, label: "10 m"},')
+        p.append('    {r: 0.33, label: "3 m"},')
+        p.append('    {r: 0.11, label: "0.5 m"}')
         p.append('  ];')
         p.append('  ctx.strokeStyle = "rgba(0, 255, 0, 0.35)";')
         p.append('  ctx.lineWidth = 1;')
@@ -944,7 +944,7 @@ class BleRadarLocator(BasePlugin):
         p.append('  }')
         p.append('}')
         p.append('function drawSweep() {')
-        # ── ФИКС: фаза от абсолютного времени эпохи, НЕ от момента парсинга ──
+        # ── FIX: phase from the absolute epoch time, NOT from the parse moment ──
         p.append('  var elapsed = mono_ms() / 1000;')
         p.append('  var sweepAngle = (elapsed * SWEEP_SPEED) % (Math.PI * 2);')
         p.append('  var canvasAngle = sweepAngle - Math.PI / 2;')
@@ -1011,10 +1011,10 @@ class BleRadarLocator(BasePlugin):
         p.append('  ctx.fillStyle = "rgba(0, 255, 0, 0.6)";')
         p.append('  ctx.font = "13px monospace";')
         p.append('  ctx.textAlign = "center";')
-        p.append('  ctx.fillText("ОЖИДАНИЕ УСТРОЙСТВ", CX, CY + RAD + 52);')
+        p.append('  ctx.fillText("WAITING FOR DEVICES", CX, CY + RAD + 52);')
         p.append('  ctx.font = "11px monospace";')
         p.append('  ctx.fillStyle = "rgba(0, 255, 0, 0.4)";')
-        p.append('  ctx.fillText("запустите сканирование", CX, CY + RAD + 72);')
+        p.append('  ctx.fillText("start a scan", CX, CY + RAD + 72);')
         p.append('  ctx.textAlign = "start";')
         p.append('}')
         p.append('function loop() {')
@@ -1034,16 +1034,16 @@ class BleRadarLocator(BasePlugin):
         p.append('</script></body></html>')
         return ''.join(p)
 
-    # ═══════════════ UI-секции ═══════════════
+    # ═══════════════ UI sections ═══════════════
 
     def _button(self, ui, title, cb, *args, enabled=True, style="tonal"):
         return ui.button(title, self._bind(cb, *args),
                          enabled=bool(enabled), style=style)
 
     def _navigation(self, ui):
-        labels = [("radar", "📡 Радар"),
-                  ("list", "📋 Список"),
-                  ("logs", "📝 Логи")]
+        labels = [("radar", "📡 Radar"),
+                  ("list", "📋 List"),
+                  ("logs", "📝 Logs")]
         buttons = []
         for page, title in labels:
             selected = self._page == page
@@ -1055,20 +1055,20 @@ class BleRadarLocator(BasePlugin):
 
     def _radar_ui(self, ui):
         if self._scanning:
-            status_text = "🟢 Сканирование активно"
+            status_text = "🟢 Scanning active"
             status_color = "success"
         else:
-            status_text = "⚪ Сканирование остановлено"
+            status_text = "⚪ Scanning stopped"
             status_color = "secondary"
 
         if self._compass_sensor_id is not None and self._heading_valid:
             compass_line = "🧭 {}".format(int(round(self._heading_deg)))
         elif self._compass_sensor_id is not None:
-            compass_line = "🧭 ожидание данных сенсора"
+            compass_line = "🧭 waiting for sensor data"
         elif self._compass_failed:
-            compass_line = "🧭 недоступен на этом устройстве"
+            compass_line = "🧭 unavailable on this device"
         else:
-            compass_line = "🧭 запуск…"
+            compass_line = "🧭 starting…"
 
         devices = self._get_devices_snapshot()
         count = len(devices)
@@ -1077,21 +1077,21 @@ class BleRadarLocator(BasePlugin):
             ui.card([
                 ui.text("📡  BLE RADAR", "labelSmall", color="secondary"),
                 ui.text(status_text, "titleMedium", color=status_color),
-                ui.text("Устройств: {}  ·  всего: {}  ·  пакетов: {}".format(
+                ui.text("Devices: {}  ·  total: {}  ·  packets: {}".format(
                     count, self._unique_total, self._batches_received),
                     "bodyMedium"),
                 ui.text(compass_line, "bodySmall", color="muted"),
                 ui.row([
-                    self._button(ui, "▶️  Старт", self._start_scan,
+                    self._button(ui, "▶️  Start", self._start_scan,
                                  enabled=not self._scanning, style="filled"),
-                    self._button(ui, "⏹  Стоп", self._stop_scan,
+                    self._button(ui, "⏹  Stop", self._stop_scan,
                                  enabled=self._scanning),
                 ]),
                 ui.switch(
                     checked=bool(self._compass_enabled),
                     on_change=self._bind_evt(self._set_compass_enabled),
-                    title="Компас",
-                    subtitle="Поворот точек по ориентации телефона",
+                    title="Compass",
+                    subtitle="Rotate points according to phone orientation",
                 ),
             ]),
         ]
@@ -1105,7 +1105,7 @@ class BleRadarLocator(BasePlugin):
         except Exception as e:
             self._log("error", "webview: " + str(e)[:200])
             children.append(ui.card([
-                ui.text("WebView недоступен", "bodyMedium", color="error"),
+                ui.text("WebView unavailable", "bodyMedium", color="error"),
                 ui.text(str(e)[:200], "bodySmall", color="muted"),
             ]))
 
@@ -1114,9 +1114,9 @@ class BleRadarLocator(BasePlugin):
     def _sort_chips(self, ui):
         chips = []
         options = [(self.SORT_RSSI, "RSSI"),
-                   (self.SORT_RECENT, "Свежие"),
-                   (self.SORT_NAME, "Имя"),
-                   (self.SORT_SEEN, "Частота")]
+                   (self.SORT_RECENT, "Recent"),
+                   (self.SORT_NAME, "Name"),
+                   (self.SORT_SEEN, "Frequency")]
         for value, label in options:
             chips.append(ui.chip(
                 label,
@@ -1143,24 +1143,24 @@ class BleRadarLocator(BasePlugin):
         devices = self._sorted_devices()
 
         children = [ui.card([
-            ui.text("📋  УСТРОЙСТВА", "labelSmall", color="secondary"),
-            ui.text("Показано: {} из {}".format(
+            ui.text("📋  DEVICES", "labelSmall", color="secondary"),
+            ui.text("Showing: {} of {}".format(
                 len(devices), len(self._get_devices_snapshot())),
                 "titleMedium"),
-            ui.text("Сортировка", "labelSmall", color="secondary"),
+            ui.text("Sorting", "labelSmall", color="secondary"),
             self._sort_chips(ui),
-            ui.text("Мин. RSSI", "labelSmall", color="secondary"),
+            ui.text("Min RSSI", "labelSmall", color="secondary"),
             self._min_rssi_chips(ui),
             ui.row([
                 self._button(ui, "📄  CSV", self._export_csv, style="filled"),
-                self._button(ui, "🗑  Очистить", self._clear_devices),
+                self._button(ui, "🗑  Clear", self._clear_devices),
             ]),
         ])]
 
         if not devices:
             children.append(ui.card([
-                ui.text("Пока пусто", "bodyMedium", color="secondary"),
-                ui.text("Запусти скан на вкладке «Радар» или снизь мин. RSSI",
+                ui.text("Empty so far", "bodyMedium", color="secondary"),
+                ui.text("Start a scan on the «Radar» tab or lower the min RSSI",
                         "bodySmall", color="muted"),
             ]))
             return children
@@ -1171,14 +1171,14 @@ class BleRadarLocator(BasePlugin):
             dist = self._rssi_to_distance(rssi_show, self.TX_POWER, self.N_FACTOR)
             dist_str = self._distance_text(dist)
             col = self._level_color(int(round(rssi_show)))
-            name = d.get("name") or "Без имени"
+            name = d.get("name") or "Unnamed"
             ago = int(now - d.get("last_seen", now))
             children.append(ui.card([
                 ui.text("{}. {}".format(i + 1, name), "titleMedium"),
                 ui.text(d.get("address", ""), "bodySmall", color="muted"),
                 ui.text("RSSI: {:.0f} dBm  ·  ~{}".format(rssi_show, dist_str),
                         "bodyMedium", color=col),
-                ui.text("виден {} раз  ·  {} сек назад".format(
+                ui.text("seen {} times  ·  {} sec ago".format(
                     d.get("seen", 0), ago), "bodySmall", color="muted"),
             ]))
 
@@ -1190,21 +1190,21 @@ class BleRadarLocator(BasePlugin):
             items = list(self._logs[-self.LOG_UI_LINES:])
 
         children = [ui.card([
-            ui.text("📝  ЛОГИ", "labelSmall", color="secondary"),
-            ui.text("Записей: {}".format(total), "titleMedium"),
+            ui.text("📝  LOGS", "labelSmall", color="secondary"),
+            ui.text("Entries: {}".format(total), "titleMedium"),
             ui.row([
-                self._button(ui, "💾  Экспорт", self._export_logs, style="filled"),
-                self._button(ui, "📄  Копировать", self._copy_logs),
+                self._button(ui, "💾  Export", self._export_logs, style="filled"),
+                self._button(ui, "📄  Copy", self._copy_logs),
             ]),
-            self._button(ui, "🗑  Очистить логи", self._clear_logs, style="text"),
-            ui.text("Файл: {}/{}".format(self.EXPORT_DIR, self.FILE_LOG),
+            self._button(ui, "🗑  Clear logs", self._clear_logs, style="text"),
+            ui.text("File: {}/{}".format(self.EXPORT_DIR, self.FILE_LOG),
                     "bodySmall", color="muted"),
         ])]
 
         if total == 0:
             children.append(ui.card([
-                ui.text("Логи пусты", "bodyMedium", color="secondary"),
-                ui.text("Запусти скан на вкладке «Радар»",
+                ui.text("Logs are empty", "bodyMedium", color="secondary"),
+                ui.text("Start a scan on the «Radar» tab",
                         "bodySmall", color="muted"),
             ]))
             return children
@@ -1221,7 +1221,7 @@ class BleRadarLocator(BasePlugin):
         children.append(ui.card(lines))
         return children
 
-    # ═══════════════ Точка входа ═══════════════
+    # ═══════════════ Entry point ═══════════════
 
     def screen_main(self, ui, api, state):
         try:
@@ -1231,9 +1231,9 @@ class BleRadarLocator(BasePlugin):
                 return ui.scaffold(
                     title="BLE Radar Locator",
                     content=ui.column([
-                        ui.text("Плагин не готов",
+                        ui.text("Plugin not ready",
                                 "titleMedium", color="warning"),
-                        ui.text(self._init_error or "неизвестная причина",
+                        ui.text(self._init_error or "unknown reason",
                                 "bodySmall", color="muted"),
                     ], padding=16, spacing=8, fill_max_size=False))
 
@@ -1271,12 +1271,12 @@ class BleRadarLocator(BasePlugin):
                 return ui.scaffold(
                     title="BLE Radar Locator",
                     content=ui.column([
-                        ui.text("Ошибка UI", "titleLarge", color="error"),
+                        ui.text("UI error", "titleLarge", color="error"),
                         ui.text(str(exc)[:300], "bodySmall", color="warning"),
-                        ui.button("На радар",
+                        ui.button("To the radar",
                                   self._bind(self._go, "radar"),
                                   style="tonal"),
                     ], padding=16, spacing=10, fill_max_size=False))
             except Exception:
-                return ui.scaffold(title="Ошибка",
-                                   content=ui.text("UI сломан"))
+                return ui.scaffold(title="Error",
+                                   content=ui.text("UI is broken"))

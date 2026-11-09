@@ -6,7 +6,7 @@ __id__ = "icloud_spoof"
 __name__ = "iCloud Spoof"
 __version__ = "1.0.0"
 __author__ = "winterballs"
-__description__ = "Улучшенный BLE-спам для iOS 17+ через iCloud и Nearby Info"
+__description__ = "Enhanced BLE spam for iOS 17+ via iCloud and Nearby Info"
 __icon__ = "rounded:cloud"
 __permissions__ = ["ble_spam", "bluetooth"]
 
@@ -36,7 +36,7 @@ ICLOUD_SERVICES = {
 }
 
 NEARBY_INFO_SERVICES = {
-    "01": "Nearby Info — Общее", "02": "Nearby Info — iCloud",
+    "01": "Nearby Info — General", "02": "Nearby Info — iCloud",
     "03": "Nearby Info — Handoff", "04": "Nearby Info — Continuity Camera",
     "05": "Nearby Info — Sidecar",
 }
@@ -78,18 +78,18 @@ class ICloudSpoof(BasePlugin):
         self._log("plugin loaded")
         try:
             self.add_module("iCloud Spoof",
-                "Улучшенный BLE-спам для iOS 17+: iCloud и Nearby Info",
+                "Enhanced BLE spam for iOS 17+: iCloud and Nearby Info",
                 "cloud", "main", "OTHER", 5)
         except Exception as e:
             self.toast("module: " + str(e))
         try:
             self.register_ble_mode(self.MODE_ICLOUD, "iCloud Spoof",
-                                   "Сервисы iCloud для iOS 17+", "cloud", 10)
+                                   "iCloud services for iOS 17+", "cloud", 10)
         except Exception:
             pass
         try:
             self.register_ble_mode(self.MODE_NEARBY, "Nearby Info",
-                                   "Сервисы Nearby Info для iOS 17+", "sensors", 11)
+                                   "Nearby Info services for iOS 17+", "sensors", 11)
         except Exception:
             pass
 
@@ -232,12 +232,12 @@ class ICloudSpoof(BasePlugin):
 
     def _speed_label(self):
         if self.delay_ms <= 50:
-            return "очень быстро"
+            return "very fast"
         if self.delay_ms <= 100:
-            return "быстро"
+            return "fast"
         if self.delay_ms <= 200:
-            return "средне"
-        return "медленно"
+            return "medium"
+        return "slow"
 
     def _speed_bar(self):
         ratio = 1.0 - ((self.delay_ms - MIN_DELAY_MS) / float(MAX_DELAY_MS - MIN_DELAY_MS))
@@ -276,33 +276,33 @@ class ICloudSpoof(BasePlugin):
             is_icloud = self.active_mode == self.MODE_ICLOUD
             is_nearby = self.active_mode == self.MODE_NEARBY
             running = is_icloud or is_nearby
-            status_text = "● Работает" if running else "○ Остановлено"
+            status_text = "● Running" if running else "○ Stopped"
 
-            icloud_desc = "Нажмите, чтобы остановить" if is_icloud else "Нажмите для запуска"
-            nearby_desc = "Нажмите, чтобы остановить" if is_nearby else "Нажмите для запуска"
+            icloud_desc = "Tap to stop" if is_icloud else "Tap to start"
+            nearby_desc = "Tap to stop" if is_nearby else "Tap to start"
 
             status_card_children = [
-                ui.text("Статус: " + status_text, "titleMedium"),
-                ui.text("Всего пакетов: " + str(self.sent_count), "bodyMedium"),
+                ui.text("Status: " + status_text, "titleMedium"),
+                ui.text("Total packets: " + str(self.sent_count), "bodyMedium"),
                 ui.text("iCloud: " + str(self.icloud_count) + "  ·  Nearby Info: " + str(self.nearby_count), "bodyMedium"),
-                ui.text("Последний сервис: " + (self.last_service or "—"), "bodySmall"),
+                ui.text("Last service: " + (self.last_service or "—"), "bodySmall"),
             ]
             if self.last_error:
-                status_card_children.append(ui.text("Ошибка: " + self.last_error, "bodySmall", color="#FF4444"))
+                status_card_children.append(ui.text("Error: " + self.last_error, "bodySmall", color="#FF4444"))
 
             log_text = "\n".join(self.logs) if self.logs else "—"
 
             children = [
                 ui.text(
-                    "Улучшенный BLE-спам для iOS 17+. Эмулирует сервисы Apple "
-                    "Continuity: iCloud Keychain, Find My, Handoff, Continuity Camera.",
+                    "Enhanced BLE spam for iOS 17+. Emulates Apple Continuity "
+                    "services: iCloud Keychain, Find My, Handoff, Continuity Camera.",
                     "bodyMedium",
                 ),
                 ui.card(status_card_children, padding=16),
-                ui.text("Задержка между пакетами (мс)", "titleSmall"),
+                ui.text("Delay between packets (ms)", "titleSmall"),
                 self._centered_slider(ui),
                 ui.text(
-                    "Текущее: " + str(self.delay_ms) + " мс  ·  " + self._speed_label(),
+                    "Current: " + str(self.delay_ms) + " ms  ·  " + self._speed_label(),
                     "bodySmall",
                     color="muted",
                 ),
@@ -312,18 +312,18 @@ class ICloudSpoof(BasePlugin):
                 self._action_button(ui, "Nearby Info", nearby_desc, "bluetooth",
                                     self._icon_tint(is_nearby), lambda: self._toggle(self.MODE_NEARBY)),
                 ui.spacer(height=8),
-                ui.text("Логи (последние 20)", "titleSmall"),
+                ui.text("Logs (last 20)", "titleSmall"),
                 ui.log_panel(log_text, max_height=200),
                 ui.spacer(height=8),
                 ui.text(
-                    "Внимание: iCloud Spoof нацелен на iOS 17+. На старых "
-                    "версиях (iOS 15/16) используйте классические Apple-режимы.",
+                    "Note: iCloud Spoof targets iOS 17+. On older "
+                    "versions (iOS 15/16) use the classic Apple modes.",
                     "bodySmall",
                     color="muted",
                 ),
                 ui.divider(),
                 ui.text(FORK_NAME, "titleSmall"),
-                self._action_button(ui, "Открыть на GitHub", FORK_URL, "link", None,
+                self._action_button(ui, "Open on GitHub", FORK_URL, "link", None,
                                     lambda: api.getAndroid().openUrl(FORK_URL)),
             ]
 
@@ -332,10 +332,10 @@ class ICloudSpoof(BasePlugin):
                 content=ui.lazy_column(children, padding=16, spacing=12),
             )
         except Exception as e:
-            return ui.scaffold(title="Ошибка", content=ui.text(str(e)))
+            return ui.scaffold(title="Error", content=ui.text(str(e)))
 
-#молодёжный коментарий
-#я кстати форк сделал на dolphy-app
-#там баги фиксанул потихоньку
-#две настройки новые добавил
-#вот так вот
+#fun comment
+#btw I made a fork on dolphy-app
+#fixed some bugs there little by little
+#added two new settings
+#there you go

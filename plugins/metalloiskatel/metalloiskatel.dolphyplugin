@@ -1,9 +1,9 @@
 __id__ = "metal_detector"
-__name__ = "Металлоискатель"
+__name__ = "Metal Detector"
 __version__ = "1.0.4"
 __author__ = "@DobryyPIRATIK"
 __icon__ = "rounded:sensors"
-__description__ = "Поиск металла по магнитному полю"
+__description__ = "Finds metal via the magnetic field"
 __permissions__ = []
 
 import json
@@ -56,18 +56,18 @@ class MetalDetector(BasePlugin):
         self._beep_stop = threading.Event()
 
         self.add_module(
-            title="Металлоискатель",
-            description="Поиск металла @DobryyPIRATIK",
+            title="Metal Detector",
+            description="Metal search @DobryyPIRATIK",
             icon="sensors",
             screen="main",
             section="PLUGINS"
         )
 
-        self.api.registerSettings("Металлоискатель", json.dumps([
-            {"type": "slider", "key": "threshold", "title": "Порог",
+        self.api.registerSettings("Metal Detector", json.dumps([
+            {"type": "slider", "key": "threshold", "title": "Threshold",
              "min": 1, "max": 100, "default": 15, "steps": 98},
-            {"type": "switch", "key": "vibrate", "title": "Вибрация", "default": True},
-            {"type": "switch", "key": "sound", "title": "Звук", "default": False}
+            {"type": "switch", "key": "vibrate", "title": "Vibration", "default": True},
+            {"type": "switch", "key": "sound", "title": "Sound", "default": False}
         ]), 10)
 
     def on_setting_changed(self, payload):
@@ -89,39 +89,39 @@ class MetalDetector(BasePlugin):
         self.stop_scan()
 
     def screen_main(self, ui, api, state):
-        status = "Обнаружено" if self.detected else ("Поиск" if self.running else "Стоп")
+        status = "Detected" if self.detected else ("Searching" if self.running else "Stopped")
         color = "error" if self.detected else ("success" if self.running else "muted")
         base = "—" if self.baseline is None else f"{self.baseline:.1f}"
         progress = min(self.deviation / max(self.threshold * 2.0, 1.0), 1.0)
-        kind = "магнитометр" if self.sensor_kind == "mag" else "приближение"
+        kind = "magnetometer" if self.sensor_kind == "mag" else "proximity"
 
         return ui.scaffold(
-            title="Металлоискатель",
+            title="Metal Detector",
             content=ui.column([
                 ui.card([
-                    ui.text(f"{self.magnitude:.1f} мкТл", "headlineLarge"),
+                    ui.text(f"{self.magnitude:.1f} µT", "headlineLarge"),
                     ui.text(status, "titleMedium", color=color),
-                    ui.text(f"Датчик: {kind}", "bodySmall", color="muted"),
+                    ui.text(f"Sensor: {kind}", "bodySmall", color="muted"),
                     ui.spacer(height=8),
                     ui.wavy_progress(progress=progress, size=96)
                 ], padding=16),
                 ui.card([
-                    ui.text(f"Отклонение: {self.deviation:.1f}", "titleLarge"),
-                    ui.text(f"База: {base}", "bodySmall", color="muted")
+                    ui.text(f"Deviation: {self.deviation:.1f}", "titleLarge"),
+                    ui.text(f"Baseline: {base}", "bodySmall", color="muted")
                 ], padding=16),
                 ui.card([
                     ui.slider(self.threshold, self.set_threshold, 1, 100,
-                              f"Порог: {self.threshold:.0f}", 98),
-                    ui.switch(self.vibrate_enabled, self.toggle_vibrate, title="Вибрация"),
-                    ui.switch(self.sound_enabled, self.toggle_sound, title="Звук")
+                              f"Threshold: {self.threshold:.0f}", 98),
+                    ui.switch(self.vibrate_enabled, self.toggle_vibrate, title="Vibration"),
+                    ui.switch(self.sound_enabled, self.toggle_sound, title="Sound")
                 ], padding=12),
                 ui.row([
-                    ui.button("Стоп" if self.running else "Старт",
+                    ui.button("Stop" if self.running else "Start",
                               self.toggle_scan, fill_max_width=True),
-                    ui.button("Калибровка", self.calibrate,
+                    ui.button("Calibrate", self.calibrate,
                               style="outlined", fill_max_width=True)
                 ], spacing=8),
-                ui.text("Автор: @DobryyPIRATIK", "bodySmall", color="muted")
+                ui.text("Author: @DobryyPIRATIK", "bodySmall", color="muted")
             ], padding=16, spacing=12, fill_max_size=True)
         )
 
@@ -140,7 +140,7 @@ class MetalDetector(BasePlugin):
         except Exception:
             sm = None
         if sm is None:
-            self.toast("Нет службы датчиков")
+            self.toast("No sensor service")
             return
 
         sensor = sm.getDefaultSensor(_Sensor.TYPE_MAGNETIC_FIELD)
@@ -151,12 +151,12 @@ class MetalDetector(BasePlugin):
             if sensor is not None:
                 self.sensor_kind = "prox"
             else:
-                self.toast("Датчиков нет")
+                self.toast("No sensors")
                 return
 
         listener = _MagneticListener(self)
         if not sm.registerListener(listener, sensor, _SensorManager.SENSOR_DELAY_UI):
-            self.toast("Не удалось подключить датчик")
+            self.toast("Failed to attach sensor")
             return
 
         self.sensor_manager = sm
@@ -273,9 +273,9 @@ class MetalDetector(BasePlugin):
             self.baseline = self.magnitude
             self.deviation = 0.0
             self.detected = False
-            self.toast("База установлена")
+            self.toast("Baseline set")
         else:
-            self.toast("Ждём сигнал датчика")
+            self.toast("Waiting for sensor signal")
         self.refresh()
 
     def set_threshold(self, value):

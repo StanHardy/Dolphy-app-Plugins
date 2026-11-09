@@ -3,7 +3,7 @@ __name__ = "Morse Code"
 __version__ = "1.2.0"
 __author__ = "Create Plugin Dolphy"
 __icon__ = "rounded:flashlight_on"
-__description__ = "Азбука Морзе: тон, вибрация и показ. SOS, HELLO и свои сообщения"
+__description__ = "Morse code: tone, vibration and display. SOS, HELLO and custom messages"
 __permissions__ = ["files"]
 
 import time
@@ -27,7 +27,7 @@ class MorseCode(BasePlugin):
     def on_plugin_load(self):
         self.add_module(
             title="Morse Code",
-            description="Азбука Морзе",
+            description="Morse code",
             icon="flashlight_on",
             screen="main",
             section="PLUGINS",
@@ -55,18 +55,18 @@ class MorseCode(BasePlugin):
     def play(self):
         text = str(self.get_setting("text", "")).strip()
         if not text:
-            self.toast("Введите текст")
+            self.toast("Enter text")
             return
         morse = self.text_to_morse(text)
         if not morse:
-            self.toast("Нет символов")
+            self.toast("No valid characters")
             return
         if len(morse) > 200:
             morse = morse[:200]
         self.stop_flag = False
         thread = threading.Thread(target=self.play_thread, args=(morse,))
         thread.start()
-        self.toast("Играю: {}".format(morse[:40]))
+        self.toast("Playing: {}".format(morse[:40]))
 
     def play_thread(self, morse):
         mode = str(self.get_setting("mode", "vibrate"))
@@ -124,36 +124,36 @@ class MorseCode(BasePlugin):
             self.api.getAndroid().audioStop()
         except Exception:
             pass
-        self.toast("Стоп")
+        self.toast("Stop")
 
     def set_mode_tone(self):
         self.set_setting("mode", "tone")
-        self.toast("Режим: тон")
+        self.toast("Mode: tone")
         self.refresh()
 
     def set_mode_vibrate(self):
         self.set_setting("mode", "vibrate")
-        self.toast("Режим: вибрация")
+        self.toast("Mode: vibrate")
         self.refresh()
 
     def set_mode_show(self):
         self.set_setting("mode", "show")
-        self.toast("Режим: показ")
+        self.toast("Mode: show")
         self.refresh()
 
     def set_unit_slow(self):
         self.set_setting("unit", 300)
-        self.toast("Скорость: медленно")
+        self.toast("Speed: slow")
         self.refresh()
 
     def set_unit_normal(self):
         self.set_setting("unit", 150)
-        self.toast("Скорость: норма")
+        self.toast("Speed: normal")
         self.refresh()
 
     def set_unit_fast(self):
         self.set_setting("unit", 80)
-        self.toast("Скорость: быстро")
+        self.toast("Speed: fast")
         self.refresh()
 
     def screen_main(self, ui, api, state):
@@ -161,45 +161,45 @@ class MorseCode(BasePlugin):
         morse = self.text_to_morse(text)
         mode = str(self.get_setting("mode", "vibrate"))
         unit = int(self.get_setting("unit", 150))
-        mode_name = {"tone": "🔊 Тон", "vibrate": "📳 Вибро", "show": "👁 Показ"}.get(mode, mode)
+        mode_name = {"tone": "🔊 Tone", "vibrate": "📳 Vibrate", "show": "👁 Show"}.get(mode, mode)
         return ui.scaffold(title="Morse Code", content=ui.column([
             ui.card([
-                ui.text("Режим: {}".format(mode_name), "titleMedium"),
-                ui.text("Скорость: {} мс".format(unit), "bodySmall", "muted"),
+                ui.text("Mode: {}".format(mode_name), "titleMedium"),
+                ui.text("Speed: {} ms".format(unit), "bodySmall", "muted"),
             ], padding=16),
-            ui.text_field(text, lambda v: self.set_setting("text", str(v).upper()), label="Сообщение", single_line=True),
+            ui.text_field(text, lambda v: self.set_setting("text", str(v).upper()), label="Message", single_line=True),
             ui.card([ui.text(morse or "—", "bodyLarge")], padding=12),
             ui.card([
                 ui.function_row(title="SOS", description="... --- ...", icon="emergency", on_click=self.play_sos),
-                ui.function_row(title="HELLO", description="Приветствие", icon="waving_hand", on_click=self.play_hello),
-                ui.function_row(title="OK", description="Подтверждение", icon="check_circle", on_click=self.play_ok),
+                ui.function_row(title="HELLO", description="Greeting", icon="waving_hand", on_click=self.play_hello),
+                ui.function_row(title="OK", description="Confirmation", icon="check_circle", on_click=self.play_ok),
             ], padding=8),
-            ui.text("Режим", "titleMedium"),
+            ui.text("Mode", "titleMedium"),
             ui.row([
-                ui.button("Тон", self.set_mode_tone, style="tonal", fill_max_width=True),
-                ui.button("Вибро", self.set_mode_vibrate, style="tonal", fill_max_width=True),
-                ui.button("Показ", self.set_mode_show, style="tonal", fill_max_width=True),
+                ui.button("Tone", self.set_mode_tone, style="tonal", fill_max_width=True),
+                ui.button("Vibrate", self.set_mode_vibrate, style="tonal", fill_max_width=True),
+                ui.button("Show", self.set_mode_show, style="tonal", fill_max_width=True),
             ], spacing=8, fill_max_width=True),
-            ui.text("Скорость", "titleMedium"),
+            ui.text("Speed", "titleMedium"),
             ui.row([
-                ui.button("Медленно", self.set_unit_slow, style="tonal", fill_max_width=True),
-                ui.button("Норма", self.set_unit_normal, style="tonal", fill_max_width=True),
-                ui.button("Быстро", self.set_unit_fast, style="tonal", fill_max_width=True),
+                ui.button("Slow", self.set_unit_slow, style="tonal", fill_max_width=True),
+                ui.button("Normal", self.set_unit_normal, style="tonal", fill_max_width=True),
+                ui.button("Fast", self.set_unit_fast, style="tonal", fill_max_width=True),
             ], spacing=8, fill_max_width=True),
             ui.row([
-                ui.button("▶ Играть", self.play, fill_max_width=True),
-                ui.button("⏹ Стоп", self.stop_all, style="tonal", fill_max_width=True),
+                ui.button("▶ Play", self.play, fill_max_width=True),
+                ui.button("⏹ Stop", self.stop_all, style="tonal", fill_max_width=True),
             ], spacing=8, fill_max_width=True),
-            ui.button("Справка Морзе", lambda: self.navigate("help"), style="tonal", fill_max_width=True),
+            ui.button("Morse help", lambda: self.navigate("help"), style="tonal", fill_max_width=True),
         ], padding=16, spacing=12))
 
     def screen_help(self, ui, api, state):
         rows = []
         for letter, code in MORSE.items():
             rows.append(ui.function_row(title=letter, description=code, icon="abc"))
-        return ui.scaffold(title="Азбука Морзе", content=ui.column([
+        return ui.scaffold(title="Morse code", content=ui.column([
             ui.card(rows, padding=8),
-            ui.button("Назад", lambda: self.navigate("main"), style="tonal", fill_max_width=True),
+            ui.button("Back", lambda: self.navigate("main"), style="tonal", fill_max_width=True),
         ], padding=16, spacing=12))
 
     def on_plugin_unload(self):

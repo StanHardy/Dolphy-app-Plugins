@@ -3,7 +3,7 @@ __name__ = "Hardware Status"
 __version__ = "1.4"
 __author__ = "Bluemod"
 __icon__ = "rounded:memory"
-__description__ = "Проверка состояния NFC, GPS, Wi-Fi, Bluetooth LE/Classic, Wi-Fi Direct, USB, камеры, Root, ИК-передатчика и версии Android"
+__description__ = "Check the status of NFC, GPS, Wi-Fi, Bluetooth LE/Classic, Wi-Fi Direct, USB, camera, Root, IR transmitter and Android version"
 __permissions__ = ["nfc", "location", "bluetooth", "wifi", "usb", "camera", "root", "infrared"]
 
 import json
@@ -12,7 +12,7 @@ class HardwareStatus(BasePlugin):
     def on_plugin_load(self):
         self.add_module(
             title="Hardware Status",
-            description="NFC, GPS, Wi-Fi, BLE, Root и другое",
+            description="NFC, GPS, Wi-Fi, BLE, Root and more",
             icon="memory",
             screen="main",
             section="PLUGINS"
@@ -170,70 +170,70 @@ class HardwareStatus(BasePlugin):
                 self.status_card(
                     ui, "android", "Android",
                     android_release is not None,
-                    "Версия " + android_release + (" (API " + android_sdk + ")" if android_sdk else "") if android_release else "",
-                    "Не удалось определить версию"
+                    "Version " + android_release + (" (API " + android_sdk + ")" if android_sdk else "") if android_release else "",
+                    "Could not determine version"
                 ),
                 self.status_card(
                     ui, "nfc", "NFC",
                     nfc_available and nfc_enabled,
-                    "Доступен и включён",
-                    "Недоступен на устройстве" if not nfc_available else "Выключен"
+                    "Available and enabled",
+                    "Not available on device" if not nfc_available else "Disabled"
                 ),
                 self.status_card(
                     ui, "location_on", "GPS",
                     gps_enabled,
-                    "Включён",
-                    "Выключен"
+                    "Enabled",
+                    "Disabled"
                 ),
                 self.status_card(
                     ui, "wifi", "Wi-Fi",
                     wifi_enabled,
-                    "Включён",
-                    "Выключен"
+                    "Enabled",
+                    "Disabled"
                 ),
                 self.status_card(
                     ui, "bluetooth", "Bluetooth LE",
                     ble_ok,
-                    "Доступен и включён",
-                    "Недоступен" if not bt_enabled else "Сканер BLE недоступен"
+                    "Available and enabled",
+                    "Unavailable" if not bt_enabled else "BLE scanner unavailable"
                 ),
                 self.status_card(
                     ui, "bluetooth_connected", "Bluetooth Classic",
                     bt_enabled,
-                    "Включён",
-                    "Выключен"
+                    "Enabled",
+                    "Disabled"
                 ),
                 self.status_card(
                     ui, "wifi_tethering", "Wi-Fi Direct (P2P)",
                     wifi_direct_ok,
-                    "Поддерживается",
-                    "Не поддерживается"
+                    "Supported",
+                    "Not supported"
                 ),
                 self.status_card(
                     ui, "usb", "USB",
                     usb_ok,
-                    "Поддерживается (USB host)",
-                    "Не поддерживается"
+                    "Supported (USB host)",
+                    "Not supported"
                 ),
                 self.status_card(
-                    ui, "photo_camera", "Камера",
+                    ui, "photo_camera", "Camera",
                     camera_ok,
-                    "Доступна",
-                    "Недоступна"
+                    "Available",
+                    "Unavailable"
                 ),
                 self.status_card(
                     ui, "security", "Root",
                     root_ok,
-                    "Доступен",
-                    "Недоступен"
+                    "Available",
+                    "Unavailable"
                 ),
                 self.status_card(
-                    ui, "settings_remote", "ИК-передатчик",
+                    ui, "settings_remote", "IR transmitter",
                     ir_available,
-                    "Доступен",
-                    "Недоступен на устройстве"
+                    "Available",
+                    "Not available on device"
                 ),
-                ui.button("Обновить", self.on_refresh, style="filled", fill_max_width=True)
+                ui.button("Refresh", self.on_refresh, style="filled", fill_max_width=True)
             ], padding=16, spacing=12, fill_max_size=True)
         )
 

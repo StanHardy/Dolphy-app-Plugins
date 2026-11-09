@@ -2,14 +2,14 @@ __id__ = "ble_guard"
 __name__ = "BLE Guard"
 __version__ = "1.0"
 __author__ = "WinterBalls"
-__description__ = "Защита от BLE spam через Shizuku"
+__description__ = "Protection against BLE spam via Shizuku"
 __icon__ = "shield"
 
 import json
 
 FLAGS = [
-    ("global", "ble_scan_always_enabled", "фоновое BLE-сканирование"),
-    ("global", "heads_up_notifications_enabled", "всплывающие уведомления"),
+    ("global", "ble_scan_always_enabled", "background BLE scanning"),
+    ("global", "heads_up_notifications_enabled", "heads-up notifications"),
 ]
 
 
@@ -25,7 +25,7 @@ class BLEGuardPlugin(BasePlugin):
         try:
             self.add_module(
                 title="BLE Guard",
-                description="Защита от BLE spam через Shizuku",
+                description="Protection against BLE spam via Shizuku",
                 icon="shield",
                 screen="main",
                 section="PLUGINS",
@@ -50,7 +50,7 @@ class BLEGuardPlugin(BasePlugin):
         self._ready = False
 
     # ------------------------------------------------------------------
-    # Shizuku типо
+    # Shizuku stuff
     # ------------------------------------------------------------------
 
     def _device(self):
@@ -113,7 +113,7 @@ class BLEGuardPlugin(BasePlugin):
         return False, ""
 
     # ------------------------------------------------------------------
-    # Флаги типо
+    # Flag stuff
     # ------------------------------------------------------------------
 
     def _flag_id(self, ns, key):
@@ -141,7 +141,7 @@ class BLEGuardPlugin(BasePlugin):
         return found
 
     # ------------------------------------------------------------------
-    # Действия типо
+    # Action stuff
     # ------------------------------------------------------------------
 
     def _apply(self):
@@ -220,13 +220,13 @@ class BLEGuardPlugin(BasePlugin):
             available = self._scan_available() if shizuku_ok else []
             can_exec = shizuku_ok and len(available) > 0
 
-            status_text = "Включена" if active else "Выключена"
+            status_text = "Enabled" if active else "Disabled"
             if not shizuku_ok:
-                status_text = "Shizuku недоступен"
+                status_text = "Shizuku unavailable"
             elif not available:
-                status_text = "Флаги не найдены"
+                status_text = "Flags not found"
 
-            # галочка-индикатор
+            # checkmark indicator
             check_icon = "check_circle" if active else "radio_button_unchecked"
             check_tint = "#4CAF50" if active else "#888888"
 
@@ -236,28 +236,28 @@ class BLEGuardPlugin(BasePlugin):
                         ui.icon(check_icon, size=48, tint=check_tint),
                         ui.spacer(width=12),
                         ui.column([
-                            ui.text("Статус защиты", "titleMedium"),
+                            ui.text("Protection status", "titleMedium"),
                             ui.text(status_text, "headlineSmall"),
                         ], spacing=4),
                     ], spacing=0),
                 ], padding=16),
                 ui.text(
-                    "Гасит фоновое BLE-сканирование и всплывающие уведомления "
-                    "(визуальная часть BLE-спама).",
+                    "Suppresses background BLE scanning and heads-up notifications "
+                    "(the visual part of BLE spam).",
                     "bodySmall"
                 ),
                 ui.bounce_button(
-                    "Включить" if not active else "Выключить",
+                    "Enable" if not active else "Disable",
                     on_click=self._on_toggle,
                     enabled=can_exec and not self._busy
                 ),
                 ui.divider(),
-                ui.text("Диагностика", "titleMedium"),
-                ui.text("Shizuku: " + ("ок" if shizuku_ok else "нет"), "bodySmall"),
+                ui.text("Diagnostics", "titleMedium"),
+                ui.text("Shizuku: " + ("ok" if shizuku_ok else "no"), "bodySmall"),
             ]
 
             if available:
-                children.append(ui.text("Доступные флаги:", "bodyMedium"))
+                children.append(ui.text("Available flags:", "bodyMedium"))
                 for ns, key, desc, val in available:
                     mark = "✓" if val == 0 else "•"
                     children.append(ui.text(
@@ -265,7 +265,7 @@ class BLEGuardPlugin(BasePlugin):
                         "bodySmall"
                     ))
             else:
-                children.append(ui.text("Флаги не найдены", "bodySmall"))
+                children.append(ui.text("Flags not found", "bodySmall"))
 
             return ui.scaffold(
                 title="BLE Guard",
@@ -273,6 +273,6 @@ class BLEGuardPlugin(BasePlugin):
             )
         except Exception as e:
             return ui.scaffold(
-                title="Ошибка",
+                title="Error",
                 content=ui.text(str(e) if e else "unknown", "bodyMedium")
             )

@@ -3,7 +3,7 @@ __name__ = "Smart Terminal"
 __version__ = "1.12.2"
 __author__ = "dzemikreal"
 __icon__ = "rounded:terminal"
-__description__ = "Несколько терминалов через Root или Shizuku с Ctrl+C и живым выводом"
+__description__ = "Multiple terminals via Root or Shizuku with Ctrl+C and live output"
 __permissions__ = ["root", "shizuku"]
 
 import base64
@@ -14,20 +14,20 @@ import threading
 import time
 import uuid
 
-MODES = ["Root", "Shizuku", "Обычный"]
+MODES = ["Root", "Shizuku", "Normal"]
 MAX_TERMS = 8
 MAX_OUTPUT = 30000
 MAX_HISTORY = 50
 MAX_SNIPPETS = 30
 PALETTE = [
-    ("Стандарт", ""),
-    ("Розовый", "#F48FB1"),
-    ("Голубой", "#4FC3F7"),
-    ("Зелёный", "#81C784"),
-    ("Оранжевый", "#FFB74D"),
-    ("Фиолетовый", "#B39DDB"),
-    ("Красный", "#EF5350"),
-    ("Жёлтый", "#FFF176")
+    ("Default", ""),
+    ("Pink", "#F48FB1"),
+    ("Light blue", "#4FC3F7"),
+    ("Green", "#81C784"),
+    ("Orange", "#FFB74D"),
+    ("Purple", "#B39DDB"),
+    ("Red", "#EF5350"),
+    ("Yellow", "#FFF176")
 ]
 DEFAULT_SNIPPETS = [
     "ls -la",
@@ -120,7 +120,7 @@ class SmartTerminal(BasePlugin):
         self.alive = True
         self.add_module(
             title="Smart Terminal",
-            description="Терминалы через Root, Shizuku или обычные права",
+            description="Terminals via Root, Shizuku, or regular permissions",
             icon="terminal",
             screen="main",
             section="PLUGINS"
@@ -192,13 +192,13 @@ class SmartTerminal(BasePlugin):
         if term["mode"] == "Root":
             if self.root_ok:
                 return "root", None
-            return None, "Root недоступен"
-        if term["mode"] == "Обычный":
+            return None, "Root unavailable"
+        if term["mode"] == "Normal":
             return "shell", None
         if not self.shizuku_ok:
-            return None, "ошибка доступа: Shizuku не запущен"
+            return None, "access error: Shizuku is not running"
         if not self.shizuku_perm:
-            return None, "ошибка доступа: нет разрешения Shizuku"
+            return None, "access error: Shizuku permission not granted"
         return "shizuku", None
 
     def tmp_prefix(self, backend):
@@ -212,22 +212,22 @@ class SmartTerminal(BasePlugin):
         return TMP
 
     def status_text(self, term):
-        root = "да" if self.root_ok else "нет"
+        root = "yes" if self.root_ok else "no"
         if not self.shizuku_ok:
-            shizuku = "не запущен"
+            shizuku = "not running"
         elif self.shizuku_perm:
             if self.shizuku_root:
-                shizuku = "да (root)"
+                shizuku = "yes (root)"
             elif self.shizuku_uid == "2000":
-                shizuku = "да (shell)"
+                shizuku = "yes (shell)"
             elif self.shizuku_uid:
-                shizuku = "да (uid " + self.shizuku_uid + ")"
+                shizuku = "yes (uid " + self.shizuku_uid + ")"
             else:
-                shizuku = "да"
+                shizuku = "yes"
         else:
-            shizuku = "нет разрешения"
+            shizuku = "no permission"
         backend, error = self.resolve_backend(term)
-        state = "готов" if backend else str(error)
+        state = "ready" if backend else str(error)
         label = term["mode"]
         if term.get("user"):
             label += " → " + term["user"]
@@ -278,7 +278,7 @@ class SmartTerminal(BasePlugin):
 
     def add_term(self):
         if len(self.terms) >= MAX_TERMS:
-            self.toast("Максимум терминалов: " + str(MAX_TERMS))
+            self.toast("Maximum terminals: " + str(MAX_TERMS))
             return
         term = self.new_term(self.cur()["mode"])
         self.terms.append(term)
@@ -288,7 +288,7 @@ class SmartTerminal(BasePlugin):
     def close_at(self, index):
         def handler():
             if len(self.terms) <= 1:
-                self.toast("Нельзя закрыть последний терминал")
+                self.toast("Cannot close the last terminal")
                 return
             if index >= len(self.terms):
                 return
@@ -322,7 +322,7 @@ class SmartTerminal(BasePlugin):
         try:
             self.api.getDevice().shizukuRequestPermission()
         except Exception as error:
-            self.toast("Ошибка: " + str(error))
+            self.toast("Error: " + str(error))
         self.detect(True)
         self.refresh()
 
@@ -337,7 +337,7 @@ class SmartTerminal(BasePlugin):
             '  if ok "$q"; then\n'
             '    su -c "$U" ' + usr + "\n"
             "  else\n"
-            "    echo \"su: не удалось войти под '" + usr + "' (пользователь не найден)\"\n"
+            "    echo \"su: failed to log in as '" + usr + "' (user not found)\"\n"
             "    exit 1\n"
             "  fi\n"
             "fi\n"
@@ -363,13 +363,13 @@ class SmartTerminal(BasePlugin):
 
     def begin_switch(self, term, name):
         if name.isdigit() and int(name) % 100000 >= 20000:
-            self.append_output(term, "su: UID " + name + " вне допустимого диапазона (0-19999)\n")
+            self.append_output(term, "su: UID " + name + " is outside the allowed range (0-19999)\n")
             return
         if term.get("switching"):
-            self.toast("Проверка логина уже идёт")
+            self.toast("Login check already in progress")
             return
         term["switching"] = True
-        self.append_output(term, "[проверка пользователя " + name + "...]\n")
+        self.append_output(term, "[checking user " + name + "...]\n")
         thread = threading.Thread(target=self.switch_main, args=(term, name))
         thread.daemon = True
         thread.start()
@@ -390,13 +390,13 @@ class SmartTerminal(BasePlugin):
         if uid:
             term["user"] = name
             term["su"] = True
-            self.append_output(term, "[вход: " + name + ", uid " + uid + "]\n")
+            self.append_output(term, "[login: " + name + ", uid " + uid + "]\n")
         elif "NOSU" in text:
-            self.append_output(term, "su: в этой среде нет команды su, смена пользователя недоступна\n")
+            self.append_output(term, "su: no su command in this environment, user switching unavailable\n")
         elif text.startswith("ERR:"):
-            self.append_output(term, "su: ошибка проверки: " + text[4:] + "\n")
+            self.append_output(term, "su: check error: " + text[4:] + "\n")
         else:
-            self.append_output(term, "su: пользователь '" + name + "' не найден\n")
+            self.append_output(term, "su: user '" + name + "' not found\n")
         term["switching"] = False
         try:
             self.refresh()
@@ -411,16 +411,16 @@ class SmartTerminal(BasePlugin):
         self.detect()
         name = str(term.get("login") or "").strip()
         if not self.can_su():
-            self.toast("Нужен Root или Shizuku от root")
+            self.toast("Root or root-run Shizuku required")
             return
         if not name:
-            self.toast("Введите логин")
+            self.toast("Enter a login")
             return
         if not LOGIN_RE.match(name):
-            self.toast("Недопустимый логин")
+            self.toast("Invalid login")
             return
         if term["job"]:
-            self.toast("В этом терминале процесс ещё выполняется")
+            self.toast("A process is still running in this terminal")
             return
         self.append_output(term, self.prompt(term) + "su " + name + "\n")
         if name in ("root", "0"):
@@ -433,7 +433,7 @@ class SmartTerminal(BasePlugin):
     def reset_login(self):
         term = self.cur()
         if term["job"]:
-            self.toast("В этом терминале процесс ещё выполняется")
+            self.toast("A process is still running in this terminal")
             return
         term["user"] = ""
         term["su"] = False
@@ -462,7 +462,7 @@ class SmartTerminal(BasePlugin):
     def run_command(self, term):
         command = term["command"].strip()
         if term["job"]:
-            self.toast("В этом терминале процесс ещё выполняется")
+            self.toast("A process is still running in this terminal")
             return
         if not command:
             self.append_output(term, self.prompt(term) + "\n")
@@ -489,9 +489,9 @@ class SmartTerminal(BasePlugin):
             term["command"] = ""
             if not self.can_su():
                 if self.shizuku_ok and self.shizuku_perm and self.shizuku_uid:
-                    self.append_output(term, "su: заблокировано, Shizuku запущен не от root (uid " + self.shizuku_uid + ")\n")
+                    self.append_output(term, "su: blocked, Shizuku is not running as root (uid " + self.shizuku_uid + ")\n")
                 else:
-                    self.append_output(term, "su: нужен Root или Shizuku от root (uid 0)\n")
+                    self.append_output(term, "su: Root or root-run Shizuku required (uid 0)\n")
             elif user_match:
                 self.begin_switch(term, user_match.group(1))
             else:
@@ -642,7 +642,7 @@ class SmartTerminal(BasePlugin):
         try:
             raw = self.exec_raw(job["backend"], self.start_command(term, job))
         except Exception as error:
-            self.end_job(term, job, "[ошибка: " + str(error) + "]\n")
+            self.end_job(term, job, "[error: " + str(error) + "]\n")
             return
         started, _ = self.extract(raw)
         started = self.strip_marker(job, started)
@@ -655,7 +655,7 @@ class SmartTerminal(BasePlugin):
             try:
                 raw = self.exec_raw(job["backend"], self.poll_command(job))
             except Exception as error:
-                self.end_job(term, job, "[ошибка: " + str(error) + "]\n")
+                self.end_job(term, job, "[error: " + str(error) + "]\n")
                 return
             text, code = self.extract(raw)
             head, _, body = text.partition("\n")
@@ -680,7 +680,7 @@ class SmartTerminal(BasePlugin):
             else:
                 job["fails"] += 1
                 if job["fails"] >= 5:
-                    self.end_job(term, job, "[потеряна связь с процессом]\n")
+                    self.end_job(term, job, "[lost contact with the process]\n")
                     return
 
     def finish_job(self, term, job, status):
@@ -696,16 +696,16 @@ class SmartTerminal(BasePlugin):
             elif path:
                 term["cwd"] = path
             failed = code not in ("", "0")
-        if job.get("user") and "su: не удалось войти" in job["seen"]:
+        if job.get("user") and "su: failed to log in" in job["seen"]:
             term["user"] = ""
-            message += "[логин сброшен]\n"
+            message += "[login reset]\n"
         if job["backend"] == "shizuku" and failed and ACCESS_DENIED.search(job["seen"]):
-            message += "[ошибка доступа]\n"
+            message += "[access error]\n"
         if status.startswith("DONE"):
             if failed:
-                message += "[код выхода: " + code + "]\n"
+                message += "[exit code: " + code + "]\n"
         else:
-            message += "[процесс прерван]\n"
+            message += "[process terminated]\n"
         self.end_job(term, job, message)
 
     def end_job(self, term, job, message=""):
@@ -728,7 +728,7 @@ class SmartTerminal(BasePlugin):
             try:
                 self.exec_raw(job["backend"], self.signal_command(job, sig))
             except Exception as error:
-                self.append_output(term, "[ошибка: " + str(error) + "]\n")
+                self.append_output(term, "[error: " + str(error) + "]\n")
                 self.refresh()
 
         thread = threading.Thread(target=work)
@@ -748,10 +748,10 @@ class SmartTerminal(BasePlugin):
     def key_ctrl_z(self):
         term = self.cur()
         if not term["job"]:
-            self.toast("Нет запущенного процесса")
+            self.toast("No running process")
             return
         term["job"]["paused"] = True
-        self.append_output(term, "^Z [остановлено, fg — продолжить]\n")
+        self.append_output(term, "^Z [suspended, fg — resume]\n")
         self.send_signal(term, 19)
         self.refresh()
 
@@ -760,14 +760,14 @@ class SmartTerminal(BasePlugin):
         if not term["job"]:
             return
         term["job"]["paused"] = False
-        self.append_output(term, "[продолжение]\n")
+        self.append_output(term, "[resumed]\n")
         self.send_signal(term, 18)
         self.refresh()
 
     def key_kill(self):
         term = self.cur()
         if not term["job"]:
-            self.toast("Нет запущенного процесса")
+            self.toast("No running process")
             return
         self.append_output(term, "[kill -9]\n")
         self.send_signal(term, 9)
@@ -853,28 +853,28 @@ class SmartTerminal(BasePlugin):
             for name, color in PALETTE
         ]
         items = [
-            ui.text("Цвет текста и иконок плагина", "titleMedium", self.accent_color("primary")),
-            ui.text("Кнопки, карточки, фон и окно вывода задаёт само приложение, их цвет плагин менять не может.", "bodySmall", "muted"),
+            ui.text("Plugin text and icon color", "titleMedium", self.accent_color("primary")),
+            ui.text("Buttons, cards, the background, and the output window are set by the app itself; the plugin cannot change their color.", "bodySmall", "muted"),
             ui.lazy_row(chips[:4], spacing=8),
             ui.lazy_row(chips[4:], spacing=8),
-            ui.switch(self.rgb_on, self.set_rgb, "RGB режим", "Цвет плавно переливается, страница обновляется раз в секунду"),
+            ui.switch(self.rgb_on, self.set_rgb, "RGB mode", "The color smoothly cycles; the page refreshes once per second"),
             ui.spacer(height=96)
         ]
         return ui.scaffold(
-            title="Оформление",
+            title="Appearance",
             content=ui.lazy_column(items, padding=12, spacing=10)
         )
 
     def copy_output(self):
         text = self.cur()["output"]
         if not text.strip():
-            self.toast("Вывод пуст")
+            self.toast("Output is empty")
             return
         try:
             ok = self.api.getAndroid().clipboardSet(text)
         except Exception:
             ok = False
-        self.toast("Вывод скопирован" if ok else "Не удалось скопировать")
+        self.toast("Output copied" if ok else "Failed to copy")
 
     def paste_clipboard(self):
         try:
@@ -884,42 +884,42 @@ class SmartTerminal(BasePlugin):
         text = str(text or "").replace("\r", "")
         lines = [line for line in text.split("\n") if line.strip()]
         if not lines:
-            self.toast("Буфер обмена пуст")
+            self.toast("Clipboard is empty")
             return
         term = self.cur()
         term["command"] = term["command"] + lines[0]
         if len(lines) > 1:
-            self.toast("Вставлена только первая строка")
+            self.toast("Only the first line was pasted")
         self.refresh()
 
     def share_output(self):
         text = self.cur()["output"]
         if not text.strip():
-            self.toast("Вывод пуст")
+            self.toast("Output is empty")
             return
         try:
-            self.api.getAndroid().shareText(text, "Вывод терминала")
+            self.api.getAndroid().shareText(text, "Terminal output")
         except Exception as error:
-            self.toast("Ошибка: " + str(error))
+            self.toast("Error: " + str(error))
 
     def save_output(self):
         text = self.cur()["output"]
         if not text.strip():
-            self.toast("Вывод пуст")
+            self.toast("Output is empty")
             return
         path = "/sdcard/Download/terminal_" + time.strftime("%Y%m%d_%H%M%S") + ".txt"
         try:
             self.api.getAndroid().filesWrite(path, text, False)
-            self.toast("Сохранено: " + path)
+            self.toast("Saved: " + path)
         except Exception as error:
-            self.toast("Ошибка: " + str(error))
+            self.toast("Error: " + str(error))
 
     def clear_history(self):
         self.history = []
         self.set_setting("history", self.history)
         for term in self.terms:
             term["hist_pos"] = 0
-        self.toast("История очищена")
+        self.toast("History cleared")
 
     def open_snippets(self):
         self.navigate("snippets")
@@ -927,7 +927,7 @@ class SmartTerminal(BasePlugin):
     def use_snippet(self, command):
         def handler():
             self.cur()["command"] = command
-            self.toast("Команда вставлена, вернитесь назад")
+            self.toast("Command pasted, go back")
         return handler
 
     def delete_snippet(self, command):
@@ -941,13 +941,13 @@ class SmartTerminal(BasePlugin):
     def save_snippet(self):
         command = self.cur()["command"].strip()
         if not command:
-            self.toast("Сначала введите команду в терминале")
+            self.toast("Enter a command in the terminal first")
             return
         if command in self.snippets:
-            self.toast("Такая команда уже сохранена")
+            self.toast("This command is already saved")
             return
         if len(self.snippets) >= MAX_SNIPPETS:
-            self.toast("Максимум быстрых команд: " + str(MAX_SNIPPETS))
+            self.toast("Maximum quick commands: " + str(MAX_SNIPPETS))
             return
         self.snippets.append(command)
         self.set_setting("snippets", self.snippets)
@@ -956,9 +956,9 @@ class SmartTerminal(BasePlugin):
     def screen_snippets(self, ui, api, state):
         current = self.cur()["command"].strip()
         items = [
-            ui.text("Нажмите на команду, чтобы вставить её в текущий терминал", "bodySmall", self.accent_color()),
-            ui.text("Сейчас в поле: " + (current if current else "пусто"), "bodySmall", "muted", 2),
-            ui.button("Сохранить команду из поля", self.save_snippet, style="tonal", fill_max_width=True)
+            ui.text("Tap a command to paste it into the current terminal", "bodySmall", self.accent_color()),
+            ui.text("Field now: " + (current if current else "empty"), "bodySmall", "muted", 2),
+            ui.button("Save the command from the field", self.save_snippet, style="tonal", fill_max_width=True)
         ]
         for command in self.snippets:
             items.append(
@@ -970,10 +970,10 @@ class SmartTerminal(BasePlugin):
                 ], padding=8, on_click=self.use_snippet(command))
             )
         if not self.snippets:
-            items.append(ui.text("Список пуст", "bodyMedium", "muted"))
+            items.append(ui.text("List is empty", "bodyMedium", "muted"))
         items.append(ui.spacer(height=96))
         return ui.scaffold(
-            title="Быстрые команды",
+            title="Quick commands",
             content=ui.lazy_column(items, padding=12, spacing=8)
         )
 
@@ -1067,7 +1067,7 @@ class SmartTerminal(BasePlugin):
             raw = self.run_as(backend, list_user, cmd)
             text, _ = self.extract(raw)
         except Exception as error:
-            h["summary"] = "Ошибка: " + str(error)
+            h["summary"] = "Error: " + str(error)
             return
         head, _, body = str(text).partition("@@PS")
         load = ""
@@ -1111,15 +1111,15 @@ class SmartTerminal(BasePlugin):
         swap_free = mem.get("SwapFree", 0)
         summary = ""
         if h.get("user"):
-            summary = "Пользователь: " + h["user"] + (" (список: все)" if h.get("scope") != "user" else " (список: как у него)") + "  |  "
+            summary = "User: " + h["user"] + (" (list: all)" if h.get("scope") != "user" else " (list: same as theirs)") + "  |  "
         summary += "Load: " + (load or "?")
         if total:
-            summary += "  |  RAM: %.2f/%.2f ГБ" % ((total - avail) / 1048576.0, total / 1048576.0)
+            summary += "  |  RAM: %.2f/%.2f GB" % ((total - avail) / 1048576.0, total / 1048576.0)
         if swap_total:
-            summary += "  |  Swap: %.2f/%.2f ГБ" % ((swap_total - swap_free) / 1048576.0, swap_total / 1048576.0)
-        summary += "  |  Процессов: " + str(len(rows))
+            summary += "  |  Swap: %.2f/%.2f GB" % ((swap_total - swap_free) / 1048576.0, swap_total / 1048576.0)
+        summary += "  |  Processes: " + str(len(rows))
         if backend == "shell":
-            summary += "  |  Обычный режим: видны не все процессы"
+            summary += "  |  Normal mode: not all processes are visible"
         h["summary"] = summary
         self.htop_render()
 
@@ -1144,7 +1144,7 @@ class SmartTerminal(BasePlugin):
         h = self.htop
         rows = list(h["rows"])
         if not rows:
-            h["text"] = h["raw"] or "Нет данных"
+            h["text"] = h["raw"] or "No data"
             return
         if h["sort"] == "mem":
             rows.sort(key=lambda r: (-r["mem"], -r["rss"]))
@@ -1185,7 +1185,7 @@ class SmartTerminal(BasePlugin):
         def handler():
             pid = self.htop["pid"].strip()
             if not pid.isdigit() or int(pid) < 2:
-                self.toast("Введите корректный PID")
+                self.toast("Enter a valid PID")
                 return
             backend = self.htop.get("backend")
             if not backend:
@@ -1197,11 +1197,11 @@ class SmartTerminal(BasePlugin):
                     text, _ = self.extract(raw)
                     text = str(text).strip()
                     if text.endswith("CODE:0"):
-                        self.toast("PID " + pid + ": сигнал " + str(sig) + " отправлен")
+                        self.toast("PID " + pid + ": signal " + str(sig) + " sent")
                     else:
-                        self.toast("Ошибка: " + text.replace("CODE:", "код ")[:80])
+                        self.toast("Error: " + text.replace("CODE:", "code ")[:80])
                 except Exception as error:
-                    self.toast("Ошибка: " + str(error))
+                    self.toast("Error: " + str(error))
 
             thread = threading.Thread(target=work)
             thread.daemon = True
@@ -1213,18 +1213,18 @@ class SmartTerminal(BasePlugin):
         h = self.htop
         auto = h["auto"]
         items = [
-            ui.text(h["summary"] if h["summary"] else "Загрузка...", "bodySmall", self.accent_color()),
+            ui.text(h["summary"] if h["summary"] else "Loading...", "bodySmall", self.accent_color()),
             ui.lazy_row([
                 ui.chip("CPU", h["sort"] == "cpu", self.htop_sort("cpu")),
                 ui.chip("MEM", h["sort"] == "mem", self.htop_sort("mem")),
                 ui.chip("PID", h["sort"] == "pid", self.htop_sort("pid")),
-                ui.chip("Авто: вкл" if auto else "Авто: выкл", auto, self.htop_auto)
+                ui.chip("Auto: on" if auto else "Auto: off", auto, self.htop_auto)
             ], spacing=8),
             ui.lazy_row(
-                [ui.button("Обновить", self.htop_refresh_now, style="filled")]
+                [ui.button("Refresh", self.htop_refresh_now, style="filled")]
                 + (
                     [ui.chip(
-                        "Список: как у " + h["user"] if h.get("scope") == "user" else "Список: все процессы",
+                        "List: same as " + h["user"] if h.get("scope") == "user" else "List: all processes",
                         h.get("scope") == "user",
                         self.htop_scope
                     )]
@@ -1232,7 +1232,7 @@ class SmartTerminal(BasePlugin):
                 ),
                 spacing=8
             ),
-            ui.text_field(h["pid"], self.htop_pid_input, label="PID (или нажмите на процесс)", single_line=True),
+            ui.text_field(h["pid"], self.htop_pid_input, label="PID (or tap a process)", single_line=True),
             ui.lazy_row([
                 ui.button("Kill -15", self.htop_kill(15), style="tonal"),
                 ui.button("Kill -9", self.htop_kill(9), style="tonal")
@@ -1240,11 +1240,11 @@ class SmartTerminal(BasePlugin):
         ]
         rows = self.htop_sorted()
         if not rows:
-            items.append(ui.text(h["raw"] if h["raw"] else "Загрузка...", "bodySmall", "muted"))
+            items.append(ui.text(h["raw"] if h["raw"] else "Loading...", "bodySmall", "muted"))
         for row in rows:
             selected = str(row["pid"]) == h["pid"]
             color = self.accent_color("primary") if selected else None
-            info = "PID %d  |  %s  |  CPU %.1f%%  |  MEM %.1f%%  |  %d МБ  |  %s" % (
+            info = "PID %d  |  %s  |  CPU %.1f%%  |  MEM %.1f%%  |  %d MB  |  %s" % (
                 row["pid"], row["user"][:10], row["cpu"], row["mem"],
                 row["rss"] // 1024, row["state"][:1]
             )
@@ -1266,7 +1266,7 @@ class SmartTerminal(BasePlugin):
 
         tabs = []
         for index, item in enumerate(self.terms):
-            label = "Терминал " + str(index + 1) + (" ●" if item["job"] else "")
+            label = "Terminal " + str(index + 1) + (" ●" if item["job"] else "")
             tabs.append(
                 ui.card([
                     ui.row([
@@ -1288,23 +1288,23 @@ class SmartTerminal(BasePlugin):
         ]
         if self.shizuku_ok and not self.shizuku_perm:
             top_items.append(
-                ui.button("Запросить разрешение Shizuku", self.request_shizuku, style="tonal")
+                ui.button("Request Shizuku permission", self.request_shizuku, style="tonal")
             )
 
         login_items = [
-            ui.text("Свой логин (нужен Root или Shizuku от root)", "titleSmall", self.accent_color()),
-            ui.text_field(term["login"], self.on_login_input, label="Логин", single_line=True, fill_max_width=False)
+            ui.text("Custom login (requires Root or root-run Shizuku)", "titleSmall", self.accent_color()),
+            ui.text_field(term["login"], self.on_login_input, label="Login", single_line=True, fill_max_width=False)
         ]
-        login_buttons = [ui.button("Войти", self.apply_login, style="filled", enabled=self.can_su())]
+        login_buttons = [ui.button("Log in", self.apply_login, style="filled", enabled=self.can_su())]
         if term.get("user"):
-            login_buttons.append(ui.button("Выйти", self.reset_login, style="tonal"))
-            login_items.append(ui.text("Сейчас: " + term["user"], "bodySmall", self.accent_color()))
+            login_buttons.append(ui.button("Log out", self.reset_login, style="tonal"))
+            login_items.append(ui.text("Current: " + term["user"], "bodySmall", self.accent_color()))
         login_items.append(ui.row(login_buttons, spacing=8))
         if not self.can_su():
             if self.shizuku_ok and self.shizuku_perm and self.shizuku_uid:
-                warn = "Shizuku запущен не от root: root и смена пользователя заблокированы"
+                warn = "Shizuku is not running as root: root and user switching are blocked"
             else:
-                warn = "Нужен Root или Shizuku, запущенный от root"
+                warn = "Root or Shizuku running as root is required"
             login_items.append(ui.text(warn, "bodySmall", "error"))
 
         keys = [
@@ -1329,21 +1329,21 @@ class SmartTerminal(BasePlugin):
         ]
         if job:
             terminal.append(ui.wavy_progress())
-            terminal.append(ui.text("Выполняется. Ctrl+C останавливает процесс.", "bodySmall", self.accent_color()))
+            terminal.append(ui.text("Running. Ctrl+C stops the process.", "bodySmall", self.accent_color()))
         else:
             terminal.append(
                 ui.text_field(term["command"], self.on_input, label=self.prompt(term), single_line=True)
             )
             terminal.append(
-                ui.lazy_row([ui.button("Исполнить", self.run_active, style="filled")] + self.htop_button(ui, term) + [
+                ui.lazy_row([ui.button("Run", self.run_active, style="filled")] + self.htop_button(ui, term) + [
                     ui.button("↑", self.key_up, style="tonal"),
                     ui.button("↓", self.key_down, style="tonal"),
-                    ui.button("Копировать", self.copy_output, style="tonal"),
-                    ui.button("Вставить", self.paste_clipboard, style="tonal"),
-                    ui.button("Поделиться", self.share_output, style="tonal"),
-                    ui.button("Быстрые", self.open_snippets, style="tonal"),
-                    ui.button("В файл", self.save_output, style="tonal"),
-                    ui.button("Сброс истории", self.clear_history, style="tonal")
+                    ui.button("Copy", self.copy_output, style="tonal"),
+                    ui.button("Paste", self.paste_clipboard, style="tonal"),
+                    ui.button("Share", self.share_output, style="tonal"),
+                    ui.button("Quick", self.open_snippets, style="tonal"),
+                    ui.button("To file", self.save_output, style="tonal"),
+                    ui.button("Reset history", self.clear_history, style="tonal")
                 ], spacing=8)
             )
 

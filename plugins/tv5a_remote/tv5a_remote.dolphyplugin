@@ -3,7 +3,7 @@ __name__ = "TV5A Remote"
 __version__ = "2.1.0"
 __author__ = "Create Plugin Dolphy"
 __icon__ = "rounded:connected_tv"
-__description__ = "ИК-пульт для TV5A (Alma TV) и Sakura + Wi-Fi пульт через ADB"
+__description__ = "IR remote for TV5A (Alma TV) and Sakura + Wi-Fi remote via ADB"
 __permissions__ = ["files"]
 
 import time
@@ -26,7 +26,7 @@ class Tv5aRemote(BasePlugin):
     def on_plugin_load(self):
         self.add_module(
             title="TV5A Remote",
-            description="ИК + Wi-Fi пульт",
+            description="IR + Wi-Fi remote",
             icon="connected_tv",
             screen="main",
             section="PLUGINS",
@@ -90,9 +90,9 @@ class Tv5aRemote(BasePlugin):
             self.api.getAndroid().irTransmit(RC5_FREQ, pattern)
             self.set_setting("rc5_toggle", 1 - toggle)
             self.add_log("RC5 cmd={} addr={}".format(command, address))
-            self.toast("RC5: {} (адр. {})".format(command, address))
+            self.toast("RC5: {} (addr {})".format(command, address))
         except Exception as e:
-            self.toast("Ошибка: {}".format(e))
+            self.toast("Error: {}".format(e))
         self.refresh()
 
     def send_repeat(self, command, times=3):
@@ -111,7 +111,7 @@ class Tv5aRemote(BasePlugin):
     def send_sakura(self, key):
         code = SAKURA_CODES.get(key)
         if code is None:
-            self.toast("Нет кода: {}".format(key))
+            self.toast("No code: {}".format(key))
             return
         try:
             pattern = self.nec_pattern(code)
@@ -119,7 +119,7 @@ class Tv5aRemote(BasePlugin):
             self.add_log("Sakura NEC: {}".format(key))
             self.toast("Sakura: {}".format(key))
         except Exception as e:
-            self.toast("Ошибка: {}".format(e))
+            self.toast("Error: {}".format(e))
         self.refresh()
 
     def try_all_addresses(self):
@@ -129,23 +129,23 @@ class Tv5aRemote(BasePlugin):
                 self.api.getAndroid().irTransmit(RC5_FREQ, pattern)
             except Exception:
                 pass
-        self.add_log("Автоперебор адресов: 0, 5, 26, 1")
-        self.toast("Отправлено 4 варианта адреса")
+        self.add_log("Auto address scan: 0, 5, 26, 1")
+        self.toast("Sent 4 address variants")
         self.refresh()
 
     def set_address(self, addr):
         self.set_setting("rc5_address", addr)
-        self.toast("Адрес RC5: {}".format(addr))
-        self.add_log("Установлен адрес {}".format(addr))
+        self.toast("RC5 address: {}".format(addr))
+        self.add_log("Set address {}".format(addr))
         self.refresh()
 
     def check_ir(self):
         try:
             has = self.api.getAndroid().irHasEmitter()
-            self.toast("ИК-порт: {}".format("ЕСТЬ" if has else "НЕТ"))
-            self.add_log("ИК: {}".format(has))
+            self.toast("IR port: {}".format("PRESENT" if has else "ABSENT"))
+            self.add_log("IR: {}".format(has))
         except Exception as e:
-            self.toast("Ошибка: {}".format(e))
+            self.toast("Error: {}".format(e))
         self.refresh()
 
     def clear_log(self):
@@ -155,15 +155,15 @@ class Tv5aRemote(BasePlugin):
     def screen_main(self, ui, api, state):
         return ui.scaffold(title="TV5A Remote", content=ui.column([
             ui.card([
-                ui.text("ИК + Wi-Fi пульт", "titleMedium"),
-                ui.text("Адрес RC5: {} • Частота: 36 кГц".format(self.get_setting("rc5_address", 0)), "bodySmall", "muted"),
+                ui.text("IR + Wi-Fi remote", "titleMedium"),
+                ui.text("RC5 address: {} • Frequency: 36 kHz".format(self.get_setting("rc5_address", 0)), "bodySmall", "muted"),
             ], padding=16),
             ui.card([
-                ui.function_row(title="TV5A (ИК RC5)", description="Кнопки, крестовина, цифры", icon="settings_remote", on_click=lambda: self.navigate("ir")),
-                ui.function_row(title="Sakura (ИК NEC)", description="Кнопки телевизора Sakura", icon="tv", on_click=lambda: self.navigate("sakura")),
-                ui.function_row(title="Wi-Fi пульт (ADB)", description="Управление по сети", icon="wifi", on_click=lambda: self.navigate("wifi")),
-                ui.function_row(title="Проверка ИК", description="Есть ли эмиттер", icon="settings_input_antenna", on_click=self.check_ir),
-                ui.function_row(title="Лог команд", description="Последние 20", icon="list_alt", on_click=lambda: self.navigate("log")),
+                ui.function_row(title="TV5A (IR RC5)", description="Buttons, d-pad, digits", icon="settings_remote", on_click=lambda: self.navigate("ir")),
+                ui.function_row(title="Sakura (IR NEC)", description="Sakura TV buttons", icon="tv", on_click=lambda: self.navigate("sakura")),
+                ui.function_row(title="Wi-Fi remote (ADB)", description="Control over the network", icon="wifi", on_click=lambda: self.navigate("wifi")),
+                ui.function_row(title="IR check", description="Emitter presence", icon="settings_input_antenna", on_click=self.check_ir),
+                ui.function_row(title="Command log", description="Last 20", icon="list_alt", on_click=lambda: self.navigate("log")),
             ], padding=8),
         ], padding=16, spacing=12))
 
@@ -171,16 +171,16 @@ class Tv5aRemote(BasePlugin):
         addr = int(self.get_setting("rc5_address", 0))
         return ui.scaffold(title="TV5A (RC5)", content=ui.column([
             ui.card([
-                ui.text("Адрес RC5: {}".format(addr), "titleMedium"),
+                ui.text("RC5 address: {}".format(addr), "titleMedium"),
             ], padding=12),
             ui.card([
-                ui.function_row(title="Адрес 0 (TV)", description="Выбрать", icon="looks_one", on_click=lambda: self.set_address(0)),
-                ui.function_row(title="Адрес 5 (VCR)", description="Выбрать", icon="looks_two", on_click=lambda: self.set_address(5)),
-                ui.function_row(title="Адрес 26 (Sat)", description="Выбрать", icon="looks_3", on_click=lambda: self.set_address(26)),
-                ui.function_row(title="Адрес 1 (TV2)", description="Выбрать", icon="looks_4", on_click=lambda: self.set_address(1)),
-                ui.function_row(title="Автоперебор 0,5,26,1", description="Отправить Power на все", icon="autorenew", on_click=self.try_all_addresses),
+                ui.function_row(title="Address 0 (TV)", description="Select", icon="looks_one", on_click=lambda: self.set_address(0)),
+                ui.function_row(title="Address 5 (VCR)", description="Select", icon="looks_two", on_click=lambda: self.set_address(5)),
+                ui.function_row(title="Address 26 (Sat)", description="Select", icon="looks_3", on_click=lambda: self.set_address(26)),
+                ui.function_row(title="Address 1 (TV2)", description="Select", icon="looks_4", on_click=lambda: self.set_address(1)),
+                ui.function_row(title="Auto scan 0,5,26,1", description="Send Power to all", icon="autorenew", on_click=self.try_all_addresses),
             ], padding=8),
-            ui.text("Крестовина", "titleMedium"),
+            ui.text("D-pad", "titleMedium"),
             ui.row([ui.icon_button("arrow_upward", lambda: self.send_rc5(1))], spacing=8, fill_max_width=True),
             ui.row([
                 ui.icon_button("arrow_back", lambda: self.send_rc5(3)),
@@ -188,19 +188,19 @@ class Tv5aRemote(BasePlugin):
                 ui.icon_button("arrow_forward", lambda: self.send_rc5(4)),
             ], spacing=8, fill_max_width=True),
             ui.row([ui.icon_button("arrow_downward", lambda: self.send_rc5(2))], spacing=8, fill_max_width=True),
-            ui.text("Основные", "titleMedium"),
+            ui.text("Main", "titleMedium"),
             ui.card([
-                ui.function_row(title="Питание", description="RC5 12", icon="power_settings_new", on_click=lambda: self.send_rc5(12)),
-                ui.function_row(title="Громкость +", description="RC5 16 (удерж.)", icon="volume_up", on_click=lambda: self.send_repeat(16, 3)),
-                ui.function_row(title="Громкость −", description="RC5 17 (удерж.)", icon="volume_down", on_click=lambda: self.send_repeat(17, 3)),
-                ui.function_row(title="Без звука", description="RC5 13", icon="volume_off", on_click=lambda: self.send_rc5(13)),
-                ui.function_row(title="Канал +", description="RC5 32", icon="keyboard_arrow_up", on_click=lambda: self.send_rc5(32)),
-                ui.function_row(title="Канал −", description="RC5 33", icon="keyboard_arrow_down", on_click=lambda: self.send_rc5(33)),
-                ui.function_row(title="Меню", description="RC5 15", icon="menu", on_click=lambda: self.send_rc5(15)),
-                ui.function_row(title="Назад", description="RC5 10", icon="undo", on_click=lambda: self.send_rc5(10)),
-                ui.function_row(title="Домой", description="RC5 54", icon="home", on_click=lambda: self.send_rc5(54)),
+                ui.function_row(title="Power", description="RC5 12", icon="power_settings_new", on_click=lambda: self.send_rc5(12)),
+                ui.function_row(title="Volume +", description="RC5 16 (hold)", icon="volume_up", on_click=lambda: self.send_repeat(16, 3)),
+                ui.function_row(title="Volume −", description="RC5 17 (hold)", icon="volume_down", on_click=lambda: self.send_repeat(17, 3)),
+                ui.function_row(title="Mute", description="RC5 13", icon="volume_off", on_click=lambda: self.send_rc5(13)),
+                ui.function_row(title="Channel +", description="RC5 32", icon="keyboard_arrow_up", on_click=lambda: self.send_rc5(32)),
+                ui.function_row(title="Channel −", description="RC5 33", icon="keyboard_arrow_down", on_click=lambda: self.send_rc5(33)),
+                ui.function_row(title="Menu", description="RC5 15", icon="menu", on_click=lambda: self.send_rc5(15)),
+                ui.function_row(title="Back", description="RC5 10", icon="undo", on_click=lambda: self.send_rc5(10)),
+                ui.function_row(title="Home", description="RC5 54", icon="home", on_click=lambda: self.send_rc5(54)),
             ], padding=8),
-            ui.text("Цифры", "titleMedium"),
+            ui.text("Digits", "titleMedium"),
             ui.row([
                 ui.icon_button("looks_one", lambda: self.send_rc5(1)),
                 ui.icon_button("looks_two", lambda: self.send_rc5(2)),
@@ -217,63 +217,63 @@ class Tv5aRemote(BasePlugin):
                 ui.icon_button("looks_9", lambda: self.send_rc5(9)),
             ], spacing=8),
             ui.row([ui.icon_button("looks_0", lambda: self.send_rc5(0))], spacing=8),
-            ui.button("Назад", lambda: self.navigate("main"), style="tonal", fill_max_width=True),
+            ui.button("Back", lambda: self.navigate("main"), style="tonal", fill_max_width=True),
         ], padding=16, spacing=8))
 
     def screen_sakura(self, ui, api, state):
         return ui.scaffold(title="Sakura", content=ui.column([
             ui.card([
-                ui.text("Телевизор Sakura", "titleMedium"),
-                ui.text("Протокол: NEC, частота 38 кГц", "bodySmall", "muted"),
+                ui.text("Sakura TV", "titleMedium"),
+                ui.text("Protocol: NEC, 38 kHz", "bodySmall", "muted"),
             ], padding=16),
             ui.card([
-                ui.function_row(title="Питание", description="Power", icon="power_settings_new", on_click=lambda: self.send_sakura("power")),
-                ui.function_row(title="Громкость +", description="Vol+", icon="volume_up", on_click=lambda: self.send_sakura("vol_up")),
-                ui.function_row(title="Громкость −", description="Vol−", icon="volume_down", on_click=lambda: self.send_sakura("vol_down")),
-                ui.function_row(title="Без звука", description="Mute", icon="volume_off", on_click=lambda: self.send_sakura("mute")),
-                ui.function_row(title="Канал +", description="CH+", icon="keyboard_arrow_up", on_click=lambda: self.send_sakura("ch_up")),
-                ui.function_row(title="Канал −", description="CH−", icon="keyboard_arrow_down", on_click=lambda: self.send_sakura("ch_down")),
-                ui.function_row(title="Вверх", description="↑", icon="arrow_upward", on_click=lambda: self.send_sakura("up")),
-                ui.function_row(title="Вниз", description="↓", icon="arrow_downward", on_click=lambda: self.send_sakura("down")),
-                ui.function_row(title="Влево", description="←", icon="arrow_back", on_click=lambda: self.send_sakura("left")),
-                ui.function_row(title="Вправо", description="→", icon="arrow_forward", on_click=lambda: self.send_sakura("right")),
-                ui.function_row(title="OK", description="Подтвердить", icon="check", on_click=lambda: self.send_sakura("ok")),
-                ui.function_row(title="Назад", description="Back", icon="undo", on_click=lambda: self.send_sakura("back")),
-                ui.function_row(title="Домой", description="Home", icon="home", on_click=lambda: self.send_sakura("home")),
-                ui.function_row(title="Меню", description="Menu", icon="menu", on_click=lambda: self.send_sakura("menu")),
-                ui.function_row(title="Источник", description="Source", icon="input", on_click=lambda: self.send_sakura("source")),
+                ui.function_row(title="Power", description="Power", icon="power_settings_new", on_click=lambda: self.send_sakura("power")),
+                ui.function_row(title="Volume +", description="Vol+", icon="volume_up", on_click=lambda: self.send_sakura("vol_up")),
+                ui.function_row(title="Volume −", description="Vol−", icon="volume_down", on_click=lambda: self.send_sakura("vol_down")),
+                ui.function_row(title="Mute", description="Mute", icon="volume_off", on_click=lambda: self.send_sakura("mute")),
+                ui.function_row(title="Channel +", description="CH+", icon="keyboard_arrow_up", on_click=lambda: self.send_sakura("ch_up")),
+                ui.function_row(title="Channel −", description="CH−", icon="keyboard_arrow_down", on_click=lambda: self.send_sakura("ch_down")),
+                ui.function_row(title="Up", description="↑", icon="arrow_upward", on_click=lambda: self.send_sakura("up")),
+                ui.function_row(title="Down", description="↓", icon="arrow_downward", on_click=lambda: self.send_sakura("down")),
+                ui.function_row(title="Left", description="←", icon="arrow_back", on_click=lambda: self.send_sakura("left")),
+                ui.function_row(title="Right", description="→", icon="arrow_forward", on_click=lambda: self.send_sakura("right")),
+                ui.function_row(title="OK", description="Confirm", icon="check", on_click=lambda: self.send_sakura("ok")),
+                ui.function_row(title="Back", description="Back", icon="undo", on_click=lambda: self.send_sakura("back")),
+                ui.function_row(title="Home", description="Home", icon="home", on_click=lambda: self.send_sakura("home")),
+                ui.function_row(title="Menu", description="Menu", icon="menu", on_click=lambda: self.send_sakura("menu")),
+                ui.function_row(title="Source", description="Source", icon="input", on_click=lambda: self.send_sakura("source")),
             ], padding=8),
-            ui.button("Назад", lambda: self.navigate("main"), style="tonal", fill_max_width=True),
+            ui.button("Back", lambda: self.navigate("main"), style="tonal", fill_max_width=True),
         ], padding=16, spacing=12))
 
     def screen_wifi(self, ui, api, state):
-        return ui.scaffold(title="Wi-Fi пульт", content=ui.column([
+        return ui.scaffold(title="Wi-Fi remote", content=ui.column([
             ui.card([
-                ui.text("Управление через ADB", "titleMedium"),
-                ui.text("Нужна отладка по ADB на TV5A + root/adb на телефоне", "bodySmall", "muted"),
+                ui.text("Control via ADB", "titleMedium"),
+                ui.text("Requires ADB debugging on TV5A + root/adb on the phone", "bodySmall", "muted"),
             ], padding=16),
-            ui.text_field(self.get_setting("tv_ip", ""), self.on_tv_ip, label="IP-адрес TV5A", single_line=True),
+            ui.text_field(self.get_setting("tv_ip", ""), self.on_tv_ip, label="TV5A IP address", single_line=True),
             ui.card([
-                ui.function_row(title="Подключиться", description="adb connect IP:5555", icon="link", on_click=self.adb_connect),
-                ui.function_row(title="Питание", description="KEYCODE_POWER", icon="power_settings_new", on_click=lambda: self.adb_key("KEYCODE_POWER")),
-                ui.function_row(title="Домой", description="KEYCODE_HOME", icon="home", on_click=lambda: self.adb_key("KEYCODE_HOME")),
-                ui.function_row(title="Назад", description="KEYCODE_BACK", icon="undo", on_click=lambda: self.adb_key("KEYCODE_BACK")),
-                ui.function_row(title="Меню", description="KEYCODE_MENU", icon="menu", on_click=lambda: self.adb_key("KEYCODE_MENU")),
-                ui.function_row(title="Вверх", description="DPAD_UP", icon="arrow_upward", on_click=lambda: self.adb_key("KEYCODE_DPAD_UP")),
-                ui.function_row(title="Вниз", description="DPAD_DOWN", icon="arrow_downward", on_click=lambda: self.adb_key("KEYCODE_DPAD_DOWN")),
-                ui.function_row(title="Влево", description="DPAD_LEFT", icon="arrow_back", on_click=lambda: self.adb_key("KEYCODE_DPAD_LEFT")),
-                ui.function_row(title="Вправо", description="DPAD_RIGHT", icon="arrow_forward", on_click=lambda: self.adb_key("KEYCODE_DPAD_RIGHT")),
+                ui.function_row(title="Connect", description="adb connect IP:5555", icon="link", on_click=self.adb_connect),
+                ui.function_row(title="Power", description="KEYCODE_POWER", icon="power_settings_new", on_click=lambda: self.adb_key("KEYCODE_POWER")),
+                ui.function_row(title="Home", description="KEYCODE_HOME", icon="home", on_click=lambda: self.adb_key("KEYCODE_HOME")),
+                ui.function_row(title="Back", description="KEYCODE_BACK", icon="undo", on_click=lambda: self.adb_key("KEYCODE_BACK")),
+                ui.function_row(title="Menu", description="KEYCODE_MENU", icon="menu", on_click=lambda: self.adb_key("KEYCODE_MENU")),
+                ui.function_row(title="Up", description="DPAD_UP", icon="arrow_upward", on_click=lambda: self.adb_key("KEYCODE_DPAD_UP")),
+                ui.function_row(title="Down", description="DPAD_DOWN", icon="arrow_downward", on_click=lambda: self.adb_key("KEYCODE_DPAD_DOWN")),
+                ui.function_row(title="Left", description="DPAD_LEFT", icon="arrow_back", on_click=lambda: self.adb_key("KEYCODE_DPAD_LEFT")),
+                ui.function_row(title="Right", description="DPAD_RIGHT", icon="arrow_forward", on_click=lambda: self.adb_key("KEYCODE_DPAD_RIGHT")),
                 ui.function_row(title="OK", description="DPAD_CENTER", icon="check", on_click=lambda: self.adb_key("KEYCODE_DPAD_CENTER")),
-                ui.function_row(title="Громкость +", description="VOLUME_UP", icon="volume_up", on_click=lambda: self.adb_key("KEYCODE_VOLUME_UP")),
-                ui.function_row(title="Громкость −", description="VOLUME_DOWN", icon="volume_down", on_click=lambda: self.adb_key("KEYCODE_VOLUME_DOWN")),
+                ui.function_row(title="Volume +", description="VOLUME_UP", icon="volume_up", on_click=lambda: self.adb_key("KEYCODE_VOLUME_UP")),
+                ui.function_row(title="Volume −", description="VOLUME_DOWN", icon="volume_down", on_click=lambda: self.adb_key("KEYCODE_VOLUME_DOWN")),
             ], padding=8),
-            ui.text("Приложения", "titleMedium"),
+            ui.text("Apps", "titleMedium"),
             ui.card([
-                ui.function_row(title="YouTube", description="Запуск", icon="play_circle", on_click=lambda: self.adb_launch("com.google.android.youtube.tv")),
-                ui.function_row(title="Netflix", description="Запуск", icon="play_circle", on_click=lambda: self.adb_launch("com.netflix.ninja")),
-                ui.function_row(title="Kodi", description="Запуск", icon="play_circle", on_click=lambda: self.adb_launch("org.xbmc.kodi")),
+                ui.function_row(title="YouTube", description="Launch", icon="play_circle", on_click=lambda: self.adb_launch("com.google.android.youtube.tv")),
+                ui.function_row(title="Netflix", description="Launch", icon="play_circle", on_click=lambda: self.adb_launch("com.netflix.ninja")),
+                ui.function_row(title="Kodi", description="Launch", icon="play_circle", on_click=lambda: self.adb_launch("org.xbmc.kodi")),
             ], padding=8),
-            ui.button("Назад", lambda: self.navigate("main"), style="tonal", fill_max_width=True),
+            ui.button("Back", lambda: self.navigate("main"), style="tonal", fill_max_width=True),
         ], padding=16, spacing=12))
 
     def on_tv_ip(self, v):
@@ -282,26 +282,26 @@ class Tv5aRemote(BasePlugin):
     def adb(self, cmd):
         ip = str(self.get_setting("tv_ip", "")).strip()
         if not ip:
-            self.toast("Введите IP")
+            self.toast("Enter IP")
             return
         try:
             result = self.shell("adb -s {}:5555 shell {}".format(ip, cmd))
             self.add_log("ADB: {}".format(cmd))
-            self.toast(str(result)[:80] if result else "Отправлено")
+            self.toast(str(result)[:80] if result else "Sent")
         except Exception as e:
-            self.toast("Ошибка: {}".format(e))
+            self.toast("Error: {}".format(e))
 
     def adb_connect(self):
         ip = str(self.get_setting("tv_ip", "")).strip()
         if not ip:
-            self.toast("Введите IP")
+            self.toast("Enter IP")
             return
         try:
             result = self.shell("adb connect {}:5555".format(ip))
             self.add_log("ADB connect {}".format(ip))
             self.toast(str(result)[:80] if result else "adb connect")
         except Exception as e:
-            self.toast("Ошибка: {}".format(e))
+            self.toast("Error: {}".format(e))
 
     def adb_key(self, keycode):
         self.adb("input keyevent {}".format(keycode))
@@ -317,11 +317,11 @@ class Tv5aRemote(BasePlugin):
         for entry in log:
             rows.append(ui.function_row(title=str(entry), description="", icon="history"))
         if not rows:
-            rows = [ui.card([ui.text("Лог пуст", "titleMedium")])]
-        return ui.scaffold(title="Лог команд", content=ui.column([
+            rows = [ui.card([ui.text("Log empty", "titleMedium")])]
+        return ui.scaffold(title="Command log", content=ui.column([
             ui.card(rows, padding=8),
-            ui.button("Очистить", self.clear_log, style="tonal", fill_max_width=True),
-            ui.button("Назад", lambda: self.navigate("main"), style="tonal", fill_max_width=True),
+            ui.button("Clear", self.clear_log, style="tonal", fill_max_width=True),
+            ui.button("Back", lambda: self.navigate("main"), style="tonal", fill_max_width=True),
         ], padding=16, spacing=12))
 
     def on_plugin_unload(self):

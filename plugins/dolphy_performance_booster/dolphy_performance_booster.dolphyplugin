@@ -3,7 +3,7 @@ __name__ = "Dolphy Performance Booster"
 __version__ = "1.0.0"
 __author__ = "Developer"
 __icon__ = "rounded:speed"
-__description__ = "Оптимизация работы Dolphy и задействование ресурсов устройства через Shizuku"
+__description__ = "Optimize Dolphy performance and leverage device resources via Shizuku"
 __permissions__ = ["shizuku", "shell"]
 
 import gc
@@ -11,8 +11,8 @@ import gc
 class DolphyPerformanceBooster(BasePlugin):
     def on_plugin_load(self):
         self.add_module(
-            title="Ускорение Dolphy",
-            description="Управление ресурсами, памятью и Shizuku-оптимизацией",
+            title="Dolphy Booster",
+            description="Resource and memory management, Shizuku optimization",
             icon="speed",
             screen="main",
             section="PLUGINS"
@@ -23,31 +23,31 @@ class DolphyPerformanceBooster(BasePlugin):
         shizuku_avail = device.shizukuAvailable()
         shizuku_perm = device.shizukuHasPermission() if shizuku_avail else False
 
-        status_text = "Доступен и активен" if shizuku_perm else ("Запущен, нет прав" if shizuku_avail else "Не запущен")
+        status_text = "Available and active" if shizuku_perm else ("Running, no permission" if shizuku_avail else "Not running")
 
         cards = [
             ui.card([
-                ui.text("Статус Shizuku", "titleMedium"),
+                ui.text("Shizuku status", "titleMedium"),
                 ui.spacer(4),
-                ui.text(f"Состояние: {status_text}", "bodyMedium"),
+                ui.text(f"State: {status_text}", "bodyMedium"),
                 ui.spacer(8),
-                ui.button("Запросить права Shizuku", self.request_shizuku, enabled=shizuku_avail)
+                ui.button("Request Shizuku permission", self.request_shizuku, enabled=shizuku_avail)
             ]),
             ui.spacer(12),
             ui.card([
-                ui.text("Базовая оптимизация", "titleMedium"),
+                ui.text("Basic optimization", "titleMedium"),
                 ui.spacer(4),
-                ui.text("Работает без специальных прав. Освобождает неиспользуемую память Python и сборщика мусора.", "bodySmall"),
+                ui.text("Works without special permissions. Frees unused Python and garbage collector memory.", "bodySmall"),
                 ui.spacer(8),
-                ui.bounce_button("Очистить память Python", self.clean_python_memory)
+                ui.bounce_button("Clean Python memory", self.clean_python_memory)
             ]),
             ui.spacer(12),
             ui.card([
-                ui.text("Максимальное ускорение (Shizuku)", "titleMedium"),
+                ui.text("Maximum boost (Shizuku)", "titleMedium"),
                 ui.spacer(4),
-                ui.text("Снимает ограничения фонового режима Doze, очищает системные кеши и задает высокий приоритет процессу.", "bodySmall"),
+                ui.text("Removes Doze background restrictions, clears system caches and sets high process priority.", "bodySmall"),
                 ui.spacer(8),
-                ui.button("Активировать турбо-режим", self.apply_shizuku_boost, enabled=shizuku_perm, fill_max_width=True)
+                ui.button("Activate turbo mode", self.apply_shizuku_boost, enabled=shizuku_perm, fill_max_width=True)
             ])
         ]
 
@@ -60,20 +60,20 @@ class DolphyPerformanceBooster(BasePlugin):
         device = self.api.getDevice()
         if device.shizukuAvailable():
             device.shizukuRequestPermission()
-            self.toast("Запрос прав Shizuku отправлен")
+            self.toast("Shizuku permission request sent")
         else:
-            self.toast("Shizuku не запущен")
+            self.toast("Shizuku is not running")
         self.refresh()
 
     def clean_python_memory(self):
         gc.collect()
-        self.toast("Память Python успешно очищена")
+        self.toast("Python memory cleaned")
         self.refresh()
 
     def apply_shizuku_boost(self):
         device = self.api.getDevice()
         if not device.shizukuHasPermission():
-            self.toast("Требуются права Shizuku")
+            self.toast("Shizuku permission required")
             return
 
         pkg_name = "com.droid.dolphy"
@@ -84,5 +84,5 @@ class DolphyPerformanceBooster(BasePlugin):
         
         gc.collect()
         
-        self.toast("Максимальное ускорение применено!")
+        self.toast("Maximum boost applied!")
         self.refresh()

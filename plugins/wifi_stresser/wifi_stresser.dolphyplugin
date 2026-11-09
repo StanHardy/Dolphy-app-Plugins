@@ -3,7 +3,7 @@ __id__ = "wifi_stresser"
 __name__ = "WiFi Stresser"
 __version__ = "3.0"
 __author__ = "pixel_floppa"
-__description__ = "Аудит Wi-Fi (WPA3 Bypass 4.0, End-to-End ACK, JSON/CSV Export & Expanded Guide)"
+__description__ = "Wi-Fi audit (WPA3 Bypass 4.0, End-to-End ACK, JSON/CSV Export & Expanded Guide)"
 __icon__ = "rounded:wifi_off"
 __library__ = False
 __design_library__ = False
@@ -115,7 +115,7 @@ class WiFiStresser(BasePlugin):
     def on_plugin_load(self):
         self.add_module(
             title="WiFi Stresser",
-            description="L4/L7/L2/UPnP/DNS/WPA3 Bypass 4.0 аудит",
+            description="L4/L7/L2/UPnP/DNS/WPA3 Bypass 4.0 audit",
             icon="wifi_off",
             screen="main",
             section="PLUGINS"
@@ -124,13 +124,13 @@ class WiFiStresser(BasePlugin):
         self.api.registerSettings(
             "WiFi Stresser",
             json.dumps([
-                {"type": "slider", "key": "udp_threads", "title": "UDP потоки",
+                {"type": "slider", "key": "udp_threads", "title": "UDP threads",
                  "min": 16, "max": 1024, "default": 256, "steps": 1008},
-                {"type": "slider", "key": "tcp_threads", "title": "TCP потоки",
+                {"type": "slider", "key": "tcp_threads", "title": "TCP threads",
                  "min": 4, "max": 128, "default": 32, "steps": 124},
                 {"type": "switch", "key": "throttle_ignore",
-                 "title": "Игнорировать троттлинг",
-                 "subtitle": "Не снижать частоту отправки при нагреве",
+                 "title": "Ignore throttling",
+                 "subtitle": "Do not reduce the send rate when overheating",
                  "default": False}
             ]),
             10
@@ -148,12 +148,12 @@ class WiFiStresser(BasePlugin):
 
         self.pps = 0
         self.time_left = 0
-        self.ping_status = "Нажмите «Пинг» для проверки соединения"
+        self.ping_status = "Tap «Ping» to check the connection"
         self._is_pinging = False
         self._is_scanning_ports = False
         self._last_l2_time = 0.0
 
-        self.vitality_status = "Ожидание запуска теста"
+        self.vitality_status = "Waiting for the test to start"
         self.generated_report_text = ""
         self.scan_results = []
 
@@ -236,17 +236,17 @@ class WiFiStresser(BasePlugin):
         err_type = type(error).__name__
 
         if "ECONNREFUSED" in err_str or "Connection refused" in err_str:
-            detail = f"{method_name}: Порт закрыт / сброшен роутером (RST)"
+            detail = f"{method_name}: Port closed / reset by the router (RST)"
         elif "ETIMEDOUT" in err_str or "timed out" in err_str:
-            detail = f"{method_name}: Таймаут (шлюз перегружен)"
+            detail = f"{method_name}: Timeout (gateway overloaded)"
         elif "ENETUNREACH" in err_str or "Network is unreachable" in err_str:
-            detail = f"{method_name}: Сеть недоступна (Wi-Fi потерян)"
+            detail = f"{method_name}: Network unreachable (Wi-Fi lost)"
         elif "EMFILE" in err_str or "Too many open files" in err_str:
-            detail = f"{method_name}: Лимит дескрипторов ОС! Снизьте TCP-потоки"
+            detail = f"{method_name}: OS file descriptor limit! Reduce TCP threads"
         elif "ENOBUFS" in err_str or "No buffer space" in err_str:
-            detail = f"{method_name}: Буфер сети заполнен"
+            detail = f"{method_name}: Network buffer full"
         elif "EPIPE" in err_str or "Broken pipe" in err_str:
-            detail = f"{method_name}: Соединение разорвано шлюзом"
+            detail = f"{method_name}: Connection dropped by the gateway"
         else:
             detail = f"{method_name}: {err_type} ({err_str[:35]})"
 
@@ -328,32 +328,32 @@ class WiFiStresser(BasePlugin):
                 pass
 
             if target_ok == 0 and dns_ok > 0:
-                status_str = "🛡️ Защита активна (Anti-DoS / порт фильтруется)"
+                status_str = "🛡️ Protection active (Anti-DoS / port filtered)"
                 log_lvl = "HEALTH"
 
                 if not self.bypass_mode:
                     self.bypass_mode = True
                     self.set_setting("bypass_mode", True)
-                    self._log("⚡ Роутер защищается! Включен авто-обход Bypass 4.0", "BYPASS")
-                    self.toast("⚡ Включен авто-обход Keenetic!")
+                    self._log("⚡ The router is defending! Auto Bypass 4.0 enabled", "BYPASS")
+                    self.toast("⚡ Keenetic auto-bypass enabled!")
             elif target_ok == 0 and dns_ok == 0:
-                status_str = "🔴 В коме / Упал (100% потерь · таймаут)"
+                status_str = "🔴 Coma / Down (100% loss · timeout)"
                 log_lvl = "ERR"
             else:
                 avg_ms = round(sum(latencies) / len(latencies), 1) if latencies else 0.0
                 loss = int(((3 - target_ok) / 3) * 100)
                 if loss == 0 and avg_ms < 35:
-                    status_str = f"🟢 Отличная (avg {avg_ms} ms · потерь 0%)"
+                    status_str = f"🟢 Excellent (avg {avg_ms} ms · 0% loss)"
                     log_lvl = "OK"
                 elif loss == 0 and avg_ms < 120:
-                    status_str = f"🟡 Проседает (avg {avg_ms} ms · задержка)"
+                    status_str = f"🟡 Struggling (avg {avg_ms} ms · latency)"
                     log_lvl = "WARN"
                 else:
-                    status_str = f"🟠 Перегружен (avg {avg_ms} ms · потери {loss}%)"
+                    status_str = f"🟠 Overloaded (avg {avg_ms} ms · {loss}% loss)"
                     log_lvl = "WARN"
 
             self.vitality_status = status_str
-            self._log(f"Живучесть Wi-Fi: {status_str}", log_lvl)
+            self._log(f"Wi-Fi vitality: {status_str}", log_lvl)
             self.refresh()
 
             for _ in range(15):
@@ -361,15 +361,15 @@ class WiFiStresser(BasePlugin):
                     break
                 time.sleep(1.0)
 
-    # ------------------- Диагностика и сканирование -------------------
+    # ------------------- Diagnostics and scanning -------------------
 
     def _run_port_scan(self):
         if self._is_scanning_ports:
             return
         self._is_scanning_ports = True
         self.scan_results = []
-        self._log(f"Сканирование портов шлюза {self.gateway}...", "SCAN")
-        self.toast("🔍 Сканирование портов...")
+        self._log(f"Scanning ports of gateway {self.gateway}...", "SCAN")
+        self.toast("🔍 Scanning ports...")
         self.refresh()
         threading.Thread(target=self._async_port_scan_worker, daemon=True).start()
 
@@ -393,14 +393,14 @@ class WiFiStresser(BasePlugin):
 
         if open_ports:
             ports_str = ", ".join([f"{p} ({name})" for p, name in open_ports])
-            self._log(f"Открытые порты: {ports_str}", "OK")
+            self._log(f"Open ports: {ports_str}", "OK")
             best_port = open_ports[0][0]
             self.port = best_port
             self.set_setting("port", best_port)
-            self.toast(f"✅ Найдено: {len(open_ports)}. Выбран {best_port} ({open_ports[0][1]})")
+            self.toast(f"✅ Found: {len(open_ports)}. Selected {best_port} ({open_ports[0][1]})")
         else:
-            self._log("Открытых TCP-портов не найдено (активен строгий фильтр)", "WARN")
-            self.toast("⚠️ Открытых портов не обнаружено")
+            self._log("No open TCP ports found (strict filtering active)", "WARN")
+            self.toast("⚠️ No open ports detected")
         self.refresh()
 
     def _apply_preset(self, preset_name):
@@ -412,7 +412,7 @@ class WiFiStresser(BasePlugin):
             self.tcp_threads = 64
             self.bypass_mode = False
             self.port = 80
-            self.toast("🎯 Пресет: Стандартный роутер (HTTP)")
+            self.toast("🎯 Preset: Standard router (HTTP)")
         elif preset_name == "Keenetic":
             self.method = "Mixed"
             self.udp_threads = 128
@@ -427,12 +427,12 @@ class WiFiStresser(BasePlugin):
             self.mixed_slowbody = True
             self.mixed_upnp = True
             self.mixed_dns = True
-            self.toast("🛡️ Пресет: Защищенный роутер (Bypass 4.0)")
+            self.toast("🛡️ Preset: Protected router (Bypass 4.0)")
         elif preset_name == "Radio":
             self.method = "L2 (Root)" if (self.has_root or self.has_shizuku) else "UDP"
             self.udp_threads = 512
             self.bypass_mode = True
-            self.toast("📡 Пресет: Забивание радиоэфира (512 UDP)")
+            self.toast("📡 Preset: Radio airtime flooding (512 UDP)")
         elif preset_name == "MaxStress":
             self.method = "Mixed"
             self.udp_threads = 512
@@ -446,7 +446,7 @@ class WiFiStresser(BasePlugin):
             self.mixed_slowbody = True
             self.mixed_upnp = True
             self.mixed_dns = True
-            self.toast("🔥 Пресет: Полный стресс-тест")
+            self.toast("🔥 Preset: Full stress test")
 
         self.set_setting("method", self.method)
         self.set_setting("udp_threads", self.udp_threads)
@@ -460,20 +460,20 @@ class WiFiStresser(BasePlugin):
             total_packets = sum(self.stats.values())
             stats_copy = dict(self.stats)
 
-        dur_text = f"{self.duration} сек" if self.duration > 0 else "Без лимита"
+        dur_text = f"{self.duration} sec" if self.duration > 0 else "No limit"
         thread_info = f"UDP: {self.udp_threads}, TCP: {self.tcp_threads}" if self.method == "Mixed" else (f"{self.tcp_threads} TCP" if self.method in ["CONNECT", "HTTP", "Hold", "Slowloris", "SlowBody"] else f"{self.udp_threads} UDP")
 
         report_lines = [
-            "📋 === ОТЧЁТ СЕТЕВОГО АУДИТА (WiFi Stresser v3.0) ===",
-            f"👤 Автор: {__author__}",
-            f"🎯 Цель: {self.gateway}:{self.port}",
-            f"⚡ Метод: {self.method} (Пресет: {self.active_preset})",
-            f"🧵 Потоки: {thread_info} | Длительность: {dur_text}",
-            f"🛡️ Режим обхода WAF: {'Включен (Bypass 4.0)' if self.bypass_mode else 'Выключен'}",
-            f"🩺 Итоговая живучесть: {self.vitality_status}",
-            f"📊 Всего отправлено: {total_packets:,} пак".replace(",", " "),
-            f"📈 Пиковая скорость: ~{self.pps} пак/сек",
-            "--- Разделение по векторам ---",
+            "📋 === NETWORK AUDIT REPORT (WiFi Stresser v3.0) ===",
+            f"👤 Author: {__author__}",
+            f"🎯 Target: {self.gateway}:{self.port}",
+            f"⚡ Method: {self.method} (Preset: {self.active_preset})",
+            f"🧵 Threads: {thread_info} | Duration: {dur_text}",
+            f"🛡️ WAF bypass mode: {'On (Bypass 4.0)' if self.bypass_mode else 'Off'}",
+            f"🩺 Final vitality: {self.vitality_status}",
+            f"📊 Total sent: {total_packets:,} pkt".replace(",", " "),
+            f"📈 Peak rate: ~{self.pps} pkt/s",
+            "--- Breakdown by vector ---",
             f"• UDP (DNS NXDOMAIN): {stats_copy.get('udp', 0)}",
             f"• UPnP SOAP XML: {stats_copy.get('upnp', 0)}",
             f"• DNS Flood: {stats_copy.get('dns', 0)}",
@@ -512,9 +512,9 @@ class WiFiStresser(BasePlugin):
                             writer.writerow([f"{k}_{sub_k}", sub_v])
                     else:
                         writer.writerow([k, v])
-            self._log(f"Отчет сохранен в Download (JSON/CSV)", "OK")
+            self._log(f"Report saved to Download (JSON/CSV)", "OK")
         except Exception as e:
-            self._log(f"Ошибка сохранения файла: {e}", "ERR")
+            self._log(f"File save error: {e}", "ERR")
 
         copied = False
         try:
@@ -538,8 +538,8 @@ class WiFiStresser(BasePlugin):
                     except Exception:
                         pass
 
-        self._log("Отчёт аудита сформирован и открыт", "OK")
-        self.toast("📋 Отчёт скопирован и сохранен в файлы!" if copied else "📄 Отчёт открыт")
+        self._log("Audit report generated and opened", "OK")
+        self.toast("📋 Report copied and saved to files!" if copied else "📄 Report opened")
         self.navigate("report")
 
     def _open_rickroll(self):
@@ -560,7 +560,7 @@ class WiFiStresser(BasePlugin):
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             activity.startActivity(intent)
         except Exception:
-            self.toast("⚡ Роутер успешно уничтожен (в параллельной вселенной)")
+            self.toast("⚡ Router successfully destroyed (in a parallel universe)")
 
     def _get_wifi_info(self):
         ssid = None
@@ -595,7 +595,7 @@ class WiFiStresser(BasePlugin):
 
         if ip:
             if ip.startswith("198.18."):
-                ssid = "VPN Fake-IP (не Wi-Fi)"
+                ssid = "VPN Fake-IP (not Wi-Fi)"
                 is_wifi = False
             elif ip.startswith("192.168."):
                 is_wifi = True
@@ -603,13 +603,13 @@ class WiFiStresser(BasePlugin):
                     ssid = "Wi-Fi (LAN)"
             elif ip.startswith("100.") or ip.startswith("10.") and not is_wifi:
                 if not ssid:
-                    ssid = "Мобильная сеть / VPN"
+                    ssid = "Mobile network / VPN"
             else:
                 if not ssid:
-                    ssid = "Подключено (Wi-Fi/LAN)"
+                    ssid = "Connected (Wi-Fi/LAN)"
                     is_wifi = True
         else:
-            ssid = "Wi-Fi не подключён"
+            ssid = "Wi-Fi not connected"
 
         return ssid, ip or "—", is_wifi
 
@@ -628,7 +628,7 @@ class WiFiStresser(BasePlugin):
         _, ip, _ = self._get_wifi_info()
         if ip and ip != "—" and "." in ip:
             if ip.startswith("198.18."):
-                self.toast("⚠️ Отключите Fake-IP VPN для автоопределения")
+                self.toast("⚠️ Disable the Fake-IP VPN for auto-detection")
                 return
 
             octets = ip.split(".")
@@ -636,25 +636,25 @@ class WiFiStresser(BasePlugin):
                 octets[-1] = "1"
                 self.gateway = ".".join(octets)
                 self.set_setting("gateway", self.gateway)
-                self._log(f"Шлюз автоопределён: {self.gateway}", "OK")
+                self._log(f"Gateway auto-detected: {self.gateway}", "OK")
                 self.refresh()
-                self.toast(f"🎯 Шлюз: {self.gateway}")
+                self.toast(f"🎯 Gateway: {self.gateway}")
                 return
 
-        self.toast("❌ Не удалось определить IP подсети")
+        self.toast("❌ Failed to detect the subnet IP")
 
     def _test_gateway_reachability(self):
         if self._is_pinging:
             return
         self._is_pinging = True
-        self.ping_status = "⏳ Проверка связи..."
+        self.ping_status = "⏳ Checking connectivity..."
         self.refresh()
         threading.Thread(target=self._async_ping_worker, daemon=True).start()
 
     def _async_ping_worker(self):
         target_host = self.gateway.strip()
         target_port = self.port
-        self._log(f"Проверка связи с {target_host}:{target_port}...", "INFO")
+        self._log(f"Checking connectivity to {target_host}:{target_port}...", "INFO")
 
         try:
             t0 = time.time()
@@ -663,7 +663,7 @@ class WiFiStresser(BasePlugin):
             s.connect((target_host, target_port))
             self._safe_close_socket(s)
             ms = round((time.time() - t0) * 1000, 1)
-            msg = f"Шлюз отвечает · {ms} ms (порт {target_port} открыт)"
+            msg = f"Gateway responds · {ms} ms (port {target_port} open)"
             self.ping_status = f"✅ {msg}"
             self._log(msg, "OK")
         except Exception as e:
@@ -674,11 +674,11 @@ class WiFiStresser(BasePlugin):
                 s.connect((target_host, 53))
                 self._safe_close_socket(s)
                 ms = round((time.time() - t0) * 1000, 1)
-                self.ping_status = f"⚠️ Шлюз в сети ({ms} ms), но порт {target_port} закрыт/фильтруется"
-                self._log(f"Порт {target_port} закрыт/фильтруется ({type(e).__name__})", "WARN")
+                self.ping_status = f"⚠️ Gateway is up ({ms} ms), but port {target_port} is closed/filtered"
+                self._log(f"Port {target_port} closed/filtered ({type(e).__name__})", "WARN")
             except Exception as e2:
-                self.ping_status = f"❌ Нет ответа от {target_host}"
-                self._log(f"Хост {target_host} недоступен: {e2}", "ERR")
+                self.ping_status = f"❌ No response from {target_host}"
+                self._log(f"Host {target_host} unreachable: {e2}", "ERR")
         finally:
             self._is_pinging = False
             self.refresh()
@@ -723,18 +723,18 @@ class WiFiStresser(BasePlugin):
             self.set_setting("throttle_ignore", self.throttle_ignore)
         self.refresh()
 
-    # ------------------- Главный экран UI -------------------
+    # ------------------- Main screen UI -------------------
 
     def screen_main(self, ui, api, state):
         ssid, ip, is_wifi = self._get_wifi_info()
         is_shizuku = self.has_shizuku
         is_root = self.has_root
         l2_available = is_root or is_shizuku
-        log_content = "\n".join(self.logs[-7:]) if self.logs else "Событий нет. Выберите пресет или запустите аудит."
+        log_content = "\n".join(self.logs[-7:]) if self.logs else "No events yet. Pick a preset or start the audit."
 
-        # Сетка режимов
+        # Mode grid
         mode_cards = [
-            ui.text("Режим стресс-теста", "titleMedium"),
+            ui.text("Stress test mode", "titleMedium"),
             ui.row([
                 self._method_chip(ui, "UDP", True),
                 self._method_chip(ui, "CONNECT", True),
@@ -758,7 +758,7 @@ class WiFiStresser(BasePlugin):
         if self.method == "Mixed":
             mode_cards.append(
                 ui.button(
-                    "⚙️ Настроить связку (Mixed)",
+                    "⚙️ Configure the mix (Mixed)",
                     on_click=self._open_mixed_settings,
                     style="outlined",
                     fill_max_width=True
@@ -770,20 +770,20 @@ class WiFiStresser(BasePlugin):
             time_progress = max(0.0, min(1.0, (self.duration - self.time_left) / float(self.duration)))
 
         if self.running:
-            timer_text = "⏳ Работает: ∞ Бесконечно" if self.duration == 0 else f"⏳ Осталось: {self.time_left} сек (из {self.duration}с)"
+            timer_text = "⏳ Running: ∞ Infinite" if self.duration == 0 else f"⏳ Time left: {self.time_left} sec (of {self.duration}s)"
         else:
-            timer_text = f"⏱️ Длительность: {'∞ Бесконечно' if self.duration == 0 else str(self.duration) + ' сек'}"
+            timer_text = f"⏱️ Duration: {'∞ Infinite' if self.duration == 0 else str(self.duration) + ' sec'}"
 
         net_icon = "📶" if is_wifi else "🌐"
 
         active_socks = len(self.sockets) if self.running else 0
 
         if self.method == "Mixed":
-            stats_speed_text = f"⚡ {self.pps:,} пак/с · 🪝 {active_socks} сок".replace(",", " ")
+            stats_speed_text = f"⚡ {self.pps:,} pkt/s · 🪝 {active_socks} socks".replace(",", " ")
         elif self.method in ["Hold", "Slowloris", "SlowBody"]:
-            stats_speed_text = f"🪝 Удержано сокетов: {active_socks}"
+            stats_speed_text = f"🪝 Sockets held: {active_socks}"
         else:
-            stats_speed_text = f"⚡ {self.pps:,} пак/с".replace(",", " ")
+            stats_speed_text = f"⚡ {self.pps:,} pkt/s".replace(",", " ")
 
         slider_components = []
         is_mixed = (self.method == "Mixed")
@@ -797,7 +797,7 @@ class WiFiStresser(BasePlugin):
                     on_change=lambda v: self._set_udp_threads(int(v)),
                     minimum=16,
                     maximum=1024,
-                    title=f"UDP потоки: {self.udp_threads}",
+                    title=f"UDP threads: {self.udp_threads}",
                     steps=1008
                 )
             )
@@ -809,63 +809,63 @@ class WiFiStresser(BasePlugin):
                     on_change=lambda v: self._set_tcp_threads(int(v)),
                     minimum=4,
                     maximum=128,
-                    title=f"TCP потоки: {self.tcp_threads} (лимит ОС)",
+                    title=f"TCP threads: {self.tcp_threads} (OS limit)",
                     steps=124
                 )
             )
 
         children = [
-            # 1. Сеть и статус
+            # 1. Network and status
             ui.card([
                 ui.column([
                     ui.text(f"{net_icon} {ssid}", "titleMedium"),
                     ui.text(f"IP: {ip}", "bodyMedium"),
                     ui.row([
-                        ui.text(f"Shizuku: {'✅ Доступен' if is_shizuku else '❌ Не активен'}", "bodySmall"),
-                        ui.text(f"· Root: {'✅ Есть' if is_root else '❌ Нет'}", "bodySmall")
+                        ui.text(f"Shizuku: {'✅ Available' if is_shizuku else '❌ Not active'}", "bodySmall"),
+                        ui.text(f"· Root: {'✅ Yes' if is_root else '❌ No'}", "bodySmall")
                     ], spacing=6)
                 ], spacing=4)
             ]),
 
-            # 2. Пресеты
+            # 2. Presets
             ui.card([
-                ui.text("⚡ Пресеты нагрузки", "titleSmall"),
+                ui.text("⚡ Load presets", "titleSmall"),
                 ui.row([
                     ui.chip("TP-Link", selected=(self.active_preset == "Standart"), on_click=lambda: self._apply_preset("Standart")),
                     ui.chip("Keenetic WPA3 🛡️", selected=(self.active_preset == "Keenetic"), on_click=lambda: self._apply_preset("Keenetic")),
                 ], spacing=6, fill_max_width=True),
                 ui.row([
-                    ui.chip("Радиоэфир", selected=(self.active_preset == "Radio"), on_click=lambda: self._apply_preset("Radio")),
+                    ui.chip("Radio airtime", selected=(self.active_preset == "Radio"), on_click=lambda: self._apply_preset("Radio")),
                     ui.chip("Max Stress 🔥", selected=(self.active_preset == "MaxStress"), on_click=lambda: self._apply_preset("MaxStress")),
                 ], spacing=6, fill_max_width=True)
             ]),
 
-            # 3. Диагностика цели
+            # 3. Target diagnostics
             ui.card([
                 ui.row([
-                    ui.text("🔍 Диагностика цели", "titleSmall"),
-                    ui.button("📖 Гайд", on_click=lambda: self.navigate("guide"), style="text")
+                    ui.text("🔍 Target diagnostics", "titleSmall"),
+                    ui.button("📖 Guide", on_click=lambda: self.navigate("guide"), style="text")
                 ], fill_max_width=True),
                 ui.row([
-                    ui.button("⚡ Проверить пинг", on_click=self._test_gateway_reachability, style="outlined"),
-                    ui.button("🔍 Сканер портов", on_click=self._run_port_scan, style="outlined")
+                    ui.button("⚡ Check ping", on_click=self._test_gateway_reachability, style="outlined"),
+                    ui.button("🔍 Port scanner", on_click=self._run_port_scan, style="outlined")
                 ], spacing=8),
                 ui.text(self.ping_status, "bodySmall")
             ]),
 
-            # 4. Выбор метода
+            # 4. Method selection
             ui.card(mode_cards),
 
-            # 5. Параметры цели, времени и потоков
+            # 5. Target, timing, and thread settings
             ui.card([
                 ui.row([
-                    ui.text("Параметры цели и времени", "titleMedium"),
-                    ui.button("🎯 Авто-IP", on_click=self._auto_detect_gateway, style="text")
+                    ui.text("Target and timing settings", "titleMedium"),
+                    ui.button("🎯 Auto-IP", on_click=self._auto_detect_gateway, style="text")
                 ], fill_max_width=True),
                 ui.text_field(
                     value=self.gateway,
                     on_change=lambda v: self._set_gateway(v),
-                    label="Шлюз (IP роутера)",
+                    label="Gateway (router IP)",
                     single_line=True,
                     fill_max_width=True
                 ),
@@ -873,58 +873,58 @@ class WiFiStresser(BasePlugin):
                     ui.text_field(
                         value=str(self.port),
                         on_change=lambda v: self._set_port(v),
-                        label="Порт (1-65535)",
+                        label="Port (1-65535)",
                         single_line=True,
                         fill_max_width=True
                     ),
                     ui.text_field(
                         value=str(self.duration),
                         on_change=lambda v: self._set_duration(v),
-                        label="Время (сек)",
+                        label="Duration (sec)",
                         single_line=True,
                         fill_max_width=True
                     )
                 ], spacing=8, fill_max_width=True),
-                ui.text("Быстрый выбор времени:", "bodySmall"),
+                ui.text("Quick duration select:", "bodySmall"),
                 ui.row([
-                    self._duration_chip(ui, 15, "15с"),
-                    self._duration_chip(ui, 30, "30с"),
-                    self._duration_chip(ui, 60, "60с"),
+                    self._duration_chip(ui, 15, "15s"),
+                    self._duration_chip(ui, 30, "30s"),
+                    self._duration_chip(ui, 60, "60s"),
                 ], spacing=6, fill_max_width=True),
                 ui.row([
-                    self._duration_chip(ui, 120, "2 мин"),
-                    self._duration_chip(ui, 300, "5 мин"),
-                    self._duration_chip(ui, 0, "∞ Бесконечно"),
+                    self._duration_chip(ui, 120, "2 min"),
+                    self._duration_chip(ui, 300, "5 min"),
+                    self._duration_chip(ui, 0, "∞ Infinite"),
                 ], spacing=6, fill_max_width=True),
                 *slider_components,
                 ui.switch(
                     checked=self.bypass_mode,
                     on_change=lambda v: self._set_bypass_mode(v),
-                    title="🛡️ Режим обхода WAF / WPA3 Bypass 4.0",
-                    subtitle="Адаптивная эмуляция Transition Mode и смешанного трафика"
+                    title="🛡️ WAF bypass mode / WPA3 Bypass 4.0",
+                    subtitle="Adaptive Transition Mode emulation and mixed traffic"
                 ),
                 ui.switch(
                     checked=self.throttle_ignore,
                     on_change=lambda v: self._set_throttle(v),
-                    title="Игнорировать троттлинг",
-                    subtitle="Максимальная производительность без микропауз"
+                    title="Ignore throttling",
+                    subtitle="Maximum performance without micro-pauses"
                 )
             ]),
 
-            # 6. Кнопка управления
+            # 6. Control button
             ui.card([
                 ui.button(
-                    "🚀 Запустить stress" if not self.running else "⏹ Остановить",
+                    "🚀 Start stress" if not self.running else "⏹ Stop",
                     on_click=self._toggle_stress,
                     style="filled" if not self.running else "error",
                     fill_max_width=True
                 )
             ]),
 
-            # 7. Живая статистика и прогресс
+            # 7. Live statistics and progress
             ui.card([
                 ui.row([
-                    ui.text("📊 Статистика", "titleSmall"),
+                    ui.text("📊 Statistics", "titleSmall"),
                     ui.text(stats_speed_text, "titleSmall")
                 ], fill_max_width=True),
                 ui.text(
@@ -933,42 +933,42 @@ class WiFiStresser(BasePlugin):
                     f"DNS {self.stats['dns']} · L2 {self.stats['l2']}",
                     "bodySmall"
                 ),
-                ui.text(f"🩺 Живучесть Wi-Fi: {self.vitality_status}", "bodySmall"),
+                ui.text(f"🩺 Wi-Fi vitality: {self.vitality_status}", "bodySmall"),
                 ui.text(timer_text, "bodyMedium"),
                 ui.wavy_progress(
                     progress=time_progress if (self.running and self.duration > 0) else (1.0 if self.running else 0.0)
                 ),
                 ui.text(
-                    f"Активно: {self.method} ({len(self.threads)} потоков)"
-                    if self.running else "Статус: Ожидание запуска",
+                    f"Active: {self.method} ({len(self.threads)} threads)"
+                    if self.running else "Status: Waiting to start",
                     "bodySmall"
                 )
             ]),
 
-            # 8. Журнал событий
+            # 8. Event log
             ui.card([
                 ui.row([
-                    ui.text("📋 Журнал событий", "titleSmall"),
-                    ui.button("📤 Экспорт", on_click=self._export_audit_report, style="text"),
-                    ui.button("Очистить", on_click=self._clear_logs, style="text")
+                    ui.text("📋 Event log", "titleSmall"),
+                    ui.button("📤 Export", on_click=self._export_audit_report, style="text"),
+                    ui.button("Clear", on_click=self._clear_logs, style="text")
                 ], fill_max_width=True),
                 ui.text(log_content, "bodySmall")
             ]),
 
-            # 9. Кнопка супер-атаки (Рикролл)
+            # 9. Super attack button (Rickroll)
             ui.card([
                 ui.button(
-                    "💥 ПОЛОЖИТЬ РОУТЕР (SUPER KILLER)",
+                    "💥 KILL THE ROUTER (SUPER KILLER)",
                     on_click=self._open_rickroll,
                     style="filled",
                     fill_max_width=True
                 )
             ]),
 
-            # 10. Дисклеймер
+            # 10. Disclaimer
             ui.card([
                 ui.text(
-                    "⚠️ Инструмент предназначен исключительно для аудита устойчивости собственных локальных сетей.",
+                    "⚠️ This tool is intended exclusively for auditing the resilience of your own local networks.",
                     "bodySmall"
                 )
             ])
@@ -996,60 +996,60 @@ class WiFiStresser(BasePlugin):
             on_click=lambda: self._set_duration(duration_val)
         )
 
-    # ------------------- Расширенный гид для новичков и профи -------------------
+    # ------------------- Extended guide for beginners and pros -------------------
 
     def screen_guide(self, ui, api, state):
         children = [
             ui.card([
-                ui.text("📖 Подробная База Знаний (v3.0)", "titleMedium"),
-                ui.text("Полное руководство по аудиту безопасности и стресс-тестированию роутеров", "bodySmall")
+                ui.text("📖 Detailed Knowledge Base (v3.0)", "titleMedium"),
+                ui.text("A complete guide to security auditing and stress-testing routers", "bodySmall")
             ]),
 
             ui.card([
-                ui.text("🎯 1. Что такое WiFi Stresser и зачем он нужен?", "titleMedium"),
+                ui.text("🎯 1. What is WiFi Stresser and what is it for?", "titleMedium"),
                 ui.text(
-                    "Это специализированный инструмент для проверки **отказоустойчивости и защиты локальных маршрутизаторов** (Keenetic, OpenWrt, TP-Link и др.). Он помогает понять, как шлюз реагирует на сетевой флуд, срабатывает ли встроенный Anti-DoS фильтр и не падает ли веб-интерфейс под нагрузкой.",
+                    "A specialized tool for testing the **resilience and protection of local routers** (Keenetic, OpenWrt, TP-Link, etc.). It helps you understand how the gateway reacts to network flooding, whether the built-in Anti-DoS filter kicks in, and whether the web interface survives the load.",
                     "bodySmall"
                 )
             ]),
 
             ui.card([
-                ui.text("🔌 2. Как правильно выбрать порт?", "titleMedium"),
+                ui.text("🔌 2. How to choose the right port?", "titleMedium"),
                 ui.text(
-                    "Порт определяет, какую именно службу на роутере ты будешь нагружать:\n\n"
-                    "• **Порт 80 или 443 (HTTP/HTTPS):** Веб-панель управления роутером. Используй для методов `HTTP`, `Connect`, `Hold`, `Slowloris` и `SlowBody`.\n"
-                    "• **Порт 53 (DNS):** Внутренний DNS-резолвер (`dnsmasq`). Основная цель для `UDP` и `DNS Flood`.\n"
-                    "• **Порт 1900 (UPnP):** Служба автообнаружения устройств (`miniupnpd`). Проверяет устойчивость роутера к XML-запросам.\n\n"
-                    "⚠️ *Примечание:* Современные роутеры могут скрывать порты 80/443 от сканеров безопасности. Если ты точно знаешь IP админки (например, `192.168.1.1`), просто вбей порт вручную.",
+                    "The port decides which service on the router you will load:\n\n"
+                    "• **Port 80 or 443 (HTTP/HTTPS):** The router web admin panel. Use it for the `HTTP`, `Connect`, `Hold`, `Slowloris` and `SlowBody` methods.\n"
+                    "• **Port 53 (DNS):** The internal DNS resolver (`dnsmasq`). The main target for `UDP` and `DNS Flood`.\n"
+                    "• **Port 1900 (UPnP):** The device auto-discovery service (`miniupnpd`). Tests the router's resilience to XML requests.\n\n"
+                    "⚠️ *Note:* Modern routers may hide ports 80/443 from security scanners. If you know the admin panel IP for sure (e.g. `192.168.1.1`), just enter the port manually.",
                     "bodySmall"
                 )
             ]),
 
             ui.card([
-                ui.text("⚡ 3. Разбор методов атак (Векторов)", "titleMedium"),
+                ui.text("⚡ 3. Attack methods (vectors) explained", "titleMedium"),
                 ui.text(
-                    "• **UDP / DNS Flood:** Заваливают роутер мусорными пакетами и запросами несуществующих сайтов, нагружая процессор и сетевой стек.\n"
-                    "• **HTTP / Connect Flood:** Быстрый шквал подключений к веб-серверу для проверки лимита соединений.\n"
-                    "• **Slowloris / SlowBody:** Медленные атаки. Они специально удерживают сокеты открытыми, отправляя данные по одному байту в секунду, что моментально забивает лимит свободной оперативной памяти (RAM) веб-сервера.\n"
-                    "• **Mixed (Связка):** Комбинированный режим, объединяющий все выбранные векторы для комплексной проверки.\n"
-                    "• **Bypass 4.0:** Включай этот режим для аудита сетей с **WPA3 Transition Mode** — он динамически меняет заголовки, имитируя смешанный трафик SAE-авторизации.",
+                    "• **UDP / DNS Flood:** Buries the router under junk packets and queries for non-existent sites, loading the CPU and network stack.\n"
+                    "• **HTTP / Connect Flood:** A rapid barrage of connections to the web server to test the connection limit.\n"
+                    "• **Slowloris / SlowBody:** Slow attacks. They deliberately keep sockets open, sending data one byte per second, which instantly exhausts the web server's free RAM limit.\n"
+                    "• **Mixed (Combo):** A combined mode that merges all selected vectors for a comprehensive test.\n"
+                    "• **Bypass 4.0:** Enable this mode to audit networks with **WPA3 Transition Mode** -- it dynamically varies headers, imitating mixed SAE-authentication traffic.",
                     "bodySmall"
                 )
             ]),
 
             ui.card([
-                ui.text("📊 4. Расшифровка метрик и отчётов", "titleMedium"),
+                ui.text("📊 4. Metrics and reports explained", "titleMedium"),
                 ui.text(
-                    "• **PPS (Пакеты в сек):** Текущая скорость генерации трафика с телефона.\n"
-                    "• **Живучесть Wi-Fi:** Индикатор состояния связи в реальном времени (от зеленой до статуса «В коме»).\n"
-                    "• **Экспорт в JSON/CSV:** По нажатию кнопки отчеты автоматически сохраняются на телефоне в папку `/sdcard/Download/` для детального анализа.",
+                    "• **PPS (packets per second):** The current traffic generation rate of the phone.\n"
+                    "• **Wi-Fi vitality:** A real-time link health indicator (from green to the «Coma» status).\n"
+                    "• **JSON/CSV export:** On button press, reports are automatically saved on the phone to `/sdcard/Download/` for detailed analysis.",
                     "bodySmall"
                 )
             ]),
 
             ui.card([
                 ui.button(
-                    "⬅️ Вернуться назад",
+                    "⬅️ Go back",
                     on_click=lambda: self.navigate("main"),
                     style="filled",
                     fill_max_width=True
@@ -1058,28 +1058,28 @@ class WiFiStresser(BasePlugin):
         ]
 
         return ui.scaffold(
-            title="Руководство по аудиту",
+            title="Audit guide",
             content=ui.column(children, padding=16, spacing=12)
         )
 
     def screen_report(self, ui, api, state):
         children = [
             ui.card([
-                ui.text("📋 Результаты аудита", "titleMedium"),
-                ui.text("Текст отчёта скопирован в буфер и сохранен в папочку Download (JSON/CSV).", "bodySmall")
+                ui.text("📋 Audit results", "titleMedium"),
+                ui.text("The report text has been copied to the clipboard and saved to the Download folder (JSON/CSV).", "bodySmall")
             ]),
             ui.card([
                 ui.text_field(
                     value=self.generated_report_text,
                     on_change=lambda v: None,
-                    label="Отчёт",
+                    label="Report",
                     single_line=False,
                     fill_max_width=True
                 )
             ]),
             ui.card([
                 ui.button(
-                    "⬅️ Вернуться назад",
+                    "⬅️ Go back",
                     on_click=lambda: self.navigate("main"),
                     style="filled",
                     fill_max_width=True
@@ -1088,7 +1088,7 @@ class WiFiStresser(BasePlugin):
         ]
 
         return ui.scaffold(
-            title="Отчёт аудита",
+            title="Audit report",
             content=ui.column(children, padding=16, spacing=12)
         )
 
@@ -1097,81 +1097,81 @@ class WiFiStresser(BasePlugin):
 
         children = [
             ui.card([
-                ui.text("Конфигурация связки (Mixed)", "titleMedium"),
-                ui.text("Воркеры будут чередовать активные векторы атак", "bodySmall"),
+                ui.text("Mix configuration (Mixed)", "titleMedium"),
+                ui.text("Workers will alternate between the active attack vectors", "bodySmall"),
             ]),
             ui.card([
                 ui.switch(
                     checked=self.mixed_udp,
                     on_change=lambda v: self._set_mixed_setting("mixed_udp", v),
                     title="UDP Multi-Socket",
-                    subtitle="Флуд DNS NXDOMAIN / SSDP / Junk пакетами"
+                    subtitle="Flood of DNS NXDOMAIN / SSDP / junk packets"
                 ),
                 ui.switch(
                     checked=self.mixed_connect,
                     on_change=lambda v: self._set_mixed_setting("mixed_connect", v),
                     title="TCP Connect Flood",
-                    subtitle="Забивание таблицы соединений NAT"
+                    subtitle="Fills up the NAT connection table"
                 ),
                 ui.switch(
                     checked=self.mixed_http,
                     on_change=lambda v: self._set_mixed_setting("mixed_http", v),
                     title="HTTP Flood",
-                    subtitle="Сырой скоростной HTTP флуд с фрагментацией"
+                    subtitle="Raw high-speed HTTP flood with fragmentation"
                 ),
                 ui.switch(
                     checked=self.mixed_hold,
                     on_change=lambda v: self._set_mixed_setting("mixed_hold", v),
                     title="TCP Hold",
-                    subtitle="Удержание открытых сокетов шлюза"
+                    subtitle="Keeps gateway sockets open"
                 ),
                 ui.switch(
                     checked=self.mixed_slowloris,
                     on_change=lambda v: self._set_mixed_setting("mixed_slowloris", v),
                     title="Slowloris",
-                    subtitle="Медленная передача L7 заголовков"
+                    subtitle="Slow L7 header dribble"
                 ),
                 ui.switch(
                     checked=self.mixed_slowbody,
                     on_change=lambda v: self._set_mixed_setting("mixed_slowbody", v),
                     title="SlowBody (Slow HTTP POST)",
-                    subtitle="Медленная передача тела запроса"
+                    subtitle="Slow request body dribble"
                 ),
                 ui.switch(
                     checked=self.mixed_upnp,
                     on_change=lambda v: self._set_mixed_setting("mixed_upnp", v),
                     title="UPnP SOAP XML",
-                    subtitle="Нагрузка на демон miniupnpd парсингом XML"
+                    subtitle="Loads the miniupnpd daemon with XML parsing"
                 ),
                 ui.switch(
                     checked=self.mixed_dns,
                     on_change=lambda v: self._set_mixed_setting("mixed_dns", v),
                     title="DNS Flood (NXDOMAIN)",
-                    subtitle="Генерация уникальных DNS-запросов"
+                    subtitle="Generates unique DNS queries"
                 ),
                 ui.switch(
                     checked=self.mixed_l2 and l2_available,
                     on_change=lambda v: self._set_mixed_setting("mixed_l2", v) if l2_available else None,
                     title="L2 Wi-Fi Scan (Root/Shizuku)",
-                    subtitle="Нагрузка на радиомодуль шлюза",
+                    subtitle="Loads the gateway radio module",
                     enabled=l2_available
                 )
             ]),
             ui.card([
                 ui.button(
-                    "Сохранить и вернуться",
+                    "Save and go back",
                     on_click=lambda: self.navigate("main"),
                     style="filled",
                     fill_max_width=True
                 )
             ]),
             ui.card([
-                ui.text(f"✅ Выбрано TCP: {len(self._get_mixed_tcp_methods())} · UDP: {len(self._get_mixed_udp_methods())}", "bodyMedium")
+                ui.text(f"✅ Selected TCP: {len(self._get_mixed_tcp_methods())} · UDP: {len(self._get_mixed_udp_methods())}", "bodyMedium")
             ])
         ]
 
         return ui.scaffold(
-            title="Настройка Mixed",
+            title="Mixed settings",
             content=ui.column(children, padding=16, spacing=12)
         )
 
@@ -1205,7 +1205,7 @@ class WiFiStresser(BasePlugin):
 
     def _set_method(self, method):
         if method == "L2 (Root)" and not (self.has_root or self.has_shizuku):
-            self.toast("❌ Для этого метода нужен Root или Shizuku!")
+            self.toast("❌ This method requires Root or Shizuku!")
             return
         self.method = method
         self.set_setting("method", method)
@@ -1294,21 +1294,21 @@ class WiFiStresser(BasePlugin):
             return
 
         if self.method == "L2 (Root)" and not (self.has_root or self.has_shizuku):
-            self.toast("❌ Для L2 нужен Root или Shizuku!")
-            self._log("L2 отклонён: нет прав", "ERR")
+            self.toast("❌ L2 requires Root or Shizuku!")
+            self._log("L2 rejected: no privileges", "ERR")
             return
 
         self.running = True
         self.stop_flag = False
         self.time_left = self.duration
         self.pps = 0
-        self.vitality_status = "Идет замер устойчивости..."
+        self.vitality_status = "Resilience measurement in progress..."
         with self.stats_lock:
             self.stats = {"http": 0, "connect": 0, "hold": 0, "udp": 0, "upnp": 0, "dns": 0, "l2": 0}
         self.threads = []
         self.sockets = []
 
-        dur_str = f"{self.duration} сек" if self.duration > 0 else "∞ (бесконечно)"
+        dur_str = f"{self.duration} sec" if self.duration > 0 else "∞ (infinite)"
         bypass_str = " [🛡️ Bypass 3.0 ON]" if self.bypass_mode else ""
 
         threading.Thread(target=self._ui_and_timer_loop, daemon=True).start()
@@ -1319,18 +1319,18 @@ class WiFiStresser(BasePlugin):
             udp_methods = self._get_mixed_udp_methods()
 
             if not tcp_methods and not udp_methods:
-                self.toast("❌ Выберите хотя бы одну атаку в Mixed!")
+                self.toast("❌ Select at least one attack in Mixed!")
                 self._stop_stress()
                 return
 
-            self._log(f"▶️ Старт Mixed{bypass_str} (TCP-потоков: {self.tcp_threads}, UDP-потоков: {self.udp_threads}) на {self.gateway}:{self.port}", "OK")
+            self._log(f"▶️ Mixed start{bypass_str} (TCP threads: {self.tcp_threads}, UDP threads: {self.udp_threads}) on {self.gateway}:{self.port}", "OK")
 
             if tcp_methods:
                 threading.Thread(target=self._spawn_workers_async, args=(self._mixed_tcp_worker, self.tcp_threads), daemon=True).start()
             if udp_methods:
                 threading.Thread(target=self._spawn_workers_async, args=(self._mixed_udp_worker, self.udp_threads), daemon=True).start()
 
-            self.toast(f"✅ Запуск Mixed ({self.tcp_threads} TCP + {self.udp_threads} UDP)")
+            self.toast(f"✅ Starting Mixed ({self.tcp_threads} TCP + {self.udp_threads} UDP)")
         else:
             method_map = {
                 "UDP": self._udp_worker,
@@ -1347,9 +1347,9 @@ class WiFiStresser(BasePlugin):
             is_tcp_single = (self.method in ["CONNECT", "HTTP", "Hold", "Slowloris", "SlowBody"])
             threads_to_spawn = self.tcp_threads if is_tcp_single else self.udp_threads
 
-            self._log(f"▶️ Старт {self.method}{bypass_str} ({threads_to_spawn} потоков, {dur_str}) на {self.gateway}:{self.port}", "OK")
+            self._log(f"▶️ {self.method} start{bypass_str} ({threads_to_spawn} threads, {dur_str}) on {self.gateway}:{self.port}", "OK")
             threading.Thread(target=self._spawn_workers_async, args=(worker, threads_to_spawn), daemon=True).start()
-            self.toast(f"✅ Запуск {self.method} ({threads_to_spawn} потоков)")
+            self.toast(f"✅ Starting {self.method} ({threads_to_spawn} threads)")
 
         self.refresh()
 
@@ -1373,7 +1373,7 @@ class WiFiStresser(BasePlugin):
         self.stop_flag = True
         self.running = False
         self.pps = 0
-        self._log(f"⏹ Остановка... Итог: {self.stats}", "INFO")
+        self._log(f"⏹ Stopping... Final: {self.stats}", "INFO")
 
         def cleanup_worker():
             with self.sockets_lock:
@@ -1381,12 +1381,12 @@ class WiFiStresser(BasePlugin):
                     self._safe_close_socket(sock)
                 self.sockets.clear()
             self.threads.clear()
-            self._log("Все ресурсы освобождены", "OK")
+            self._log("All resources released", "OK")
             self.refresh()
 
         threading.Thread(target=cleanup_worker, daemon=True).start()
         self.refresh()
-        self.toast("⏹ Остановлено")
+        self.toast("⏹ Stopped")
 
     def _udp_worker(self, idx):
         target = (self.gateway, self.port)
@@ -1862,8 +1862,8 @@ class WiFiStresser(BasePlugin):
 
     def _l2_worker(self, idx):
         if not (self.has_root or self.has_shizuku):
-            self.toast("❌ L2 требует Root или Shizuku!")
-            self._log("L2 воркер остановлен: нет привилегий", "ERR")
+            self.toast("❌ L2 requires Root or Shizuku!")
+            self._log("L2 worker stopped: no privileges", "ERR")
             return
 
         cmd = "cmd wifi start-scan"

@@ -2,7 +2,7 @@ __id__ = "module_checker"
 __name__ = "Module Checker"
 __version__ = "1.0.0"
 __author__ = "Topzi"
-__description__ = "Показывает какие аппаратные модули и функции доступны на этом телефоне"
+__description__ = "Shows which hardware modules and functions are available on this phone"
 __icon__ = "rounded:fact_check"
 __library__ = False
 __design_library__ = False
@@ -17,7 +17,7 @@ class ModuleChecker(BasePlugin):
     def on_plugin_load(self):
         self.add_module(
             title="Module Checker",
-            description="Проверка доступных модулей устройства",
+            description="Check available device modules",
             icon="fact_check",
             screen="main",
             section="PLUGINS"
@@ -26,8 +26,8 @@ class ModuleChecker(BasePlugin):
     # ---------- helpers ----------
 
     def _safe(self, fn, default=False):
-        """Вызывает fn() и возвращает default, если что-то пошло не так
-        (метод отсутствует в этой сборке Dolphy, бросил исключение и т.д.)."""
+        """Calls fn() and returns default if anything goes wrong
+        (method missing in this Dolphy build, raised an exception, etc.)."""
         try:
             result = fn()
             if result is None:
@@ -37,12 +37,12 @@ class ModuleChecker(BasePlugin):
             return default
 
     def _has_service(self, service_id):
-        """Best-effort проверка: публичного API для чтения списка активных
-        provide_service(...) регистраций других плагинов в документации нет,
-        поэтому здесь используется java_exports() как косвенный сигнал —
-        библиотеки-провайдеры часто экспортируют объект с похожим именем.
-        Если в будущей версии Dolphy появится api.listServices() или аналог,
-        стоит заменить эту функцию на прямой вызов."""
+        """Best-effort check: the documentation has no public API to read the
+        list of active provide_service(...) registrations of other plugins,
+        so java_exports() is used here as an indirect signal — provider
+        libraries usually export an object with a similar name. If a future
+        Dolphy version adds api.listServices() or similar, replace this
+        function with a direct call."""
         try:
             exports = self.java_exports()
             if exports and service_id.split(".")[0] in str(exports):
@@ -52,12 +52,12 @@ class ModuleChecker(BasePlugin):
         return False
 
     def _row(self, title, available, extra=""):
-        """Строит одну строку раздела: если available == False,
-        сверху слева показывается 'Нет модуля'."""
+        """Builds one section row: if available == False,
+        'No module' is shown at the top left."""
         children = []
         if not available:
             children.append(
-                self.ui.text("Нет модуля", "labelSmall", color="error")
+                self.ui.text("No module", "labelSmall", color="error")
             )
         children.append(self.ui.text(title, "titleMedium"))
         if extra:
@@ -101,8 +101,8 @@ class ModuleChecker(BasePlugin):
     def check_ir(self):
         android = self.api.getAndroid()
         has_emitter = self._safe(lambda: android.irHasEmitter())
-        # если своего ИК-порта нет, проверяем не предоставил ли его
-        # какой-то плагин через provide_service("infrared.transmitter", ...)
+        # if there is no built-in IR port, check whether some plugin provides
+        # one via provide_service("infrared.transmitter", ...)
         if not has_emitter:
             has_emitter = self._has_service("infrared.transmitter")
         return bool(has_emitter)
@@ -112,7 +112,7 @@ class ModuleChecker(BasePlugin):
         devices_json = self._safe(lambda: android.usbDevicesJson(), default=None)
         if devices_json is None:
             return False
-        return True  # метод существует и отработал — USB host API доступен
+        return True  # method exists and ran — USB host API is available
 
     def check_camera(self):
         android = self.api.getAndroid()
@@ -142,25 +142,25 @@ class ModuleChecker(BasePlugin):
         return self._safe(lambda: device.shizukuAvailable())
 
     def check_nsd(self):
-        # проверка сетевого сервис-дискавери косвенно через наличие Wi-Fi
+        # check network service discovery indirectly via Wi-Fi presence
         return self.check_wifi()
 
     # ---------- screen ----------
 
     def screen_main(self, ui, api, state):
         sections = [
-            ("NFC", self.check_nfc, "Чтение/запись меток, эмуляция"),
-            ("Bluetooth LE", self.check_ble, "Сканирование и реклама BLE"),
-            ("Bluetooth Classic", self.check_bt_classic, "Классический BT, RFCOMM"),
-            ("Wi-Fi", self.check_wifi, "Сканирование сетей, подключение"),
-            ("Wi-Fi Direct (P2P)", self.check_wifi_p2p, "Прямое соединение между устройствами"),
-            ("Инфракрасный порт", self.check_ir, "Передача ИК-сигналов (либо через плагин)"),
-            ("USB", self.check_usb, "Host-режим, внешние устройства"),
-            ("Камера", self.check_camera, "Захват фото/видео"),
-            ("Геолокация", self.check_location, "GPS/сетевая локация"),
-            ("Датчики", self.check_sensors, "Акселерометр, гироскоп и т.д."),
-            ("Root", self.check_root, "Root-доступ (Magisk и т.п.)"),
-            ("Shizuku", self.check_shizuku, "Расширенный доступ через Shizuku"),
+            ("NFC", self.check_nfc, "Tag read/write, emulation"),
+            ("Bluetooth LE", self.check_ble, "BLE scanning and advertising"),
+            ("Bluetooth Classic", self.check_bt_classic, "Classic BT, RFCOMM"),
+            ("Wi-Fi", self.check_wifi, "Network scanning, connection"),
+            ("Wi-Fi Direct (P2P)", self.check_wifi_p2p, "Direct device-to-device connection"),
+            ("Infrared port", self.check_ir, "IR signal transmission (or via a plugin)"),
+            ("USB", self.check_usb, "Host mode, external devices"),
+            ("Camera", self.check_camera, "Photo/video capture"),
+            ("Location", self.check_location, "GPS/network location"),
+            ("Sensors", self.check_sensors, "Accelerometer, gyroscope, etc."),
+            ("Root", self.check_root, "Root access (Magisk etc.)"),
+            ("Shizuku", self.check_shizuku, "Extended access via Shizuku"),
         ]
 
         rows = []
@@ -169,11 +169,11 @@ class ModuleChecker(BasePlugin):
             rows.append(self._row(title, available, extra))
 
         return ui.scaffold(
-            title="Проверка модулей",
+            title="Module check",
             content=ui.lazy_column(
                 [
                     ui.text(
-                        "Статус аппаратных и системных возможностей этого телефона",
+                        "Status of this phone's hardware and system capabilities",
                         "bodyMedium",
                         color="muted"
                     ),

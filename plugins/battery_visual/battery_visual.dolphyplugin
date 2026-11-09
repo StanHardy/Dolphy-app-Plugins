@@ -2,7 +2,7 @@ __id__ = "battery_visual"
 __name__ = "Battery Visual"
 __version__ = "1.1"
 __author__ = "DCA"
-__description__ = "Визуальная установка уровня батареи через Shizuku"
+__description__ = "Visually set the battery level via Shizuku"
 __icon__ = "battery_full"
 
 
@@ -11,9 +11,9 @@ class BatteryVisualPlugin(BasePlugin):
     def __init__(self):
         super().__init__()
 
-        # ВАЖНО:
-        # здесь нельзя вызывать self.get_setting(),
-        # потому что API плагина ещё может быть не подключён.
+        # IMPORTANT:
+        # self.get_setting() must not be called here,
+        # because the plugin API may not be connected yet.
         self._ready = False
         self._running = False
         self.level = 50
@@ -22,14 +22,14 @@ class BatteryVisualPlugin(BasePlugin):
         try:
             self.add_module(
                 title="Battery Visual",
-                description="Визуальное изменение процента батареи",
+                description="Visually change the battery percentage",
                 icon="battery_full",
                 screen="main",
                 section="PLUGINS",
                 order=0
             )
 
-            # API уже должен быть доступен после загрузки.
+            # The API should already be available after loading.
             try:
                 saved = self.get_setting("level", 50)
                 self.level = max(0, min(100, int(saved)))
@@ -42,16 +42,16 @@ class BatteryVisualPlugin(BasePlugin):
             self._ready = False
 
             try:
-                self.toast("Ошибка загрузки: " + str(e))
+                self.toast("Load error: " + str(e))
             except Exception:
                 pass
 
     def _run_shizuku(self, command):
         if not self._ready:
-            return False, "Плагин ещё не готов"
+            return False, "Plugin is not ready yet"
 
         if self._running:
-            return False, "Операция уже выполняется"
+            return False, "An operation is already running"
 
         self._running = True
 
@@ -59,7 +59,7 @@ class BatteryVisualPlugin(BasePlugin):
             result = self.shizuku(command)
 
             if not isinstance(result, dict):
-                return False, "Shizuku вернул неизвестный результат"
+                return False, "Shizuku returned an unknown result"
 
             if result.get("ok") is True:
                 return True, str(result.get("out") or "OK")
@@ -69,7 +69,7 @@ class BatteryVisualPlugin(BasePlugin):
                 error = result.get("out")
 
             if not error:
-                error = "Команда завершилась с ошибкой"
+                error = "Command failed"
 
             return False, str(error)
 
@@ -100,13 +100,13 @@ class BatteryVisualPlugin(BasePlugin):
         try:
             if ok:
                 self.toast(
-                    "Установлено визуально: " +
+                    "Visually set: " +
                     str(level) +
                     "%"
                 )
             else:
                 self.toast(
-                    "Ошибка Shizuku: " +
+                    "Shizuku error: " +
                     str(message)
                 )
         except Exception:
@@ -125,11 +125,11 @@ class BatteryVisualPlugin(BasePlugin):
         try:
             if ok:
                 self.toast(
-                    "Восстановлен реальный уровень батареи"
+                    "Real battery level restored"
                 )
             else:
                 self.toast(
-                    "Ошибка Shizuku: " +
+                    "Shizuku error: " +
                     str(message)
                 )
         except Exception:
@@ -179,7 +179,7 @@ class BatteryVisualPlugin(BasePlugin):
                                     "headlineLarge"
                                 ),
                                 ui.text(
-                                    "Визуальный уровень батареи",
+                                    "Visual battery level",
                                     "bodyMedium"
                                 )
                             ],
@@ -191,12 +191,12 @@ class BatteryVisualPlugin(BasePlugin):
                             on_change=self._on_slider,
                             minimum=0,
                             maximum=100,
-                            title="Процент батареи",
+                            title="Battery percentage",
                             steps=100
                         ),
 
                         ui.button(
-                            "Установить " + str(level) + "%",
+                            "Set " + str(level) + "%",
                             on_click=self._set_level,
                             style="filled",
                             enabled=(
@@ -207,7 +207,7 @@ class BatteryVisualPlugin(BasePlugin):
                         ),
 
                         ui.button(
-                            "Сбросить на реальный уровень",
+                            "Reset to real level",
                             on_click=self._reset_battery,
                             style="outlined",
                             enabled=(
@@ -220,10 +220,10 @@ class BatteryVisualPlugin(BasePlugin):
                         ui.divider(),
 
                         ui.text(
-                            "Изменяется только системное "
-                            "отображаемое значение батареи. "
-                            "Физический заряд аккумулятора "
-                            "не изменяется.",
+                            "Only the system-displayed "
+                            "battery value is changed. "
+                            "The physical battery charge "
+                            "is not changed.",
                             "bodySmall"
                         )
                     ],
@@ -234,11 +234,11 @@ class BatteryVisualPlugin(BasePlugin):
 
         except Exception as e:
             return ui.scaffold(
-                title="Ошибка",
+                title="Error",
                 content=ui.column(
                     [
                         ui.text(
-                            "Ошибка экрана: " + str(e),
+                            "Screen error: " + str(e),
                             "bodyMedium"
                         )
                     ],

@@ -3,7 +3,7 @@ __id__ = "droid_monitor"
 __name__ = "DroidMonitor"
 __version__ = "1.2.1"
 __author__ = "OpenAI"
-__description__ = "Мониторинг Android с журналом диагностики CPU, RAM, батареи и сети"
+__description__ = "Android monitoring with a CPU, RAM, battery and network diagnostics log"
 __icon__ = "rounded:monitor_heart"
 __permissions__ = []
 
@@ -16,10 +16,10 @@ from collections import deque
 
 
 class DroidMonitor(BasePlugin):
-    """Лёгкая панель мониторинга Android для Dolphy.
+    """Lightweight Android monitoring panel for Dolphy.
 
-    Использует документированные API Dolphy и стандартные файлы /proc.
-    Обновление выполняется по нажатию кнопки, без бесконечных циклов и таймеров.
+    Uses documented Dolphy APIs and standard /proc files.
+    Updates run on button press, with no infinite loops or timers.
     """
 
     MAX_TEXT = 1800
@@ -40,7 +40,7 @@ class DroidMonitor(BasePlugin):
         try:
             self.add_module(
                 title="DroidMonitor",
-                description="Состояние телефона и диагностика системы",
+                description="Phone status and system diagnostics",
                 icon="monitor_heart",
                 screen="main",
                 section="PLUGINS",
@@ -48,7 +48,7 @@ class DroidMonitor(BasePlugin):
             )
             self._ready = True
             self._init_log_path()
-            self._log("INFO", "Плагин загружен")
+            self._log("INFO", "Plugin loaded")
             self._collect()
         except Exception as exc:
             try:
@@ -59,7 +59,7 @@ class DroidMonitor(BasePlugin):
     def on_plugin_enable(self):
         try:
             self._ready = True
-            self._log("INFO", "Плагин включён")
+            self._log("INFO", "Plugin enabled")
             self._collect()
         except Exception:
             pass
@@ -72,7 +72,7 @@ class DroidMonitor(BasePlugin):
         self._last_cpu = None
         self._cpu_percent = None
         self._snapshot = {}
-        self._log("INFO", "Плагин выгружен")
+        self._log("INFO", "Plugin unloaded")
 
     def _init_log_path(self):
         try:
@@ -97,11 +97,11 @@ class DroidMonitor(BasePlugin):
 
     def _clear_logs(self):
         self._logs.clear()
-        self._log("INFO", "Локальный список логов очищен")
+        self._log("INFO", "Local log list cleared")
         self._refresh()
 
     @staticmethod
-    def _safe_str(value, fallback="Недоступно"):
+    def _safe_str(value, fallback="Unavailable"):
         try:
             if value is None or value == "":
                 return fallback
@@ -173,7 +173,7 @@ class DroidMonitor(BasePlugin):
                 if delta_total:
                     self._cpu_percent = min(100.0, max(0.0, 100.0 * (delta_total - delta_idle) / delta_total))
             else:
-                self._log("DEBUG", "CPU: получен первый замер; процент появится после следующего обновления")
+                self._log("DEBUG", "CPU: first sample taken; percentage will appear after the next refresh")
             return self._cpu_percent
         except Exception:
             return self._cpu_percent
@@ -184,10 +184,10 @@ class DroidMonitor(BasePlugin):
             value = float(value)
             if value < 0:
                 return "—"
-            units = ("Б", "КБ", "МБ", "ГБ", "ТБ")
+            units = ("B", "KB", "MB", "GB", "TB")
             for unit in units:
                 if value < 1024 or unit == units[-1]:
-                    return ("%.0f %s" % (value, unit)) if unit == "Б" else ("%.1f %s" % (value, unit))
+                    return ("%.0f %s" % (value, unit)) if unit == "B" else ("%.1f %s" % (value, unit))
                 value /= 1024.0
         except Exception:
             pass
@@ -234,7 +234,7 @@ class DroidMonitor(BasePlugin):
             try:
                 android = self.api.getAndroid()
             except Exception as exc:
-                self._log("WARN", "getAndroid недоступен: " + str(exc)[:160])
+                self._log("WARN", "getAndroid unavailable: " + str(exc)[:160])
             if android is not None:
                 try:
                     snap["battery"] = self._json_value(android.batteryJson())
@@ -251,7 +251,7 @@ class DroidMonitor(BasePlugin):
             try:
                 device_api = self.api.getDevice()
             except Exception as exc:
-                self._log("WARN", "getDevice недоступен: " + str(exc)[:160])
+                self._log("WARN", "getDevice unavailable: " + str(exc)[:160])
             if device_api is not None:
                 try:
                     snap["wifi_enabled"] = bool(device_api.wifiIsEnabled())
@@ -273,32 +273,32 @@ class DroidMonitor(BasePlugin):
             snap["platform"] = platform.system() or "Android"
             snap["time"] = time.strftime("%H:%M:%S")
             # Record key availability without dumping private network details.
-            self._log("DEBUG", "Доступность: battery=%s device=%s wifi=%s" % (
+            self._log("DEBUG", "Availability: battery=%s device=%s wifi=%s" % (
                 bool(snap.get("battery")), bool(snap.get("device")), snap.get("wifi_enabled", "n/a")
             ))
             self._snapshot = snap
             self._last_refresh = time.time()
             self._last_error = ""
-            self._log("DEBUG", "Снимок обновлён: CPU=%s RAM=%s WiFi=%s" % (
+            self._log("DEBUG", "Snapshot updated: CPU=%s RAM=%s WiFi=%s" % (
             snap.get("cpu") if snap.get("cpu") is not None else "n/a",
             (snap.get("memory") or {}).get("percent", "n/a"),
             snap.get("wifi_enabled", "n/a"),
         ))
         except Exception as exc:
             self._last_error = str(exc)[:180]
-            self._log("ERROR", "Ошибка сбора данных: " + self._last_error)
+            self._log("ERROR", "Data collection error: " + self._last_error)
             if not self._snapshot:
                 self._snapshot = {"memory": {}, "storage": {}, "battery": {}, "device": {}, "network": {}, "wifi": {}}
             snap = self._snapshot
         return snap
 
     def _refresh(self):
-        self._log("INFO", "Обновление запрошено")
+        self._log("INFO", "Refresh requested")
         try:
             self._collect()
         except Exception as exc:
             self._last_error = str(exc)[:180]
-            self._log("ERROR", "Обновление: " + self._last_error)
+            self._log("ERROR", "Refresh: " + self._last_error)
         try:
             self.refresh()
         except Exception:
@@ -352,50 +352,50 @@ class DroidMonitor(BasePlugin):
         if isinstance(level, (int, float)):
             charging = self._first(battery, ("charging", "isCharging"), False)
             status = self._first(battery, ("status", "batteryStatus"))
-            status_names = {1: "Неизвестно", 2: "Заряжается", 3: "Разряжается", 4: "Не заряжается", 5: "Заряжена"}
+            status_names = {1: "Unknown", 2: "Charging", 3: "Discharging", 4: "Not charging", 5: "Charged"}
             if isinstance(status, str):
                 status_label = status_names.get(int(status), status) if status.isdigit() else status
             else:
                 status_label = status_names.get(status, "")
             if charging is True or charging == 1:
-                battery_sub = "Заряжается"
+                battery_sub = "Charging"
             elif status_label:
                 battery_sub = status_label
             else:
-                battery_sub = "Уровень заряда"
+                battery_sub = "Battery level"
         else:
-            battery_sub = "Данные батареи недоступны"
+            battery_sub = "Battery data unavailable"
 
         # Use a compact vertical stack: horizontal metric rows can stretch oddly
         # in some Dolphy builds and leave a large blank area above the cards.
         cards = ui.column([
-            self._metric(ui, "ПРОЦЕССОР", cpu_text, "Текущая загрузка" if isinstance(cpu, (int, float)) else "Собираем данные / доступ ограничен", "memory", "#70E1B5", cpu if isinstance(cpu, (int, float)) else None),
-            self._metric(ui, "ОПЕРАТИВНАЯ ПАМЯТЬ", ram_text,
-                         self._format_bytes(mem.get("used", 0)) + " использовано", "developer_board", "#8AB4F8",
+            self._metric(ui, "CPU", cpu_text, "Current load" if isinstance(cpu, (int, float)) else "Collecting data / access restricted", "memory", "#70E1B5", cpu if isinstance(cpu, (int, float)) else None),
+            self._metric(ui, "RAM", ram_text,
+                         self._format_bytes(mem.get("used", 0)) + " used", "developer_board", "#8AB4F8",
                          mem.get("percent") if isinstance(mem.get("percent"), (int, float)) else None),
-            self._metric(ui, "НАКОПИТЕЛЬ", storage_text,
-                         self._format_bytes(storage.get("free", 0)) + " свободно", "storage", "#C6A0F6",
+            self._metric(ui, "STORAGE", storage_text,
+                         self._format_bytes(storage.get("free", 0)) + " free", "storage", "#C6A0F6",
                          storage.get("percent") if isinstance(storage.get("percent"), (int, float)) else None),
-            self._metric(ui, "БАТАРЕЯ", battery_text, battery_sub, "battery_full", "#F8C471",
+            self._metric(ui, "BATTERY", battery_text, battery_sub, "battery_full", "#F8C471",
                          level if isinstance(level, (int, float)) else None),
         ], spacing=8)
-        connection = "Подключена" if snap.get("wifi_enabled") else ("Выключена" if snap.get("wifi_enabled") is False else "Статус неизвестен")
+        connection = "Connected" if snap.get("wifi_enabled") else ("Off" if snap.get("wifi_enabled") is False else "Status unknown")
         wifi = snap.get("wifi") or {}
-        ssid = self._first(wifi, ("ssid", "SSID", "networkName", "wifiSsid"), "Сведения о сети не предоставлены")
+        ssid = self._first(wifi, ("ssid", "SSID", "networkName", "wifiSsid"), "Network details not provided")
         if str(ssid).strip().lower() in ("<unknown ssid>", "unknown ssid", "0x"):
-            ssid = "SSID скрыт системой"
+            ssid = "SSID hidden by system"
         return ui.column([
-            self._section_title(ui, "Состояние устройства", "Основные показатели телефона"),
+            self._section_title(ui, "Device status", "Key phone indicators"),
             cards,
             ui.card([
-                ui.row([ui.icon("wifi", size=22, tint="#70E1B5"), ui.text("СЕТЬ", "labelLarge", color="secondary")], spacing=8),
+                ui.row([ui.icon("wifi", size=22, tint="#70E1B5"), ui.text("NETWORK", "labelLarge", color="secondary")], spacing=8),
                 ui.text(connection, "titleMedium"),
                 ui.text(self._safe_str(ssid), "bodyMedium", max_lines=2),
             ], padding=16),
             ui.row([
-                ui.text("Обновлено: " + str(snap.get("time", "—")), "bodyMedium", color="secondary"),
+                ui.text("Updated: " + str(snap.get("time", "—")), "bodyMedium", color="secondary"),
                 ui.spacer(),
-                ui.button("Обновить", on_click=self._refresh, style="tonal"),
+                ui.button("Refresh", on_click=self._refresh, style="tonal"),
             ], spacing=8),
         ], spacing=14, padding=16)
 
@@ -409,41 +409,41 @@ class DroidMonitor(BasePlugin):
             level = level * 100
         charging = self._first(battery, ("charging", "isCharging"), False)
         status = self._first(battery, ("status", "batteryStatus"))
-        status_names = {1: "Неизвестно", 2: "Заряжается", 3: "Разряжается", 4: "Не заряжается", 5: "Заряжена"}
+        status_names = {1: "Unknown", 2: "Charging", 3: "Discharging", 4: "Not charging", 5: "Charged"}
         try:
             status = int(status) if status is not None else None
         except Exception:
             pass
-        battery_sub = "Заряжается" if charging is True or charging == 1 else status_names.get(status, "Состояние неизвестно")
+        battery_sub = "Charging" if charging is True or charging == 1 else status_names.get(status, "State unknown")
         rows = []
-        rows.append(ui.settings_row("Процессор", "Загрузка: " + (("%.0f%%" % snap["cpu"]) if isinstance(snap.get("cpu"), (int, float)) else "нет данных"), icon="memory"))
-        rows.append(ui.settings_row("Оперативная память", self._format_bytes(mem.get("used", 0)) + " из " + self._format_bytes(mem.get("total", 0)), icon="developer_board"))
-        rows.append(ui.settings_row("Доступно RAM", self._format_bytes(mem.get("available", 0)), icon="memory_alt"))
-        rows.append(ui.settings_row("Накопитель", self._format_bytes(storage.get("used", 0)) + " занято / " + self._format_bytes(storage.get("total", 0)), icon="storage"))
-        rows.append(ui.settings_row("Путь накопителя", self._safe_str(snap.get("storage_path")), icon="folder"))
-        model = self._first(device, ("model", "deviceModel", "product", "device"), platform.machine() or "Модель не определена")
-        manufacturer = self._first(device, ("manufacturer", "brand", "vendor"), "Производитель не определён")
-        android_ver = self._first(device, ("androidVersion", "release", "version", "sdk"), "Версия Android не определена")
+        rows.append(ui.settings_row("CPU", "Load: " + (("%.0f%%" % snap["cpu"]) if isinstance(snap.get("cpu"), (int, float)) else "no data"), icon="memory"))
+        rows.append(ui.settings_row("RAM", self._format_bytes(mem.get("used", 0)) + " of " + self._format_bytes(mem.get("total", 0)), icon="developer_board"))
+        rows.append(ui.settings_row("RAM available", self._format_bytes(mem.get("available", 0)), icon="memory_alt"))
+        rows.append(ui.settings_row("Storage", self._format_bytes(storage.get("used", 0)) + " used / " + self._format_bytes(storage.get("total", 0)), icon="storage"))
+        rows.append(ui.settings_row("Storage path", self._safe_str(snap.get("storage_path")), icon="folder"))
+        model = self._first(device, ("model", "deviceModel", "product", "device"), platform.machine() or "Model unknown")
+        manufacturer = self._first(device, ("manufacturer", "brand", "vendor"), "Manufacturer unknown")
+        android_ver = self._first(device, ("androidVersion", "release", "version", "sdk"), "Android version unknown")
         rows.extend([
             ui.divider(),
-            ui.settings_row("Устройство", self._safe_str(model), icon="smartphone"),
-            ui.settings_row("Производитель", self._safe_str(manufacturer), icon="devices"),
+            ui.settings_row("Device", self._safe_str(model), icon="smartphone"),
+            ui.settings_row("Manufacturer", self._safe_str(manufacturer), icon="devices"),
             ui.settings_row("Android", self._safe_str(android_ver), icon="settings"),
-            ui.settings_row("Батарея", (self._safe_str(level) + "% · " + battery_sub) if isinstance(level, (int, float)) else "Нет данных", icon="battery_full"),
+            ui.settings_row("Battery", (self._safe_str(level) + "% · " + battery_sub) if isinstance(level, (int, float)) else "No data", icon="battery_full"),
         ])
         return ui.column([
-            self._section_title(ui, "Система", "Ресурсы и сведения об устройстве"),
+            self._section_title(ui, "System", "Resources and device details"),
             ui.card(rows, padding=14),
-            ui.button("Обновить показатели", on_click=self._refresh, style="filled", fill_max_width=True),
+            ui.button("Refresh metrics", on_click=self._refresh, style="filled", fill_max_width=True),
         ], spacing=14, padding=16)
 
     @staticmethod
     def _format_ssid(value):
         if value is None or value == "":
-            return "Недоступно"
+            return "Unavailable"
         text = str(value).strip().strip('"')
         if text.lower() in ("<unknown ssid>", "unknown ssid", "0x", "null"):
-            return "SSID скрыт системой"
+            return "SSID hidden by system"
         return text
 
     @staticmethod
@@ -456,7 +456,7 @@ class DroidMonitor(BasePlugin):
                 return "%d/4" % number
             return str(number)
         except Exception:
-            return "Недоступно"
+            return "Unavailable"
 
     @staticmethod
     def _format_frequency(value):
@@ -468,28 +468,28 @@ class DroidMonitor(BasePlugin):
                 return "%d MHz" % number
         except Exception:
             pass
-        return "Недоступно"
+        return "Unavailable"
 
     def _safe_json_summary(self, value):
         if not isinstance(value, dict) or not value:
-            return "Нет дополнительных данных"
+            return "No additional data"
         parts = []
         for key, item in list(value.items())[:6]:
             if isinstance(item, (dict, list)):
                 continue
             parts.append("%s: %s" % (str(key)[:24], str(item)[:60]))
-        return " · ".join(parts) if parts else "Данные получены"
+        return " · ".join(parts) if parts else "Data received"
 
     def _logs_screen(self, ui):
         lines = list(self._logs)
-        log_text = "\n".join(lines) if lines else "Лог пока пуст. Нажми «Обновить», чтобы записать события."
+        log_text = "\n".join(lines) if lines else "Log is empty. Tap 'Refresh' to record events."
         children = [
-            self._section_title(ui, "Журнал событий", "Последние события · до 160 записей"),
-            ui.text("Файл: droidmonitor.log (если хранилище плагина доступно)", "bodySmall", color="secondary"),
+            self._section_title(ui, "Event log", "Recent events · up to 160 entries"),
+            ui.text("File: droidmonitor.log (if plugin storage is available)", "bodySmall", color="secondary"),
             ui.log_panel(log_text, max_height=420),
             ui.row([
-                ui.button("Обновить", on_click=self._refresh, style="filled"),
-                ui.button("Очистить список", on_click=self._clear_logs, style="outlined"),
+                ui.button("Refresh", on_click=self._refresh, style="filled"),
+                ui.button("Clear list", on_click=self._clear_logs, style="outlined"),
             ], spacing=8),
         ]
         return ui.column(children, padding=16, spacing=12)
@@ -500,23 +500,23 @@ class DroidMonitor(BasePlugin):
             if isinstance(source, dict):
                 wifi.update(source)
         net = snap.get("network") or {}
-        wifi_state = "Wi-Fi включён" if snap.get("wifi_enabled") is True else ("Wi-Fi выключен" if snap.get("wifi_enabled") is False else "Состояние неизвестно")
+        wifi_state = "Wi-Fi on" if snap.get("wifi_enabled") is True else ("Wi-Fi off" if snap.get("wifi_enabled") is False else "State unknown")
         rows = [
-            ui.settings_row("Состояние Wi-Fi", wifi_state, icon="wifi"),
-            ui.settings_row("Имя сети (SSID)", self._format_ssid(self._first(wifi, ("ssid", "SSID", "networkName", "wifiSsid", "wifi_ssid"))), icon="router"),
-            ui.settings_row("Уровень сигнала", self._format_signal(self._first(wifi, ("rssi", "RSSI", "signalLevel", "signalStrength", "rssiDbm"))), icon="signal_cellular_alt"),
-            ui.settings_row("Частота", self._format_frequency(self._first(wifi, ("frequency", "freq", "frequencyMhz", "frequency_mhz"))), icon="graphic_eq"),
-            ui.settings_row("IP-адрес", self._safe_str(self._first(wifi, ("ipAddress", "ip", "address", "ip_address", "ipAddressV4"))), icon="lan"),
+            ui.settings_row("Wi-Fi state", wifi_state, icon="wifi"),
+            ui.settings_row("Network name (SSID)", self._format_ssid(self._first(wifi, ("ssid", "SSID", "networkName", "wifiSsid", "wifi_ssid"))), icon="router"),
+            ui.settings_row("Signal level", self._format_signal(self._first(wifi, ("rssi", "RSSI", "signalLevel", "signalStrength", "rssiDbm"))), icon="signal_cellular_alt"),
+            ui.settings_row("Frequency", self._format_frequency(self._first(wifi, ("frequency", "freq", "frequencyMhz", "frequency_mhz"))), icon="graphic_eq"),
+            ui.settings_row("IP address", self._safe_str(self._first(wifi, ("ipAddress", "ip", "address", "ip_address", "ipAddressV4"))), icon="lan"),
             ui.divider(),
-            ui.settings_row("Шлюз", self._safe_str(self._first(wifi, ("gateway", "ipGateway", "gatewayAddress"))), icon="router"),
+            ui.settings_row("Gateway", self._safe_str(self._first(wifi, ("gateway", "ipGateway", "gatewayAddress"))), icon="router"),
             ui.settings_row("DNS", self._safe_str(self._first(wifi, ("dns1", "dns", "dnsAddress"))), icon="dns"),
-            ui.settings_row("Подробности соединения", self._safe_json_summary(net), icon="network_check"),
+            ui.settings_row("Connection details", self._safe_json_summary(net), icon="network_check"),
         ]
         return ui.column([
-            self._section_title(ui, "Сеть", "Только чтение — без изменения настроек"),
+            self._section_title(ui, "Network", "Read-only — no settings changed"),
             ui.card(rows, padding=14),
-            ui.text("Некоторые поля Android скрывает без системных разрешений или при отключённом Wi-Fi.", "bodyMedium", color="secondary"),
-            ui.button("Обновить сеть", on_click=self._refresh, style="tonal", fill_max_width=True),
+            ui.text("Android hides some fields without system permissions or when Wi-Fi is off.", "bodyMedium", color="secondary"),
+            ui.button("Refresh network", on_click=self._refresh, style="tonal", fill_max_width=True),
         ], spacing=14, padding=16)
 
     def screen_main(self, ui, api, state):
@@ -524,7 +524,7 @@ class DroidMonitor(BasePlugin):
             if not self._ready:
                 self._ready = True
             snap = self._collect()
-            tabs = ui.tabs(["Обзор", "Система", "Сеть", "Логи"], selected=self._tab, on_select=self._set_tab)
+            tabs = ui.tabs(["Overview", "System", "Network", "Logs"], selected=self._tab, on_select=self._set_tab)
             if self._tab == 1:
                 body = self._system(ui, snap)
             elif self._tab == 2:
@@ -541,7 +541,7 @@ class DroidMonitor(BasePlugin):
                         ui.text("SYSTEM TELEMETRY  ·  ANDROID", "labelMedium", color="secondary"),
                     ], spacing=2),
                 ], spacing=12),
-                ui.text("Панель состояния устройства", "bodyMedium", color="secondary"),
+                ui.text("Device status panel", "bodyMedium", color="secondary"),
                 tabs,
             ], padding=16, spacing=10)
             # Lazy vertical root keeps the content at the top and scrollable;
@@ -551,7 +551,7 @@ class DroidMonitor(BasePlugin):
             return ui.scaffold(title="DroidMonitor", content=content, actions=actions)
         except Exception as exc:
             try:
-                self._log("ERROR", "Ошибка построения экрана: " + str(exc)[:300])
+                self._log("ERROR", "Screen build error: " + str(exc)[:300])
             except Exception:
                 pass
             try:
@@ -562,9 +562,9 @@ class DroidMonitor(BasePlugin):
                 return ui.scaffold(
                     title="DroidMonitor",
                     content=ui.column([
-                        ui.text("Не удалось построить панель", "titleLarge"),
+                        ui.text("Failed to build the panel", "titleLarge"),
                         ui.text(str(exc)[:300], "bodyMedium", color="error"),
-                        ui.button("Повторить", on_click=self._refresh, style="filled"),
+                        ui.button("Retry", on_click=self._refresh, style="filled"),
                     ], padding=16, spacing=12),
                 )
             except Exception:

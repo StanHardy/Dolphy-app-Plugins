@@ -3,7 +3,7 @@ __name__ = "Wi-Fi info"
 __version__ = "1.0.0"
 __author__ = "h3rovnik"
 __icon__ = "rounded:wifi"
-__description__ = "Сканирует доступные Wi-Fi сети и показывает их параметры SSID, BSSID, RSSI, частота, канал, тип шифрования, ширину канала, производителя, имя оператора, центральную частоту, timestamp и дополнительные возможности сети."
+__description__ = "Scans available Wi-Fi networks and shows their parameters: SSID, BSSID, RSSI, frequency, channel, encryption type, channel width, vendor, operator name, center frequency, timestamp and additional network capabilities."
 __permissions__ = ["files", "shell", "android.permission.ACCESS_FINE_LOCATION", "android.permission.ACCESS_COARSE_LOCATION", "android.permission.NEARBY_WIFI_DEVICES"]
 
 import json
@@ -1313,11 +1313,11 @@ def parse_capabilities(cap_str):
 
 def signal_quality_text(rssi, lang):
     if rssi >= -50:
-        return "[Excellent]" if lang == "en" else "[Отличный]"
+        return "[Excellent]" if lang == "en" else "[Excellent]"
     elif rssi >= -70:
-        return "[Good]" if lang == "en" else "[Хороший]"
+        return "[Good]" if lang == "en" else "[Good]"
     else:
-        return "[Weak]" if lang == "en" else "[Слабый]"
+        return "[Weak]" if lang == "en" else "[Weak]"
 
 def get_band(freq):
     if freq < 2500:
@@ -1341,7 +1341,7 @@ class WifiInfo(BasePlugin):
 
     def on_plugin_load(self):
         self.lang = self.get_setting("lang", "ru")
-        self.add_module("Wi-Fi info", "Сканирует доступные Wi-Fi сети и показывает их параметры SSID, BSSID, RSSI, частота, канал, тип шифрования, ширину канала, производителя, имя оператора, центральную частоту, timestamp и дополнительные возможности сети.", "wifi", "main")
+        self.add_module("Wi-Fi info", "Scans available Wi-Fi networks and shows their parameters: SSID, BSSID, RSSI, frequency, channel, encryption type, channel width, vendor, operator name, center frequency, timestamp and additional network capabilities.", "wifi", "main")
         self.check_permissions()
         self.start_animation()
 
@@ -1461,11 +1461,11 @@ class WifiInfo(BasePlugin):
     def screen_main(self, ui, api, state):
         if self.scanning:
             dots = "." * self.dot_counter
-            status_text = f"Scanning{dots}" if self.lang == "en" else f"Сканирование{dots}"
+            status_text = f"Scanning{dots}" if self.lang == "en" else f"Scanning{dots}"
         elif self.networks:
-            status_text = "found" if self.lang == "en" else "найдено"
+            status_text = "found" if self.lang == "en" else "found"
         else:
-            status_text = "Press Refresh to scan" if self.lang == "en" else "Нажмите Обновить для сканирования"
+            status_text = "Press Refresh to scan" if self.lang == "en" else "Press Refresh to scan"
 
         anim_texts = [
             "", ">", ">-", ">-<",
@@ -1478,7 +1478,7 @@ class WifiInfo(BasePlugin):
         children = []
         children.append(ui.text(f"Status {status_text}", "headlineSmall", color="#FFFFFF"))
         children.append(ui.text(anim_text, "bodyMedium", color="#AAAAAA"))
-        networks_label = "Number of networks" if self.lang == "en" else "Количество сетей"
+        networks_label = "Number of networks" if self.lang == "en" else "Number of networks"
         children.append(ui.text(f"{networks_label} {len(self.networks)}", "bodyMedium", color="#FFFFFF"))
 
         if self.scan_error and not self.networks:
@@ -1491,7 +1491,7 @@ class WifiInfo(BasePlugin):
         ], spacing=8, fill_max_width=True)
         children.append(refresh_row)
 
-        available_label = "Available networks" if self.lang == "en" else "Доступные сети"
+        available_label = "Available networks" if self.lang == "en" else "Available networks"
         children.append(ui.text(available_label, "titleMedium", color="#FFFFFF"))
 
         for net in self.networks:

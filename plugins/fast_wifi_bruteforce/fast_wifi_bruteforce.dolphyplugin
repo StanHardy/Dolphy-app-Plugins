@@ -2,7 +2,7 @@ __id__ = "fast_wifi_bruteforce"
 __name__ = "Fast WiFi Bruteforce"
 __version__ = "10.8.1"
 __author__ = "Security Researcher"
-__description__ = "Сканирование Wi-Fi и проверка WPA2-PSK"
+__description__ = "Wi-Fi scanning and WPA2-PSK testing"
 __icon__ = "rounded:wifi_password"
 __permissions__ = ["files", "shizuku"]
 
@@ -72,9 +72,9 @@ class FastWiFiBruteforce(BasePlugin):
         "psk": "WPA2-Personal",
         "sae": "WPA3-Personal",
         "eap": "Enterprise",
-        "open": "Открытая сеть",
-        "other": "Другой тип защиты",
-        "unknown": "Защита не определена",
+        "open": "Open network",
+        "other": "Other security type",
+        "unknown": "Security not determined",
         "wep": "WEP",
     }
 
@@ -194,21 +194,21 @@ class FastWiFiBruteforce(BasePlugin):
         "sonya", "vera", "sveta", "svetlana",
     ]
     RU_NAMES_CYRILLIC = [
-        "саша", "саня", "маша", "миша", "дима", "вова", "коля",
-        "катя", "аня", "настя", "лена", "таня", "оля", "ваня",
-        "петя", "юра", "боря", "андрей", "максим", "никита",
-        "сергей", "артём", "денис", "егор", "илья", "кирилл",
-        "роман", "руслан", "стас", "степан", "вадим", "валера",
-        "виктор", "витя", "яна", "алёна", "даша", "галина",
-        "галя", "ксения", "лариса", "лера", "лида", "люба",
-        "любовь", "марина", "надежда", "надя", "нина", "оксана",
-        "полина", "соня", "вера", "света", "светлана",
+        "sasha", "sanya", "masha", "misha", "dima", "vova", "kolya",
+        "katya", "anya", "nastya", "lena", "tanya", "olya", "vanya",
+        "petya", "yura", "borya", "andrey", "maksim", "nikita",
+        "sergey", "artem", "denis", "egor", "ilya", "kirill",
+        "roman", "ruslan", "stas", "stepan", "vadim", "valera",
+        "viktor", "vitya", "yana", "alena", "dasha", "galina",
+        "galya", "ksenia", "larisa", "lera", "lida", "lyuba",
+        "lyubov", "marina", "nadezhda", "nadya", "nina", "oksana",
+        "polina", "sonya", "vera", "sveta", "svetlana",
     ]
     RU_WORDS = [
-        "йцукен", "пароль", "рандеву", "привет", "любовь", "люблю",
-        "наташа", "максим", "марина", "андрей", "кристина", "никита",
-        "солнышко", "зайка", "котик", "пупсик", "любимый", "любимая",
-        "радость", "счастье", "удача", "мечта", "надежда", "вера",
+        "qwerty", "password", "rendezvous", "hello", "love", "loveyou",
+        "natasha", "maksim", "marina", "andrey", "kristina", "nikita",
+        "sunny", "bunny", "kitty", "cutie", "beloved", "darling",
+        "joy", "happiness", "luck", "dream", "hope", "faith",
     ]
     LEET_MAP = {
         "a": ["a", "4", "@"], "e": ["e", "3"], "i": ["i", "1", "!"],
@@ -278,7 +278,7 @@ class FastWiFiBruteforce(BasePlugin):
         self._eta = 0.0
         self._found_password = ""
         self._reveal = False
-        self._outcome = "Готов к работе"
+        self._outcome = "Ready"
 
         self._finished = False
         self._last_connect_reply = ""
@@ -322,7 +322,7 @@ class FastWiFiBruteforce(BasePlugin):
 
         self._show_help = False
 
-    # ═══════════ УТИЛИТЫ ═══════════
+    # ═══════════ UTILITIES ═══════════
 
     @staticmethod
     def _text(value):
@@ -338,16 +338,16 @@ class FastWiFiBruteforce(BasePlugin):
     def _shq(value):
         value = str(value)
         if "\x00" in value:
-            raise ValueError("NUL недопустим в shell-аргументе")
+            raise ValueError("NUL is not allowed in a shell argument")
         return "'" + value.replace("'", "'\\''") + "'"
 
     @staticmethod
     def _path(value):
         path = os.path.normpath(str(value or "/sdcard"))
         if path != "/sdcard" and not path.startswith("/sdcard/"):
-            raise ValueError("Разрешены только пути внутри /sdcard")
+            raise ValueError("Only paths inside /sdcard are allowed")
         if any(c in path for c in ("\x00", "\r", "\n")):
-            raise ValueError("Недопустимое имя файла")
+            raise ValueError("Invalid file name")
         return path
 
     @staticmethod
@@ -387,10 +387,10 @@ class FastWiFiBruteforce(BasePlugin):
         if seconds <= 0:
             return "—"
         if seconds < 60:
-            return "{} с".format(seconds)
+            return "{} s".format(seconds)
         if seconds < 3600:
-            return "{} мин {} с".format(seconds // 60, seconds % 60)
-        return "{} ч {} мин".format(seconds // 3600, (seconds % 3600) // 60)
+            return "{} min {} s".format(seconds // 60, seconds % 60)
+        return "{} h {} min".format(seconds // 3600, (seconds % 3600) // 60)
 
     @staticmethod
     def _mask_last4(password):
@@ -454,7 +454,7 @@ class FastWiFiBruteforce(BasePlugin):
         if vendor:
             for pw in self.VENDOR_DEFAULTS.get(vendor, []):
                 add(pw)
-            self._log("info", "Вендор по OUI: " + vendor)
+            self._log("info", "Vendor by OUI: " + vendor)
 
         clean = str(bssid).replace(":", "").replace("-", "").lower()
         if len(clean) >= 8:
@@ -817,7 +817,7 @@ class FastWiFiBruteforce(BasePlugin):
                 net_id, "582e706c616365686f6c646572"))
             self._wpa_cli("disable_network {}".format(net_id))
             self._log("success",
-                      "wpa_cli: сеть подготовлена (id={})".format(net_id))
+                      "wpa_cli: network prepared (id={})".format(net_id))
             return True
         except Exception as exc:
             self._log("warning", "setup wpa_cli: " + str(exc)[:150])
@@ -862,19 +862,19 @@ class FastWiFiBruteforce(BasePlugin):
 
     def _capture_pmkid(self):
         if not (self._root_available and self._wpa_cli_available):
-            self._toast("Нужен root и wpa_cli")
+            self._toast("Root and wpa_cli required")
             return
         if self._busy:
-            self._toast("Дождитесь завершения")
+            self._toast("Wait for the operation to finish")
             return
 
         bssid = self._network.get("bssid", "")
         if not bssid:
-            self._toast("Сначала выберите сеть")
+            self._toast("Select a network first")
             return
 
-        self._log("info", "=== Захват PMKID для " + bssid + " ===")
-        self._outcome = "Захват PMKID…"
+        self._log("info", "=== PMKID capture for " + bssid + " ===")
+        self._outcome = "Capturing PMKID…"
 
         def job():
             try:
@@ -902,10 +902,10 @@ class FastWiFiBruteforce(BasePlugin):
 
                 if not found_pmkid:
                     self._log("warning",
-                              "PMKID не найден в PMKSA cache. "
-                              "Сначала подключитесь к сети.")
-                    self._outcome = "PMKID не найден"
-                    self._toast("PMKID не найден")
+                              "PMKID not found in the PMKSA cache. "
+                              "Connect to the network first.")
+                    self._outcome = "PMKID not found"
+                    self._toast("PMKID not found")
                     return
 
                 clean_pmkid = found_pmkid.replace(":", "").lower()
@@ -921,12 +921,12 @@ class FastWiFiBruteforce(BasePlugin):
                 self._pmkid_hex = hash_line
 
                 self._log("success",
-                          "PMKID захвачен: " + clean_pmkid[:16] + "…")
-                self._outcome = "PMKID готов к hashcat"
-                self._toast("PMKID захвачен")
+                          "PMKID captured: " + clean_pmkid[:16] + "…")
+                self._outcome = "PMKID ready for hashcat"
+                self._toast("PMKID captured")
             except Exception as exc:
                 self._log("error", "capture pmkid: " + str(exc)[:200])
-                self._outcome = "PMKID ошибка"
+                self._outcome = "PMKID error"
             finally:
                 self._refresh(force=True)
 
@@ -934,30 +934,30 @@ class FastWiFiBruteforce(BasePlugin):
 
     def _crack_with_hashcat(self):
         if not self._pmkid_hex:
-            self._toast("Сначала захватите PMKID")
+            self._toast("Capture the PMKID first")
             return
         if not self._root_available:
-            self._toast("Нужен root")
+            self._toast("Root required")
             return
         if not self._hashcat_path:
-            self._toast("hashcat не найден")
+            self._toast("hashcat not found")
             return
         if not self._enabled_dicts:
-            self._toast("Нужен включённый словарь")
+            self._toast("An enabled dictionary is required")
             return
         if self._busy:
-            self._toast("Дождитесь завершения")
+            self._toast("Wait for the operation to finish")
             return
 
         self._log("info", "=== hashcat PMKID ===")
-        self._outcome = "Офлайн-перебор…"
+        self._outcome = "Offline cracking…"
 
         def job():
             try:
                 hash_file = "/sdcard/Download/_pmkid.hc22000"
                 with open(hash_file, "w") as f:
                     f.write(self._pmkid_hex + "\n")
-                self._log("info", "Хеш: " + hash_file)
+                self._log("info", "Hash: " + hash_file)
 
                 wordlist = self._enabled_dicts[0]
                 potfile = "/sdcard/Download/_pmkid.potfile"
@@ -997,17 +997,17 @@ class FastWiFiBruteforce(BasePlugin):
                 if found:
                     self._found_password = found
                     self._reveal = True
-                    self._outcome = "✅ hashcat: пароль найден"
-                    self._log("success", "hashcat: найдено")
+                    self._outcome = "✅ hashcat: password found"
+                    self._log("success", "hashcat: found")
                     self._notify_found(
                         self._network.get("ssid", ""), found)
                 else:
-                    self._outcome = "❌ hashcat: не найден"
-                    self._log("warning", "hashcat: пустой результат")
+                    self._outcome = "❌ hashcat: not found"
+                    self._log("warning", "hashcat: empty result")
 
             except Exception as exc:
                 self._log("error", "hashcat: " + str(exc)[:200])
-                self._outcome = "hashcat ошибка"
+                self._outcome = "hashcat error"
             finally:
                 self._refresh(force=True)
 
@@ -1032,7 +1032,7 @@ class FastWiFiBruteforce(BasePlugin):
             self.root("ip link set {} address {}".format(
                 self._wpa_iface, mac))
             self.root("ip link set {} up".format(self._wpa_iface))
-            self._log("info", "MAC изменён: " + mac)
+            self._log("info", "MAC changed: " + mac)
             return True
         except Exception as exc:
             self._log("warning", "spoof mac: " + str(exc)[:150])
@@ -1060,7 +1060,7 @@ class FastWiFiBruteforce(BasePlugin):
                 if parsed:
                     out.extend(parsed)
                     self._log("info",
-                              "Сохранённые Wi-Fi: {} из {}".format(
+                              "Saved Wi-Fi networks: {} from {}".format(
                                   len(parsed), path))
                     break
             except Exception as exc:
@@ -1077,7 +1077,7 @@ class FastWiFiBruteforce(BasePlugin):
 
         def decode_b64(s):
             try:
-                # Если есть "=" в конце или длинная строка — похоже на base64
+                # If there is an "=" at the end or the string is long, it looks like base64
                 if len(s) > 3 and (s.endswith("=") or len(s) % 4 == 0):
                     return base64.b64decode(s).decode("utf-8", errors="replace")
             except Exception:
@@ -1135,10 +1135,10 @@ class FastWiFiBruteforce(BasePlugin):
             with self._saved_wifi_lock:
                 self._saved_wifi = items
             self._show_saved_psk = {}
-            self._toast("Сохранённых Wi-Fi: {}".format(len(items)))
+            self._toast("Saved Wi-Fi networks: {}".format(len(items)))
         except Exception as exc:
             self._log("error", "refresh saved: " + str(exc)[:200])
-            self._toast("Ошибка чтения")
+            self._toast("Read error")
 
     def _toggle_saved_psk(self, ssid):
         if ssid in self._show_saved_psk:
@@ -1147,7 +1147,7 @@ class FastWiFiBruteforce(BasePlugin):
             self._show_saved_psk[ssid] = True
         self._refresh(force=True)
 
-    # ═══════════ ЛОГИ ═══════════
+    # ═══════════ LOGS ═══════════
 
     def _log(self, level, message):
         text = self._text(message).replace("\x00", "")[:700]
@@ -1178,7 +1178,7 @@ class FastWiFiBruteforce(BasePlugin):
             if not self._refresh_warning:
                 self._refresh_warning = True
                 self._log("warning",
-                          "Автообновление UI недоступно. Нажмите «Обновить».")
+                          "UI auto-refresh unavailable. Press \"Refresh\".")
 
     def _bind(self, callback, *bound_args):
         def invoke(*args, **kwargs):
@@ -1188,7 +1188,7 @@ class FastWiFiBruteforce(BasePlugin):
                 return callback(*bound_args)
             except Exception as exc:
                 self._log("error", str(exc)[:240])
-                self._toast("Ошибка. Подробности в журнале.")
+                self._toast("Error. See the log for details.")
             finally:
                 self._refresh(force=True)
             return None
@@ -1232,7 +1232,7 @@ class FastWiFiBruteforce(BasePlugin):
             })
         except Exception as exc:
             self._log("warning",
-                      "Не удалось сохранить настройки: " + str(exc)[:180])
+                      "Failed to save settings: " + str(exc)[:180])
 
     # ═══════════ CHECKPOINT ═══════════
 
@@ -1299,17 +1299,17 @@ class FastWiFiBruteforce(BasePlugin):
             try:
                 delta = max(0, time.time() - ts)
                 if delta < 60:
-                    when = "{} с назад".format(int(delta))
+                    when = "{} s ago".format(int(delta))
                 elif delta < 3600:
-                    when = "{} мин назад".format(int(delta // 60))
+                    when = "{} min ago".format(int(delta // 60))
                 elif delta < 86400:
-                    when = "{} ч назад".format(int(delta // 3600))
+                    when = "{} h ago".format(int(delta // 3600))
                 else:
-                    when = "{} дн назад".format(int(delta // 86400))
+                    when = "{} d ago".format(int(delta // 86400))
             except Exception:
                 pass
             if total:
-                return "💾 {} · #{} из {} · {}".format(ssid, checked, total, when)
+                return "💾 {} · #{} of {} · {}".format(ssid, checked, total, when)
             return "💾 {} · #{} · {}".format(ssid, checked, when)
         except Exception:
             return ""
@@ -1320,8 +1320,8 @@ class FastWiFiBruteforce(BasePlugin):
             self._resume_from = 0
         except Exception:
             pass
-        self._toast("Чекпоинт сброшен")
-        self._log("info", "Чекпоинт сброшен пользователем")
+        self._toast("Checkpoint reset")
+        self._log("info", "Checkpoint reset by user")
 
     # ═══════════ NOTIFY ═══════════
 
@@ -1331,8 +1331,8 @@ class FastWiFiBruteforce(BasePlugin):
         try:
             android = self.api.getAndroid()
             android.notifyShow(
-                "WiFi Audit: пароль найден",
-                "Сеть: {}. Откройте плагин для просмотра.".format(ssid))
+                "WiFi Audit: password found",
+                "Network: {}. Open the plugin to view.".format(ssid))
         except Exception as exc:
             self._log("warning", "notify: " + str(exc)[:120])
         try:
@@ -1453,7 +1453,7 @@ class FastWiFiBruteforce(BasePlugin):
         if self._init_error:
             raise RuntimeError(self._init_error)
         if self._thread is not None and self._thread.is_alive():
-            raise RuntimeError("Предыдущая операция ещё завершается")
+            raise RuntimeError("The previous operation is still finishing")
 
         self._self_test_parser()
 
@@ -1579,7 +1579,7 @@ class FastWiFiBruteforce(BasePlugin):
 
         self.add_module(
             title="Fast WiFi Bruteforce",
-            description="Сети · словари · разрешённый аудит",
+            description="Networks · dictionaries · authorized auditing",
             icon="rounded:wifi_password",
             screen="main",
             section="PLUGINS"
@@ -1598,12 +1598,12 @@ class FastWiFiBruteforce(BasePlugin):
                 self._find_wpa_cli()
                 self._find_hashcat()
                 self._detect_wpa_ctrl()
-                self._log("success", "Root доступен")
-                self._log("info", "wpa_cli: " + (self._wpa_cli_path or "нет"))
-                self._log("info", "hashcat: " + (self._hashcat_path or "нет"))
-                self._log("info", "wpa_ctrl: " + (self._wpa_ctrl_dir or "нет"))
+                self._log("success", "Root available")
+                self._log("info", "wpa_cli: " + (self._wpa_cli_path or "none"))
+                self._log("info", "hashcat: " + (self._hashcat_path or "none"))
+                self._log("info", "wpa_ctrl: " + (self._wpa_ctrl_dir or "none"))
             else:
-                self._log("info", "Root не обнаружен")
+                self._log("info", "Root not detected")
         except Exception as exc:
             self._log("warning", "root detect: " + str(exc)[:150])
 
@@ -1612,25 +1612,25 @@ class FastWiFiBruteforce(BasePlugin):
         except Exception:
             pass
 
-        self._log("info", "Fast WiFi Bruteforce {} загружен".format(__version__))
+        self._log("info", "Fast WiFi Bruteforce {} loaded".format(__version__))
         self._log_mode_summary()
         self._log("warning",
-                  "Проверяйте только собственные сети "
-                  "или сети с разрешения владельца.")
+                  "Test only your own networks "
+                  "or networks with the owner's permission.")
 
     def _log_mode_summary(self):
         try:
             if self._root_available and self._wpa_cli_available:
                 self._log("success",
-                          "Режим: ROOT · wpa_cli + MAC + PMKID + saved")
+                          "Mode: ROOT · wpa_cli + MAC + PMKID + saved")
             elif self._root_available:
-                self._log("success", "Режим: ROOT (без wpa_cli)")
+                self._log("success", "Mode: ROOT (without wpa_cli)")
             elif self._shell_mode == "shizuku":
                 self._log("success",
-                          "Режим: SHIZUKU · UID " + (self._uid or "?"))
+                          "Mode: SHIZUKU · UID " + (self._uid or "?"))
             else:
                 self._log("warning",
-                          "Режим: только просмотр (нет root/Shizuku)")
+                          "Mode: view only (no root/Shizuku)")
         except Exception:
             pass
 
@@ -1691,7 +1691,7 @@ class FastWiFiBruteforce(BasePlugin):
         if not self._ready:
             return
         if self._busy or (self._thread is not None and self._thread.is_alive()):
-            self._toast("Дождитесь завершения текущей операции")
+            self._toast("Wait for the current operation to finish")
             return
 
         self._stop.clear()
@@ -1705,7 +1705,7 @@ class FastWiFiBruteforce(BasePlugin):
                     job()
             except Exception as exc:
                 if not self._stop.is_set():
-                    self._outcome = "Ошибка: " + str(exc)[:160]
+                    self._outcome = "Error: " + str(exc)[:160]
                     self._log("error", "worker: " + str(exc)[:240])
             finally:
                 self._running = False
@@ -1727,27 +1727,27 @@ class FastWiFiBruteforce(BasePlugin):
     def _shell(self, command, sensitive=False, allow_failure=False,
                hide_command_only=False):
         if not self._ready or self._stop.is_set():
-            raise RuntimeError("Операция отменена")
+            raise RuntimeError("Operation cancelled")
         if self._shell_mode == "none":
-            raise RuntimeError("Нет Shizuku или root — shell недоступен")
+            raise RuntimeError("No Shizuku or root — shell unavailable")
 
         hide_cmd = sensitive or hide_command_only
         self._log("info",
-                  "$ [команда скрыта]" if hide_cmd else "$ " + command)
+                  "$ [command hidden]" if hide_cmd else "$ " + command)
 
         try:
             with self._shell_lock:
                 if self._stop.is_set():
-                    raise RuntimeError("Операция отменена")
+                    raise RuntimeError("Operation cancelled")
                 if self._shell_mode == "shizuku":
                     result = self.shizuku(command)
                 elif self._shell_mode == "root":
                     result = self.root(command)
                 else:
-                    raise RuntimeError("Нет доступного shell")
+                    raise RuntimeError("No shell available")
 
             if result is None:
-                raise RuntimeError("shell вернул None")
+                raise RuntimeError("shell returned None")
 
             if isinstance(result, bytes):
                 result = self._text(result)
@@ -1782,20 +1782,20 @@ class FastWiFiBruteforce(BasePlugin):
                     except (ValueError, TypeError):
                         pass
                 if failed and not allow_failure:
-                    raise RuntimeError((stderr or stdout or "Ошибка shell")[:240])
+                    raise RuntimeError((stderr or stdout or "shell error")[:240])
             else:
                 stdout = self._text(result)
 
             combined = stdout + "\n" + stderr
             if self.SHELL_HARD_ERROR.search(combined) and not allow_failure:
-                raise RuntimeError((stderr or stdout or "Ошибка shell")[:240])
+                raise RuntimeError((stderr or stdout or "shell error")[:240])
 
             preview = (stdout or stderr).strip()
             if preview:
                 self._log("info",
-                          "Ответ: " + preview.replace("\n", " ⏎ ")[:300])
+                          "Output: " + preview.replace("\n", " ⏎ ")[:300])
             else:
-                self._log("info", "Пустой ответ")
+                self._log("info", "Empty output")
 
             return stdout
 
@@ -1804,11 +1804,11 @@ class FastWiFiBruteforce(BasePlugin):
 
     def _require_shell(self):
         if self._shell_mode == "none":
-            raise RuntimeError("Shizuku или root не найдены.")
+            raise RuntimeError("Shizuku or root not found.")
         if self._shell_mode == "unknown":
             self._detect_shell_mode()
             if self._shell_mode == "none":
-                raise RuntimeError("Shizuku или root не найдены.")
+                raise RuntimeError("Shizuku or root not found.")
         if not self._uid:
             try:
                 self._uid = self._try_shell_uid(self._shell_mode)
@@ -1822,14 +1822,14 @@ class FastWiFiBruteforce(BasePlugin):
             self._find_wpa_cli()
             self._find_hashcat()
             self._detect_wpa_ctrl()
-        self._log("info", "Режим shell: " + self._shell_mode)
-        self._log("info", "Root: " + ("да" if self._root_available else "нет"))
-        self._log("info", "wpa_cli: " + (self._wpa_cli_path or "нет"))
-        self._log("info", "hashcat: " + (self._hashcat_path or "нет"))
-        self._log("info", "wpa_ctrl: " + (self._wpa_ctrl_dir or "нет"))
+        self._log("info", "Shell mode: " + self._shell_mode)
+        self._log("info", "Root: " + ("yes" if self._root_available else "none"))
+        self._log("info", "wpa_cli: " + (self._wpa_cli_path or "none"))
+        self._log("info", "hashcat: " + (self._hashcat_path or "none"))
+        self._log("info", "wpa_ctrl: " + (self._wpa_ctrl_dir or "none"))
 
         if self._shell_mode == "none":
-            self._outcome = "Диагностика: только просмотр"
+            self._outcome = "Diagnostics: view only"
             return
 
         try:
@@ -1850,7 +1850,7 @@ class FastWiFiBruteforce(BasePlugin):
                 extras.append("WEP")
 
             if not has_connect:
-                self._log("error", "connect-network не найдена")
+                self._log("error", "connect-network command not found")
             else:
                 self._log("success",
                           "connect-network OK · " + ", ".join(extras))
@@ -1858,17 +1858,17 @@ class FastWiFiBruteforce(BasePlugin):
             probe = self._shell("cmd wifi connect-network 2>&1",
                                 allow_failure=True)
             first_line = (probe or "").strip().splitlines()
-            first_line = first_line[0][:200] if first_line else "(пусто)"
+            first_line = first_line[0][:200] if first_line else "(empty)"
             self._log("info", "probe: " + first_line)
 
             self._shell("cmd wifi status", allow_failure=True)
-            self._outcome = ("Диагностика: OK · режим " + self._shell_mode
+            self._outcome = ("Diagnostics: OK · mode " + self._shell_mode
                              + (" + root" if self._root_available else "")
                              if self._cmd_ok
-                             else "Диагностика: ограничено")
+                             else "Diagnostics: limited")
         except Exception as exc:
             self._log("error", "diagnose: " + str(exc)[:200])
-            self._outcome = "Диагностика: ошибка"
+            self._outcome = "Diagnostics: error"
 
     def _stop_work(self):
         if not self._busy:
@@ -1880,14 +1880,14 @@ class FastWiFiBruteforce(BasePlugin):
                 self._save_checkpoint()
         except Exception:
             pass
-        self._outcome = "Остановка…"
-        self._log("warning", "Запрошена остановка; чекпоинт сохранён")
+        self._outcome = "Stopping…"
+        self._log("warning", "Stop requested; checkpoint saved")
 
     def _toggle_help(self):
         self._show_help = not self._show_help
         self._refresh(force=True)
 
-    # ═══════════ СКАНИРОВАНИЕ ═══════════
+    # ═══════════ SCANNING ═══════════
 
     @staticmethod
     def _security(flags):
@@ -1910,22 +1910,22 @@ class FastWiFiBruteforce(BasePlugin):
     @staticmethod
     def _band(frequency):
         if 2400 <= frequency < 2500:
-            return "2.4 ГГц"
+            return "2.4 GHz"
         if 4900 <= frequency < 5925:
-            return "5 ГГц"
+            return "5 GHz"
         if 5925 <= frequency <= 7125:
-            return "6 ГГц"
-        return "{} МГц".format(frequency)
+            return "6 GHz"
+        return "{} MHz".format(frequency)
 
     @staticmethod
     def _signal(rssi):
         if rssi >= -55:
-            return "▂▄▆█  Отличный"
+            return "▂▄▆█  Excellent"
         if rssi >= -67:
-            return "▂▄▆░  Хороший"
+            return "▂▄▆░  Good"
         if rssi >= -75:
-            return "▂▄░░  Средний"
-        return "▂░░░  Слабый"
+            return "▂▄░░  Fair"
+        return "▂░░░  Weak"
 
     @classmethod
     def _parse_scan_line(cls, line):
@@ -1982,7 +1982,7 @@ class FastWiFiBruteforce(BasePlugin):
                     or parsed["rssi"] != rssi
                     or parsed["security"] != security):
                 raise RuntimeError(
-                    "Внутренняя проверка парсера не пройдена: '{}' → {}".format(
+                    "Internal parser self-test failed: '{}' → {}".format(
                         ssid, parsed))
 
     def _scan_via_api(self):
@@ -2033,17 +2033,17 @@ class FastWiFiBruteforce(BasePlugin):
 
     def _begin_scan(self):
         if self._busy:
-            self._toast("Сначала завершите текущую операцию")
+            self._toast("Finish the current operation first")
             return
         self._page = "networks"
         self._launch(self._scan, "scan")
 
     def _scan(self):
-        self._outcome = "Сканирование Wi-Fi…"
+        self._outcome = "Scanning Wi-Fi…"
         self._scan_attempted = True
         networks = []
         
-        # Очищаем старые данные перед новым сканом
+        # Clear old data before a new scan
         self._scan_raw = ""
         self._scan_time = ""
         self._scan_source = ""
@@ -2057,7 +2057,7 @@ class FastWiFiBruteforce(BasePlugin):
                 except Exception:
                     pass
                 if self._stop.wait(2.0):
-                    self._outcome = "Сканирование остановлено"
+                    self._outcome = "Scanning stopped"
                     return
                 output = self._shell("cmd wifi list-scan-results",
                                      allow_failure=True)
@@ -2068,7 +2068,7 @@ class FastWiFiBruteforce(BasePlugin):
                 unmatched = 0
                 for line in output.splitlines():
                     if self._stop.is_set():
-                        self._outcome = "Сканирование остановлено"
+                        self._outcome = "Scanning stopped"
                         return
                     item = self._parse_scan_line(line)
                     if item is None:
@@ -2084,7 +2084,7 @@ class FastWiFiBruteforce(BasePlugin):
 
         if not networks:
             self._scan_source = "api"
-            self._log("info", "Скан через API…")
+            self._log("info", "Scan via API…")
             try:
                 dev = self.api.getDevice()
                 try:
@@ -2092,36 +2092,36 @@ class FastWiFiBruteforce(BasePlugin):
                 except Exception:
                     pass
                 if self._stop.wait(2.0):
-                    self._outcome = "Сканирование остановлено"
+                    self._outcome = "Scanning stopped"
                     return
             except Exception:
                 pass
             networks = self._scan_via_api()
             self._scan_unparsed = 0
             if not self._scan_raw:
-                self._scan_raw = "(скан через API, без shell)"
+                self._scan_raw = "(scan via API, no shell)"
 
         if self._stop.is_set():
-            self._outcome = "Сканирование остановлено"
+            self._outcome = "Scanning stopped"
             return
 
         networks.sort(key=lambda x: x["rssi"], reverse=True)
         self._networks = networks[:self.MAX_RESULTS]
         self._scan_time = time.strftime("%H:%M:%S")
-        self._outcome = "Найдено сетей: {}".format(len(networks))
+        self._outcome = "Networks found: {}".format(len(networks))
 
         self._log("success" if networks else "warning",
-                  "{}. Источник: {}.".format(self._outcome, self._scan_source))
+                  "{}. Source: {}.".format(self._outcome, self._scan_source))
         if networks:
-            self._toast("Сети найдены.")
+            self._toast("Networks found.")
         self._refresh(force=True)
 
     def _select_network(self, network):
         if self._busy:
-            self._toast("Выбор после завершения операции")
+            self._toast("Select after the operation finishes")
             return
         if not network.get("ssid"):
-            self._toast("У скрытой сети нет SSID")
+            self._toast("A hidden network has no SSID")
             return
         clean = dict(network)
         try:
@@ -2144,9 +2144,9 @@ class FastWiFiBruteforce(BasePlugin):
         self._pmkid_hex = ""
         with self._rssi_lock:
             self._rssi_samples = []
-        self._outcome = "Сеть выбрана: " + clean["ssid"]
+        self._outcome = "Network selected: " + clean["ssid"]
         self._save()
-        self._toast("Выбрано: " + clean["ssid"])
+        self._toast("Selected: " + clean["ssid"])
         self._page = "main"
 
     @staticmethod
@@ -2163,11 +2163,11 @@ class FastWiFiBruteforce(BasePlugin):
     def _toggle_raw(self):
         self._show_raw = not self._show_raw
 
-    # ═══════════ ФАЙЛЫ ═══════════
+    # ═══════════ FILES ═══════════
 
     def _open_browser(self, path=None):
         if self._busy:
-            self._toast("Дождитесь завершения операции")
+            self._toast("Wait for the operation to finish")
             return
         destination = self._path(path or self._folder)
         self._page = "browser"
@@ -2179,7 +2179,7 @@ class FastWiFiBruteforce(BasePlugin):
         output = self._shell("ls -1F {} 2>&1 | head -100".format(self._shq(path)))
         if any(m in output for m in
                ("Permission denied", "No such file", "Not a directory")):
-            raise RuntimeError("Каталог недоступен: " + path)
+            raise RuntimeError("Directory unavailable: " + path)
 
         entries = []
         for name in output.splitlines()[:self.MAX_RESULTS]:
@@ -2235,7 +2235,7 @@ class FastWiFiBruteforce(BasePlugin):
             if path not in paths:
                 paths.append(path)
         self._results = paths
-        self._log("info", "Найдено файлов: {}".format(len(paths)))
+        self._log("info", "Files found: {}".format(len(paths)))
 
     def _read_dictionary(self, path):
         self._require_shell()
@@ -2246,23 +2246,23 @@ class FastWiFiBruteforce(BasePlugin):
         try:
             size = int(size_text)
         except (TypeError, ValueError):
-            raise RuntimeError("Не удалось определить размер файла")
+            raise RuntimeError("Failed to determine the file size")
         if not 0 <= size <= self.MAX_FILE:
-            raise RuntimeError("Лимит размера словаря: 10 МБ")
+            raise RuntimeError("Dictionary size limit: 10 MB")
 
         text = self._shell("head -c {} {}".format(self.MAX_FILE + 1, quoted),
                            sensitive=True, hide_command_only=True)
         if len(text.encode("utf-8")) > self.MAX_FILE:
-            raise RuntimeError("Файл превышает лимит")
+            raise RuntimeError("File exceeds the limit")
         if "\x00" in text or "\ufffd" in text:
-            raise RuntimeError("Нужен UTF-8 без NUL")
+            raise RuntimeError("UTF-8 without NUL required")
 
         passwords = []
         count = 0
         with io.StringIO(text.lstrip("\ufeff")) as stream:
             for line in stream:
                 if self._stop.is_set():
-                    raise RuntimeError("Чтение остановлено")
+                    raise RuntimeError("Reading stopped")
                 password = line[:-1] if line.endswith("\n") else line
                 if password.endswith("\r"):
                     password = password[:-1]
@@ -2270,7 +2270,7 @@ class FastWiFiBruteforce(BasePlugin):
                 if self._valid_password(password):
                     passwords.append(password)
                     if len(passwords) > self.MAX_PASSWORDS:
-                        raise RuntimeError("Лимит паролей")
+                        raise RuntimeError("Password limit")
         metadata = {
             "path": path,
             "name": os.path.basename(path),
@@ -2283,7 +2283,7 @@ class FastWiFiBruteforce(BasePlugin):
         self._require_shell()
         path = self._path(path)
         if path not in self._dicts and len(self._dicts) >= self.MAX_DICTS:
-            raise RuntimeError("Максимум 16 словарей")
+            raise RuntimeError("Maximum of 16 dictionaries")
         metadata, passwords = self._read_dictionary(path)
         passwords.clear()
         if self._stop.is_set():
@@ -2292,9 +2292,9 @@ class FastWiFiBruteforce(BasePlugin):
         if path not in self._enabled_dicts:
             self._enabled_dicts.append(path)
         self._save()
-        self._log("success", "Добавлен {}: строк {}, допустимых {}.".format(
+        self._log("success", "Added {}: {} lines, {} valid.".format(
             metadata["name"], metadata["count"], metadata["valid"]))
-        self._toast("Словарь добавлен")
+        self._toast("Dictionary added")
 
     def _enable_dictionary(self, path, value):
         if self._busy or path not in self._dicts:
@@ -2312,7 +2312,7 @@ class FastWiFiBruteforce(BasePlugin):
         self._dicts.pop(path, None)
         self._enabled_dicts = [x for x in self._enabled_dicts if x != path]
         self._save()
-        self._log("info", "Словарь убран из списка")
+        self._log("info", "Dictionary removed from the list")
 
     def _load_password_pool(self):
         combined = []
@@ -2320,7 +2320,7 @@ class FastWiFiBruteforce(BasePlugin):
         duplicates = 0
         for path in list(self._enabled_dicts):
             if self._stop.is_set():
-                raise RuntimeError("Загрузка остановлена")
+                raise RuntimeError("Loading stopped")
             if path not in self._dicts:
                 continue
             metadata, passwords = self._read_dictionary(path)
@@ -2334,7 +2334,7 @@ class FastWiFiBruteforce(BasePlugin):
                 if len(combined) > self.MAX_PASSWORDS:
                     combined.clear()
                     seen.clear()
-                    raise RuntimeError("Суммарный лимит паролей")
+                    raise RuntimeError("Total password limit")
             passwords.clear()
 
         if self._use_ssid_gen:
@@ -2348,7 +2348,7 @@ class FastWiFiBruteforce(BasePlugin):
                 added += 1
                 if len(combined) > self.MAX_PASSWORDS:
                     break
-            self._log("info", "SSID-генератор: +{} кандидатов".format(added))
+            self._log("info", "SSID generator: +{} candidates".format(added))
 
         if self._use_vendor_gen:
             gen = self._vendor_defaults_for_bssid(
@@ -2362,7 +2362,7 @@ class FastWiFiBruteforce(BasePlugin):
                 added += 1
                 if len(combined) > self.MAX_PASSWORDS:
                     break
-            self._log("info", "Vendor-генератор: +{} кандидатов".format(added))
+            self._log("info", "Vendor generator: +{} candidates".format(added))
 
         if self._use_ru_gen or self._use_morph:
             gen = self._generate_ru_candidates(
@@ -2376,15 +2376,15 @@ class FastWiFiBruteforce(BasePlugin):
                 added += 1
                 if len(combined) > self.MAX_PASSWORDS:
                     break
-            self._log("info", "RU-генератор: +{} кандидатов".format(added))
+            self._log("info", "RU generator: +{} candidates".format(added))
 
         if duplicates > 0:
             self._log("info",
-                      "Дедупликация: пропущено {} повторов".format(duplicates))
+                      "Deduplication: {} duplicates skipped".format(duplicates))
         self._password_pool = combined
         return combined
 
-    # ═══════════ ПРОВЕРКА СЕТИ ═══════════
+    # ═══════════ NETWORK TEST ═══════════
 
     @staticmethod
     def _connected_ssid(output):
@@ -2498,7 +2498,7 @@ class FastWiFiBruteforce(BasePlugin):
                     self._shq(target), cmd_sec, self._shq(password)),
                 sensitive=True, allow_failure=True)
         except RuntimeError as exc:
-            if "Операция отменена" in str(exc):
+            if "Operation cancelled" in str(exc):
                 return None
             self._log("warning", "connect-network: " + str(exc)[:180])
             return False
@@ -2548,47 +2548,47 @@ class FastWiFiBruteforce(BasePlugin):
         return False
 
     def _start_audit(self):
-        self._log("info", "=== Начало аудита ===")
+        self._log("info", "=== Audit start ===")
         self._log("info", "consent={}, network={}, dicts={}".format(
             self._consent,
             bool(self._network.get("ssid")),
             len(self._enabled_dicts)))
 
         if self._busy:
-            self._toast("Дождитесь завершения")
+            self._toast("Wait for the operation to finish")
             return
 
         if self._shell_mode == "none":
-            self._outcome = "Отказ: нет Shizuku или root"
-            self._toast("Перебор недоступен — нужен Shizuku или root")
+            self._outcome = "Refused: no Shizuku or root"
+            self._toast("Bruteforce unavailable — Shizuku or root required")
             self._toggle_help()
             self._refresh(force=True)
             return
 
         sec = self._network.get("security", "")
         if sec not in ("psk", "sae", "wep"):
-            self._outcome = "Отказ: тип {} не поддержан".format(sec)
-            self._toast("Выберите WPA2/WPA3/WEP сеть")
+            self._outcome = "Refused: type {} not supported".format(sec)
+            self._toast("Select a WPA2/WPA3/WEP network")
             self._refresh(force=True)
             return
 
         if not self._consent:
-            self._outcome = "Отказ: нет подтверждения"
-            self._toast("Подтвердите разрешение")
+            self._outcome = "Refused: no confirmation"
+            self._toast("Confirm authorization")
             self._refresh(force=True)
             return
 
         if not self._network.get("ssid"):
-            self._outcome = "Отказ: сеть не выбрана"
-            self._toast("Сначала выберите сеть")
+            self._outcome = "Refused: no network selected"
+            self._toast("Select a network first")
             self._refresh(force=True)
             return
 
         if (not self._enabled_dicts and not self._use_ssid_gen
                 and not self._use_vendor_gen and not self._use_ru_gen
                 and not self._use_morph):
-            self._outcome = "Отказ: нет источников паролей"
-            self._toast("Добавьте словарь или генератор")
+            self._outcome = "Refused: no password sources"
+            self._toast("Add a dictionary or generator")
             self._refresh(force=True)
             return
 
@@ -2604,7 +2604,7 @@ class FastWiFiBruteforce(BasePlugin):
         self._settle_samples = deque(maxlen=30)
         with self._recent_lock:
             self._recent = []
-        self._outcome = "Загрузка словарей…"
+        self._outcome = "Loading dictionaries…"
 
         self._resume_from = 0
         if self._resume_enabled:
@@ -2614,73 +2614,73 @@ class FastWiFiBruteforce(BasePlugin):
                 self._resume_from = int(cp.get("checked", 0))
                 if self._resume_from > 0:
                     self._log("info",
-                              "Продолжаем с #{}".format(self._resume_from))
+                              "Resuming from #{}".format(self._resume_from))
 
         target = self._network["ssid"]
         if self._wpa_cli_available and self._root_available:
             ok = self._setup_wpa_cli_network(target, sec)
             if ok:
-                self._log("success", "Аудит через wpa_cli (reattach)")
+                self._log("success", "Audit via wpa_cli (reattach)")
             else:
                 self._log("info", "wpa_cli setup failed — fallback cmd wifi")
         settle = self._effective_settle()
-        self._log("info", "Запуск для: " + target)
+        self._log("info", "Starting for: " + target)
         self._launch(lambda: self._audit_worker(target, settle), "audit")
 
     def _audit_worker(self, target, settle):
         try:
-            self._log("atk", "Шаг 1: shell")
+            self._log("atk", "Step 1: shell")
             self._require_shell()
-            self._log("atk", "Шаг 2: режим={}, UID={}, root={}, wpa_cli={}".format(
+            self._log("atk", "Step 2: mode={}, UID={}, root={}, wpa_cli={}".format(
                 self._shell_mode, self._uid or "?",
-                "да" if self._root_available else "нет",
-                "да" if self._wpa_cli_available else "нет"))
+                "yes" if self._root_available else "none",
+                "yes" if self._wpa_cli_available else "none"))
 
-            self._log("atk", "Шаг 3: проверка подключения")
+            self._log("atk", "Step 3: connection check")
             status0 = self._shell("cmd wifi status", allow_failure=True)
             connected_now = self._connected_ssid(status0)
             if connected_now == target:
                 raise RuntimeError(
-                    "Уже подключены к этой сети. Отключитесь вручную.")
+                    "Already connected to this network. Disconnect manually.")
             if connected_now:
-                self._log("info", "Сейчас: " + str(connected_now)[:60])
+                self._log("info", "Now: " + str(connected_now)[:60])
             else:
-                self._log("info", "Не подключены ни к одной сети")
+                self._log("info", "Not connected to any network")
 
-            self._log("atk", "Шаг 4: probe")
+            self._log("atk", "Step 4: probe")
             probe = self._shell("cmd wifi connect-network 2>&1",
                                 allow_failure=True)
             probe_first = (probe or "").strip().splitlines()
-            probe_first = probe_first[0][:160] if probe_first else "(пусто)"
+            probe_first = probe_first[0][:160] if probe_first else "(empty)"
             self._log("atk", "probe: " + probe_first)
 
             if "unknown command" in probe_first.lower():
                 self._cmd_ok = False
-                raise RuntimeError("Нет команды connect-network")
+                raise RuntimeError("No connect-network command")
             self._cmd_ok = True
-            self._log("atk", "Шаг 5: команда доступна")
+            self._log("atk", "Step 5: command available")
 
-            self._log("atk", "Шаг 6: словари")
+            self._log("atk", "Step 6: dictionaries")
             passwords = self._load_password_pool()
             self._total = len(passwords)
-            self._log("atk", "Шаг 7: паролей {}".format(self._total))
+            self._log("atk", "Step 7: {} passwords".format(self._total))
 
             if self._stop.is_set():
-                self._outcome = "Остановлено"
+                self._outcome = "Stopped"
                 return
             if not passwords:
-                raise RuntimeError("Нет допустимых паролей")
+                raise RuntimeError("No valid passwords")
 
             skip = 0
             if self._resume_from > 0 and self._resume_from < self._total:
                 skip = self._resume_from
                 self._checked = skip
-                self._log("info", "Resume: пропускаю {}".format(skip))
+                self._log("info", "Resume: skipping {}".format(skip))
 
-            self._outcome = "Проверка выполняется"
+            self._outcome = "Check in progress"
             self._log("warning",
-                      "Отсутствие подключения не доказывает неверность "
-                      "пароля. Подключение — только кандидат.")
+                      "Failure to connect does not prove the password "
+                      "is wrong. A connection is only a candidate.")
 
             started = time.monotonic()
             self._refresh(force=True)
@@ -2722,8 +2722,8 @@ class FastWiFiBruteforce(BasePlugin):
                     self._reveal = True
                     self._page = "main"
                     self._finished = True
-                    self._outcome = "✅ Пароль найден!"
-                    self._log("success", "Подключение к SSID. Кандидат.")
+                    self._outcome = "✅ Password found!"
+                    self._log("success", "Connected to SSID. Candidate.")
                     try:
                         self.set_setting(self.FOUND_KEY, {
                             "ssid": self._network.get("ssid", ""),
@@ -2733,7 +2733,7 @@ class FastWiFiBruteforce(BasePlugin):
                         })
                     except Exception:
                         pass
-                    self._toast("✅ Пароль найден")
+                    self._toast("✅ Password found")
                     try:
                         self._notify_found(self._network.get("ssid", ""),
                                            password)
@@ -2747,7 +2747,7 @@ class FastWiFiBruteforce(BasePlugin):
 
                 if self._checked % self.LOG_EVERY_N == 0:
                     self._log("info",
-                              "{} из {}; {:.2f} п/с; settle {:.1f}; ~{}".format(
+                              "{} of {}; {:.2f} p/s; settle {:.1f}; ~{}".format(
                                   self._checked, self._total, self._speed,
                                   self._effective_settle(),
                                   self._format_eta(self._eta)))
@@ -2760,22 +2760,22 @@ class FastWiFiBruteforce(BasePlugin):
 
             self._finished = True
             if self._stop.is_set():
-                self._outcome = "Остановлено"
+                self._outcome = "Stopped"
                 if self._checked > 0:
                     self._save_checkpoint()
             elif not self._found_password:
-                self._outcome = "❌ Пароль не найден"
+                self._outcome = "❌ Password not found"
                 self._clear_checkpoint()
-                self._toast("Пароль не найден")
+                self._toast("Password not found")
             else:
                 self._clear_checkpoint()
 
         except Exception as exc:
             self._finished = True
             if self._stop.is_set():
-                self._outcome = "Остановлено"
+                self._outcome = "Stopped"
             else:
-                self._outcome = "Проверка прервана: " + str(exc)[:160]
+                self._outcome = "Check interrupted: " + str(exc)[:160]
                 self._log("error", "audit_worker: " + str(exc)[:240])
         finally:
             self._running = False
@@ -2790,16 +2790,16 @@ class FastWiFiBruteforce(BasePlugin):
 
     def _test_single_password(self):
         if self._busy:
-            self._toast("Дождитесь завершения")
+            self._toast("Wait for the operation to finish")
             return
         if self._shell_mode == "none":
-            self._manual_result = "Нет shell — проверка недоступна"
+            self._manual_result = "No shell — testing unavailable"
             self._toggle_help()
             self._refresh(force=True)
             return
         password = self._manual_password
         if not password:
-            self._toast("Введите пароль")
+            self._toast("Enter a password")
             return
 
         sec = self._network.get("security", "")
@@ -2810,16 +2810,16 @@ class FastWiFiBruteforce(BasePlugin):
                 return
         else:
             if not self._valid_password(password):
-                self._manual_result = "8..63 символа или 64 hex"
+                self._manual_result = "8..63 characters or 64 hex"
                 self._refresh(force=True)
                 return
 
         if sec not in ("psk", "sae", "wep"):
-            self._manual_result = "Выберите WPA2/WPA3/WEP сеть"
+            self._manual_result = "Select a WPA2/WPA3/WEP network"
             self._refresh(force=True)
             return
         if not self._consent:
-            self._manual_result = "Подтвердите разрешение"
+            self._manual_result = "Confirm authorization"
             self._refresh(force=True)
             return
 
@@ -2827,33 +2827,33 @@ class FastWiFiBruteforce(BasePlugin):
         self._target_sec = self._sec_for_connect(sec)
         settle = self._effective_settle()
         self._manual_busy = True
-        self._manual_result = "Проверка…"
+        self._manual_result = "Testing…"
 
         def job():
             try:
                 self._require_shell()
                 status0 = self._shell("cmd wifi status", allow_failure=True)
                 if self._connected_ssid(status0) == target:
-                    self._manual_result = "Уже подключены"
+                    self._manual_result = "Already connected"
                     return
                 ok = self._try_password(target, password, settle)
                 if ok is True:
-                    self._manual_result = "✅ Подключение установлено"
+                    self._manual_result = "✅ Connected"
                     self._found_password = password
                     self._reveal = True
                 elif ok is False:
-                    self._manual_result = "❌ Пароль не подошёл"
+                    self._manual_result = "❌ Password rejected"
                 else:
-                    self._manual_result = "⚠️ Неясно, повторите"
+                    self._manual_result = "⚠️ Inconclusive, try again"
             except Exception as exc:
-                self._manual_result = "Ошибка: " + str(exc)[:120]
+                self._manual_result = "Error: " + str(exc)[:120]
             finally:
                 self._manual_busy = False
                 self._refresh(force=True)
 
         self._launch(job, "io")
 
-    # ═══════════ КАНДИДАТ ═══════════
+    # ═══════════ CANDIDATE ═══════════
 
     def _toggle_reveal(self):
         self._reveal = not self._reveal
@@ -2871,27 +2871,27 @@ class FastWiFiBruteforce(BasePlugin):
     def _copy_candidate(self):
         try:
             if not self._found_password:
-                self._toast("Нет кандидата")
+                self._toast("No candidate")
                 return
             android = self.api.getAndroid()
             ok = android.clipboardSet(self._found_password)
             if ok:
                 self._copy_flash = time.time()
-                self._toast("Скопировано")
-                self._log("info", "Пароль в буфер")
+                self._toast("Copied")
+                self._log("info", "Password copied to clipboard")
             else:
-                self._toast("Не удалось")
+                self._toast("Failed")
         except Exception as exc:
             self._log("error", "clipboard: " + str(exc)[:180])
-            self._toast("Ошибка копирования")
+            self._toast("Copy error")
 
     def _share_candidate(self):
         try:
             if not self._found_password:
-                self._toast("Нет кандидата")
+                self._toast("No candidate")
                 return
             ssid = self._network.get("ssid", "")
-            text = "WiFi: {} | Пароль: {}".format(ssid, self._found_password)
+            text = "WiFi: {} | Password: {}".format(ssid, self._found_password)
             android = self.api.getAndroid()
             try:
                 android.shareText(text)
@@ -2900,27 +2900,27 @@ class FastWiFiBruteforce(BasePlugin):
                 self._log("warning", "shareText: " + str(e1)[:150])
             try:
                 if android.clipboardSet(text):
-                    self._toast("Скопировано в буфер")
+                    self._toast("Copied to clipboard")
                     return
             except Exception:
                 pass
-            self._toast("Не удалось поделиться")
+            self._toast("Failed to share")
         except Exception as exc:
             self._log("error", "share: " + str(exc)[:180])
 
     def _copy_wifi_string(self):
         try:
             if not self._found_password:
-                self._toast("Нет пароля")
+                self._toast("No password")
                 return
             ssid = self._network.get("ssid", "")
             wifi_str = "WIFI:S:{};T:WPA;P:{};;".format(
                 ssid, self._found_password)
             android = self.api.getAndroid()
             if android.clipboardSet(wifi_str):
-                self._toast("WiFi-строка скопирована")
+                self._toast("WiFi string copied")
             else:
-                self._toast("Не удалось")
+                self._toast("Failed")
         except Exception as exc:
             self._log("error", "copy_wifi: " + str(exc)[:180])
 
@@ -2934,7 +2934,7 @@ class FastWiFiBruteforce(BasePlugin):
                      if p.strip()]
             valid = [p for p in parts if self._valid_password(p)]
             if not valid:
-                self._toast("Нет валидных паролей в буфере")
+                self._toast("No valid passwords in the clipboard")
                 return
             sandbox = ""
             try:
@@ -2942,7 +2942,7 @@ class FastWiFiBruteforce(BasePlugin):
             except Exception:
                 sandbox = ""
             if not sandbox:
-                self._toast("Нет приватной папки")
+                self._toast("No private folder")
                 return
             path = sandbox.rstrip("/") + "/clip_dict.txt"
             joined = "\n".join(valid) + "\n"
@@ -2952,26 +2952,26 @@ class FastWiFiBruteforce(BasePlugin):
             except Exception:
                 ok = False
             if not ok:
-                self._toast("Не удалось записать")
+                self._toast("Failed to write")
                 return
             metadata = {
                 "path": path, "name": "clip_dict.txt",
                 "count": len(valid), "valid": len(valid),
             }
             if path not in self._dicts and len(self._dicts) >= self.MAX_DICTS:
-                self._toast("Лимит 16")
+                self._toast("Limit of 16 reached")
                 return
             self._dicts[path] = metadata
             if path not in self._enabled_dicts:
                 self._enabled_dicts.append(path)
             self._save()
-            self._log("success", "Добавлено {} паролей".format(len(valid)))
-            self._toast("Добавлено {}".format(len(valid)))
+            self._log("success", "Added {} passwords".format(len(valid)))
+            self._toast("Added {}".format(len(valid)))
         except Exception as exc:
             self._log("error", "clipboard_import: " + str(exc)[:200])
-            self._toast("Ошибка импорта")
+            self._toast("Import error")
 
-    # ═══════════ ЖУРНАЛ ═══════════
+    # ═══════════ LOGS ═══════════
 
     def _clear_logs(self):
         with self._log_lock:
@@ -2994,7 +2994,7 @@ class FastWiFiBruteforce(BasePlugin):
                             sensitive=True, hide_command_only=True)
                 for offset in range(0, len(text), 3000):
                     if self._stop.is_set():
-                        self._log("warning", "Экспорт остановлен")
+                        self._log("warning", "Export stopped")
                         return
                     self._shell(
                         "printf '%s' {} >> {}".format(
@@ -3003,8 +3003,8 @@ class FastWiFiBruteforce(BasePlugin):
                         sensitive=True, hide_command_only=True)
                 self._shell("mv -f {} {}".format(self._shq(temporary),
                                                   self._shq(destination)))
-                self._log("success", "Журнал: " + destination)
-                self._toast("Журнал в Download")
+                self._log("success", "Log: " + destination)
+                self._toast("Log saved to Download")
                 return
             except Exception as exc:
                 self._log("warning", "export shell: " + str(exc)[:160])
@@ -3019,13 +3019,13 @@ class FastWiFiBruteforce(BasePlugin):
             if sandbox:
                 path = sandbox.rstrip("/") + "/dolphy_logs.txt"
                 if bool(android_obj.filesWrite(path, text)):
-                    self._log("success", "Журнал: " + path)
-                    self._toast("Журнал в " + path)
+                    self._log("success", "Log: " + path)
+                    self._toast("Log saved to " + path)
                     return
         except Exception as exc:
             self._log("warning", "export fallback: " + str(exc)[:160])
 
-        self._toast("Не удалось сохранить")
+        self._toast("Failed to save")
 
     # ═══════════ UI ═══════════
 
@@ -3035,21 +3035,21 @@ class FastWiFiBruteforce(BasePlugin):
 
     def _bottom_nav(self, ui):
         return ui.card([
-            ui.text("🧭  НАВИГАЦИЯ", "labelSmall", color="secondary"),
-            ui.button("🏠  На главную", self._bind(self._go, "main"),
+            ui.text("🧭  NAVIGATION", "labelSmall", color="secondary"),
+            ui.button("🏠  Home", self._bind(self._go, "main"),
                       style="filled"),
             ui.row([
-                ui.button("📡  Сети", self._bind(self._go, "networks"),
+                ui.button("📡  Networks", self._bind(self._go, "networks"),
                           style="tonal"),
-                ui.button("📚  Словари", self._bind(self._go, "dicts"),
+                ui.button("📚  Dictionaries", self._bind(self._go, "dicts"),
                           style="tonal"),
                 ui.button("📈  RSSI", self._bind(self._go, "graph"),
                           style="tonal"),
             ]),
             ui.row([
-                ui.button("🔓  Сохранённые", self._bind(self._go, "saved"),
+                ui.button("🔓  Saved", self._bind(self._go, "saved"),
                           style="tonal"),
-                ui.button("📋  Логи", self._bind(self._go, "logs"),
+                ui.button("📋  Logs", self._bind(self._go, "logs"),
                           style="tonal"),
                 ui.button("🔳  QR", self._bind(self._go, "qr"),
                           style="tonal"),
@@ -3062,47 +3062,47 @@ class FastWiFiBruteforce(BasePlugin):
                     "Fast switch · MAC spoof · PMKID · saved Wi-Fi",
                     "ROOT · MAX", "success")
         if self._root_available:
-            return ("🟢", "Root активен",
-                    "Полный доступ · сохранённые Wi-Fi",
+            return ("🟢", "Root active",
+                    "Full access · saved Wi-Fi",
                     "ROOT", "success")
         if self._shell_mode == "shizuku":
-            return ("🟢", "Shizuku активен",
-                    "Стандартный доступ · cmd wifi",
+            return ("🟢", "Shizuku active",
+                    "Standard access · cmd wifi",
                     "SHIZUKU · UID " + (self._uid or "?"), "success")
         if self._shell_mode == "root":
-            return ("🟢", "Root активен", "Полный доступ", "ROOT", "success")
+            return ("🟢", "Root active", "Full access", "ROOT", "success")
         if self._shell_mode == "none":
-            return ("🟡", "Только просмотр",
-                    "Перебор отключён · сканирование и RSSI работают",
-                    "БЕЗ SHELL", "warning")
-        return ("⚪", "Проверка…", "Определяю режимы",
-                "ОПРЕДЕЛЕНИЕ", "secondary")
+            return ("🟡", "View only",
+                    "Bruteforce disabled · scanning and RSSI work",
+                    "NO SHELL", "warning")
+        return ("⚪", "Testing…", "Detecting modes",
+                "DETECTING", "secondary")
 
     def _busy_ui(self, ui):
         if not self._busy or self._page == "main":
             return []
         return [ui.card([
-            ui.text("Сканирование…" if self._scanning
-                    else "Операция выполняется", "titleMedium"),
+            ui.text("Scanning…" if self._scanning
+                    else "Operation in progress", "titleMedium"),
             ui.circular_progress(),
-            self._button(ui, "⏹  Остановить", self._stop_work, style="tonal"),
+            self._button(ui, "⏹  Stop", self._stop_work, style="tonal"),
         ])]
 
     def _readiness(self):
         missing = []
         if self._shell_mode == "none":
-            missing.append("• Shizuku или root")
+            missing.append("• Shizuku or root")
         if not self._consent:
-            missing.append("• Разрешение владельца")
+            missing.append("• Owner permission")
         sec = self._network.get("security", "")
         if sec not in ("psk", "sae", "wep"):
-            missing.append("• Сеть WPA2/WPA3/WEP")
+            missing.append("• WPA2/WPA3/WEP network")
         if not self._network.get("ssid"):
-            missing.append("• Выбранная сеть")
+            missing.append("• Selected network")
         if (not self._enabled_dicts and not self._use_ssid_gen
                 and not self._use_vendor_gen and not self._use_ru_gen
                 and not self._use_morph):
-            missing.append("• Словарь или генератор")
+            missing.append("• Dictionary or generator")
         return missing
 
     def _hero_ui(self, ui):
@@ -3114,10 +3114,10 @@ class FastWiFiBruteforce(BasePlugin):
         vendor = self._vendor_for_bssid(self._network.get("bssid", ""))
 
         ol = self._outcome.lower()
-        if ("прервана" in ol or "ошибка" in ol or "отказ" in ol
-                or "недоступ" in ol or "❌" in ol):
+        if ("interrupt" in ol or "error" in ol or "refused" in ol
+                or "unavailable" in ol or "❌" in ol):
             out_color = "error"
-        elif ("найден" in ol or "выполняется" in ol or "подключ" in ol
+        elif ("found" in ol or "in progress" in ol or "connect" in ol
                 or "✅" in ol):
             out_color = "success"
         else:
@@ -3138,39 +3138,39 @@ class FastWiFiBruteforce(BasePlugin):
                 line2 += "  ·  " + vendor
             children.append(ui.text(line2, "bodySmall", color="secondary"))
         else:
-            children.append(ui.text("🎯  Сеть не выбрана", "titleLarge",
+            children.append(ui.text("🎯  No network selected", "titleLarge",
                                     color="secondary"))
-            children.append(ui.text("Открой «Сети» и выбери WPA2/WPA3/WEP",
+            children.append(ui.text("Open \"Networks\" and pick WPA2/WPA3/WEP",
                                     "bodySmall", color="muted"))
 
         if self._use_adaptive_settle:
             children.append(ui.text(
-                "⏱  settle: {:.1f} с (адаптив)".format(
+                "⏱  settle: {:.1f} s (adaptive)".format(
                     self._effective_settle()),
                 "bodySmall", color="secondary"))
         else:
             children.append(ui.text(
-                "⏱  settle: {:.1f} с".format(self._settle),
+                "⏱  settle: {:.1f} s".format(self._settle),
                 "bodySmall", color="secondary"))
 
         if self._wpa_cli_available:
             children.append(ui.text(
-                "⚡  fast switch: reattach активен",
+                "⚡  fast switch: reattach active",
                 "bodySmall", color="success"))
         if self._hashcat_path:
             children.append(ui.text(
-                "🚀  hashcat: найден",
+                "🚀  hashcat: found",
                 "bodySmall", color="success"))
         if self._pmkid_hex:
             children.append(ui.text(
-                "🎯  PMKID: готов к перебору",
+                "🎯  PMKID: ready for cracking",
                 "bodySmall", color="success"))
 
-        children.append(ui.text("Статус: " + self._outcome, "bodyMedium",
+        children.append(ui.text("Status: " + self._outcome, "bodyMedium",
                                 color=out_color))
 
         if self._scanning:
-            children.append(ui.text("⏳  Сканирование…", "bodySmall",
+            children.append(ui.text("⏳  Scanning…", "bodySmall",
                                     color="primary"))
 
         return ui.card(children)
@@ -3181,11 +3181,11 @@ class FastWiFiBruteforce(BasePlugin):
         fraction = min(1.0, self._checked / max(self._total, 1))
         pct = fraction * 100.0
         return ui.card([
-            ui.text("⚡  ПРОГРЕСС", "labelSmall", color="secondary"),
+            ui.text("⚡  PROGRESS", "labelSmall", color="secondary"),
             ui.linear_progress(progress=float(fraction)),
             ui.text("{:.1f}%  ·  {} / {}".format(
                 pct, self._checked, self._total), "titleMedium"),
-            ui.text("{:.2f} п/с  ·  ~{}".format(
+            ui.text("{:.2f} p/s  ·  ~{}".format(
                 self._speed, self._format_eta(self._eta)),
                 "bodySmall", color="secondary"),
         ])
@@ -3195,13 +3195,13 @@ class FastWiFiBruteforce(BasePlugin):
             rows = list(self._recent)[-5:]
         if not rows:
             return None
-        lines = [ui.text("🕒  ПОСЛЕДНИЕ ПОПЫТКИ", "labelSmall",
+        lines = [ui.text("🕒  LATEST ATTEMPTS", "labelSmall",
                          color="secondary")]
         for idx, last4, ok, ms in reversed(rows):
             mark = "✅" if ok else "✖"
             color = "success" if ok else "secondary"
             lines.append(ui.text(
-                "{}  #{}  {}  ·  {} мс".format(mark, idx, last4, ms),
+                "{}  #{}  {}  ·  {} ms".format(mark, idx, last4, ms),
                 "labelSmall", color=color))
         return ui.card(lines)
 
@@ -3211,28 +3211,28 @@ class FastWiFiBruteforce(BasePlugin):
         flash = (time.time() - self._copy_flash) < 3
         shown = self._found_password if self._reveal else "••••••••••••"
         return ui.card([
-            ui.text("🎯  НАЙДЕННЫЙ ПАРОЛЬ", "labelSmall", color="success"),
-            ui.text("Сеть: " + self._text(self._network.get("ssid", "")),
+            ui.text("🎯  FOUND PASSWORD", "labelSmall", color="success"),
+            ui.text("Network: " + self._text(self._network.get("ssid", "")),
                     "bodyMedium"),
-            ui.text("Проверьте вручную, прежде чем полагаться",
+            ui.text("Verify manually before relying on it",
                     "bodySmall", color="warning"),
             ui.text(shown, "headlineMedium",
                     color="success" if self._reveal else "secondary"),
             ui.row([
-                self._button(ui, "👁 Скрыть" if self._reveal
-                             else "👁 Показать", self._toggle_reveal,
+                self._button(ui, "👁 Hide" if self._reveal
+                             else "👁 Show", self._toggle_reveal,
                              style="tonal"),
-                self._button(ui, "✅ Скопировано" if flash
-                             else "📋 Копировать", self._copy_candidate,
+                self._button(ui, "✅ Copied" if flash
+                             else "📋 Copy", self._copy_candidate,
                              enabled=not self._busy, style="filled"),
             ]),
             ui.row([
-                self._button(ui, "📤 Поделиться", self._share_candidate,
+                self._button(ui, "📤 Share", self._share_candidate,
                              enabled=not self._busy),
-                self._button(ui, "🔳 QR-код", self._go, "qr",
+                self._button(ui, "🔳 QR code", self._go, "qr",
                              enabled=not self._busy),
             ]),
-            ui.button("🗑 Очистить", self._bind(self._clear_candidate),
+            ui.button("🗑 Clear", self._bind(self._clear_candidate),
                       enabled=not self._busy, style="text"),
         ])
 
@@ -3243,14 +3243,14 @@ class FastWiFiBruteforce(BasePlugin):
         if not summary:
             return None
         return ui.card([
-            ui.text("💾  ЧЕКПОИНТ", "labelSmall", color="primary"),
+            ui.text("💾  CHECKPOINT", "labelSmall", color="primary"),
             ui.text(summary, "bodySmall", color="secondary"),
-            ui.text("Продолжить или сбросить?",
+            ui.text("Resume or reset?",
                     "bodySmall", color="muted"),
             ui.row([
-                self._button(ui, "▶️  Продолжить", self._start_audit,
+                self._button(ui, "▶️  Resume", self._start_audit,
                              enabled=not self._busy, style="filled"),
-                self._button(ui, "🗑  Сбросить", self._clear_checkpoint,
+                self._button(ui, "🗑  Reset", self._clear_checkpoint,
                              enabled=not self._busy),
             ]),
         ])
@@ -3262,32 +3262,32 @@ class FastWiFiBruteforce(BasePlugin):
         children = [ui.card([
             ui.text("🎯  PMKID + HASHCAT", "labelSmall",
                     color="secondary"),
-            ui.text("Офлайн-перебор по захваченному хешу",
+            ui.text("Offline cracking of the captured hash",
                     "bodySmall", color="secondary"),
             ui.divider(),
-            ui.text("Сеть: " + ssid, "bodyMedium"),
+            ui.text("Network: " + ssid, "bodyMedium"),
         ])]
 
         if not self._root_available:
             children.append(ui.card([
-                ui.text("⚠️  Требуется root", "titleMedium",
+                ui.text("⚠️  Root required", "titleMedium",
                         color="warning"),
-                ui.text("PMKID и hashcat работают только с root",
+                ui.text("PMKID and hashcat only work with root",
                         "bodySmall", color="muted"),
             ]))
         else:
             status_children = [
-                ui.text("Статус PMKID", "labelSmall", color="secondary"),
+                ui.text("PMKID status", "labelSmall", color="secondary"),
             ]
             if self._pmkid_hex:
                 status_children.append(ui.text(
-                    "✅ Захвачен · " + self._pmkid_hash[:16] + "…",
+                    "✅ Captured · " + self._pmkid_hash[:16] + "…",
                     "bodyMedium", color="success"))
             else:
                 status_children.append(ui.text(
-                    "❌ Не захвачен", "bodyMedium", color="warning"))
+                    "❌ Not captured", "bodyMedium", color="warning"))
             status_children.append(self._button(
-                ui, "📡  Захватить PMKID", self._capture_pmkid,
+                ui, "📡  Capture PMKID", self._capture_pmkid,
                 enabled=available and self._wpa_cli_available,
                 style="filled"))
             children.append(ui.card(status_children))
@@ -3300,15 +3300,15 @@ class FastWiFiBruteforce(BasePlugin):
                     "✅ " + self._hashcat_path, "bodySmall", color="success"))
             else:
                 hc_children.append(ui.text(
-                    "❌ Не найден. Установите: /data/local/tmp/hashcat/",
+                    "❌ Not found. Install to: /data/local/tmp/hashcat/",
                     "bodySmall", color="warning"))
             hc_children.append(ui.text(
-                "Словарь: " + (
+                "Dictionary: " + (
                     os.path.basename(self._enabled_dicts[0])
-                    if self._enabled_dicts else "нет"),
+                    if self._enabled_dicts else "none"),
                 "bodySmall", color="secondary"))
             hc_children.append(self._button(
-                ui, "🚀  Офлайн-перебор", self._crack_with_hashcat,
+                ui, "🚀  Offline cracking", self._crack_with_hashcat,
                 enabled=(available and bool(self._pmkid_hex)
                          and bool(self._hashcat_path)
                          and bool(self._enabled_dicts)),
@@ -3316,12 +3316,12 @@ class FastWiFiBruteforce(BasePlugin):
             children.append(ui.card(hc_children))
 
             children.append(ui.card([
-                ui.text("ℹ️  КАК ЭТО РАБОТАЕТ", "labelSmall",
+                ui.text("ℹ️  HOW IT WORKS", "labelSmall",
                         color="secondary"),
                 ui.text(
-                    "1. Сначала подключитесь к сети (cmd wifi connect-network)\n"
-                    "2. Нажмите «Захватить PMKID» — берём из PMKSA cache\n"
-                    "3. Нажмите «Офлайн-перебор» — hashcat проверит словарь",
+                    "1. Connect to the network first (cmd wifi connect-network)\n"
+                    "2. Tap \"Capture PMKID\" — it is taken from the PMKSA cache\n"
+                    "3. Tap \"Offline cracking\" — hashcat checks the dictionary",
                     "bodySmall", color="muted"),
             ]))
 
@@ -3353,57 +3353,57 @@ class FastWiFiBruteforce(BasePlugin):
         start_style = "filled" if not missing else "tonal"
 
         audit_children = [
-            ui.text("🔐  ПРОВЕРКА СЕТИ", "labelSmall", color="secondary"),
+            ui.text("🔐  NETWORK TEST", "labelSmall", color="secondary"),
             ui.checkbox(checked=self._consent,
                         on_change=self._value(self._set_consent, refresh=True),
-                        title="Есть разрешение владельца сети",
-                        subtitle="Проверка меняет Wi-Fi-подключение",
+                        title="Network owner permission granted",
+                        subtitle="Testing changes the Wi-Fi connection",
                         enabled=available),
             ui.slider(value=self._settle,
                       on_change=self._value(self._set_settle, refresh=True),
                       minimum=int(self.MIN_SETTLE),
                       maximum=int(self.MAX_SETTLE),
                       steps=int(self.MAX_SETTLE - self.MIN_SETTLE),
-                      title="⏱  settle: {:.1f} с".format(self._settle)),
+                      title="⏱  settle: {:.1f} s".format(self._settle)),
             ui.checkbox(checked=self._use_adaptive_settle,
                         on_change=self._value(self._toggle_adaptive,
                                               refresh=True),
-                        title="Адаптивный settle",
-                        subtitle="Подстраивать паузу",
+                        title="Adaptive settle",
+                        subtitle="Auto-adjust the pause",
                         enabled=available),
             ui.checkbox(checked=self._use_ssid_gen,
                         on_change=self._value(self._toggle_ssid_gen,
                                               refresh=True),
-                        title="Генератор из SSID",
-                        subtitle="Кандидаты по имени",
+                        title="Generator from SSID",
+                        subtitle="Candidates from the name",
                         enabled=available),
             ui.checkbox(checked=self._use_vendor_gen,
                         on_change=self._value(self._toggle_vendor_gen,
                                               refresh=True),
-                        title="Дефолты по вендору",
-                        subtitle="СНГ и мир",
+                        title="Vendor defaults",
+                        subtitle="CIS and worldwide",
                         enabled=available),
             ui.checkbox(checked=self._use_ru_gen,
                         on_change=self._value(self._toggle_ru_gen,
                                               refresh=True),
-                        title="Русские паттерны",
-                        subtitle="Имена, транслит, годы",
+                        title="Russian patterns",
+                        subtitle="Names, translit, years",
                         enabled=available),
             ui.checkbox(checked=self._use_morph,
                         on_change=self._value(self._toggle_morph,
                                               refresh=True),
-                        title="Морфинг (leet)",
+                        title="Morphing (leet)",
                         subtitle="a→4, e→3, o→0",
                         enabled=available),
             ui.checkbox(checked=self._resume_enabled,
                         on_change=self._value(self._toggle_resume,
                                               refresh=True),
-                        title="Сохранять прогресс",
+                        title="Save progress",
                         enabled=available),
             ui.checkbox(checked=self._notify_on_found,
                         on_change=self._value(self._toggle_notify,
                                               refresh=True),
-                        title="Уведомление при находке",
+                        title="Notify when found",
                         enabled=available),
         ]
 
@@ -3412,45 +3412,45 @@ class FastWiFiBruteforce(BasePlugin):
                 ui.checkbox(checked=self._use_mac_spoof,
                             on_change=self._value(self._toggle_mac_spoof,
                                                   refresh=True),
-                            title="Смена MAC",
-                            subtitle="Обход rate-limit",
+                            title="MAC spoofing",
+                            subtitle="Rate-limit bypass",
                             enabled=available),
                 ui.slider(value=self._spoof_every,
                           on_change=self._value(self._set_spoof_every,
                                                 refresh=True),
                           minimum=5, maximum=50, steps=9,
-                          title="MAC каждые {} попыток".format(
+                          title="MAC every {} attempts".format(
                               self._spoof_every)),
             ])
 
         audit_children.append(ui.text(
-            "Пауза: {:.2f} с. Минимум settle: {} с.".format(
+            "Pause: {:.2f} s. Minimum settle: {} s.".format(
                 self.INTER_ATTEMPT_DELAY, int(self.MIN_SETTLE)),
             "bodySmall", color="secondary"))
 
         if missing:
             audit_children.append(ui.text(
-                "Не хватает:\n" + "\n".join(missing),
+                "Missing:\n" + "\n".join(missing),
                 "bodySmall", color="warning"))
 
         if self._shell_mode == "none":
             audit_children.append(ui.row([
-                self._button(ui, "❓ Как включить перебор", self._toggle_help,
+                self._button(ui, "❓ How to enable bruteforce", self._toggle_help,
                              style="filled"),
-                self._button(ui, "🔧 Диагностика", self._launch,
+                self._button(ui, "🔧 Diagnostics", self._launch,
                              self._diagnose, enabled=available),
             ]))
         else:
             audit_children.append(ui.row([
-                self._button(ui, "▶️  Начать", self._start_audit,
+                self._button(ui, "▶️  Start", self._start_audit,
                              enabled=available, style=start_style),
-                self._button(ui, "⏹  Стоп", self._stop_work,
+                self._button(ui, "⏹  Stop", self._stop_work,
                              enabled=self._busy, style="text"),
             ]))
             audit_children.append(ui.row([
-                self._button(ui, "🔧  Диагностика", self._launch,
+                self._button(ui, "🔧  Diagnostics", self._launch,
                              self._diagnose, enabled=available),
-                self._button(ui, "📡  К сетям", self._go, "networks",
+                self._button(ui, "📡  To networks", self._go, "networks",
                              enabled=available),
             ]))
             if self._root_available:
@@ -3461,13 +3461,13 @@ class FastWiFiBruteforce(BasePlugin):
         children.append(ui.card(audit_children))
 
         manual_children = [
-            ui.text("🧪  ТЕСТ ОДНОГО ПАРОЛЯ", "labelSmall",
+            ui.text("🧪  SINGLE PASSWORD TEST", "labelSmall",
                     color="secondary"),
             ui.text_field(value=self._manual_password,
                           on_change=self._value(self._set_manual),
-                          label="Пароль"),
+                          label="Password"),
             ui.row([
-                self._button(ui, "▶️  Проверить", self._test_single_password,
+                self._button(ui, "▶️  Test", self._test_single_password,
                              enabled=(available and not self._manual_busy
                                       and self._shell_mode != "none"),
                              style="filled"),
@@ -3476,7 +3476,7 @@ class FastWiFiBruteforce(BasePlugin):
         if self._manual_result:
             color = ("success" if "✅" in self._manual_result
                      else "error" if "❌" in self._manual_result
-                     or "Ошибка" in self._manual_result
+                     or "Error" in self._manual_result
                      else "warning")
             manual_children.append(ui.text(
                 self._manual_result, "bodyMedium", color=color))
@@ -3485,17 +3485,17 @@ class FastWiFiBruteforce(BasePlugin):
         if self._show_help:
             children.append(ui.alert_dialog(
                 show=True,
-                title="Как включить перебор",
+                title="How to enable bruteforce",
                 message=(
-                    "Без root и Shizuku доступен только просмотр: "
-                    "сканирование, RSSI, словари.\n\n"
-                    "• Shizuku: установите приложение Shizuku, "
-                    "запустите сервис (через ADB, Wi-Fi ADB, "
-                    "или сплит-скрин), дайте разрешение Dolphy.\n\n"
-                    "• Root: прошейте Magisk или KernelSU. "
-                    "С root работает fast switch через wpa_cli, "
-                    "MAC-спуфинг, PMKID и сохранённые Wi-Fi."),
-                confirm_text="Понятно",
+                    "Without root and Shizuku only viewing is available: "
+                    "scanning, RSSI, dictionaries.\n\n"
+                    "• Shizuku: install the Shizuku app, "
+                    "start the service (via ADB, Wi-Fi ADB, "
+                    "or split-screen), then grant Dolphy permission.\n\n"
+                    "• Root: flash Magisk or KernelSU. "
+                    "With root the wpa_cli fast switch works, "
+                    "plus MAC spoofing, PMKID and saved Wi-Fi."),
+                confirm_text="Got it",
                 on_confirm=self._bind(self._toggle_help),
                 on_dismiss=self._bind(self._toggle_help),
                 cancelable=True,
@@ -3511,13 +3511,13 @@ class FastWiFiBruteforce(BasePlugin):
             "shell" if self._shell_mode in ("shizuku", "root") else "api")
 
         children = [ui.card([
-            ui.text("📡  СЕТИ РЯДОМ", "labelSmall", color="secondary"),
-            ui.text("Источник: " + source, "bodySmall", color="secondary"),
-            ui.text("Последнее: " + (self._scan_time or "ещё не было"),
+            ui.text("📡  NETWORKS NEARBY", "labelSmall", color="secondary"),
+            ui.text("Source: " + source, "bodySmall", color="secondary"),
+            ui.text("Last: " + (self._scan_time or "never yet"),
                     "bodySmall", color="secondary"),
             self._button(ui,
-                         "⏳ Сканирую…" if self._scanning
-                         else "🔍  Сканировать",
+                         "⏳ Scanning…" if self._scanning
+                         else "🔍  Scan",
                          self._begin_scan, enabled=available,
                          style="filled"),
         ])]
@@ -3525,7 +3525,7 @@ class FastWiFiBruteforce(BasePlugin):
         children.append(ui.text_field(
             value=self._network_filter,
             on_change=self._value(self._set_filter, refresh=True),
-            label="🔎  Фильтр по SSID или BSSID"))
+            label="🔎  Filter by SSID or BSSID"))
 
         query = self._network_filter.strip().casefold()
         visible = [item for item in networks
@@ -3534,18 +3534,18 @@ class FastWiFiBruteforce(BasePlugin):
                    or query in item["bssid"].casefold()]
 
         if networks:
-            children.append(ui.text("Показано: {} / {}".format(
+            children.append(ui.text("Shown: {} / {}".format(
                 len(visible), len(networks)), "bodySmall", color="secondary"))
 
         if not visible:
             if query and networks:
-                msg = "🔍  По фильтру пусто"
+                msg = "🔍  Nothing matches the filter"
             elif self._scanning:
-                msg = "⏳  Сканирую…"
+                msg = "⏳  Scanning…"
             elif self._scan_attempted:
-                msg = "⚠️  Нет результатов"
+                msg = "⚠️  No results"
             else:
-                msg = "📡  Нажмите «Сканировать»"
+                msg = "📡  Press \"Scan\""
             children.append(ui.card([ui.text(msg, "bodyMedium",
                                              color="secondary")]))
 
@@ -3554,7 +3554,7 @@ class FastWiFiBruteforce(BasePlugin):
             selected = (bool(selected_bssid)
                         and network["bssid"] == selected_bssid)
             hidden = not network["ssid"]
-            name = network["ssid"] or "🔒 Скрытая"
+            name = network["ssid"] or "🔒 Hidden"
             sec = network["security"]
             sec_icon = self.SECURITY_EMOJI.get(sec, "❔")
             sec_name = self.SECURITY_NAMES.get(sec, "—")
@@ -3582,12 +3582,12 @@ class FastWiFiBruteforce(BasePlugin):
 
             if hidden:
                 card_children.append(ui.text(
-                    "⚠️  SSID нет — выбрать нельзя",
+                    "⚠️  No SSID — cannot select",
                     "bodySmall", color="warning"))
 
             card_children.append(self._button(
                 ui,
-                "✓  Выбрана" if selected else "✅  Выбрать",
+                "✓  Selected" if selected else "✅  Select",
                 self._select_network, dict(network),
                 enabled=available and not hidden,
                 style="filled" if selected else "tonal"))
@@ -3595,14 +3595,14 @@ class FastWiFiBruteforce(BasePlugin):
             children.append(ui.card(card_children))
 
         children.append(ui.button(
-            "🔼  Скрыть ответ" if self._show_raw else "📄  Ответ",
+            "🔼  Hide reply" if self._show_raw else "📄  Reply",
             self._bind(self._toggle_raw), style="text"))
 
         if self._show_raw:
             children.append(ui.card([
-                ui.text("Не разобрано: {}".format(
+                ui.text("Unparsed: {}".format(
                     self._scan_unparsed), "bodySmall", color="secondary"),
-                ui.text((self._scan_raw or "(пусто)")[:3000],
+                ui.text((self._scan_raw or "(empty)")[:3000],
                         "labelSmall", color="secondary"),
             ]))
 
@@ -3613,25 +3613,25 @@ class FastWiFiBruteforce(BasePlugin):
         available = not self._busy
 
         children = [ui.card([
-            ui.text("📚  СЛОВАРИ", "labelSmall", color="secondary"),
-            ui.text("UTF-8 · до 10 МБ · до 16 · до {:,} паролей".format(
+            ui.text("📚  DICTIONARIES", "labelSmall", color="secondary"),
+            ui.text("UTF-8 · up to 10 MB · up to 16 · up to {:,} passwords".format(
                 self.MAX_PASSWORDS).replace(",", " "),
                 "bodySmall", color="secondary"),
             ui.row([
-                self._button(ui, "📂  Файл", self._open_browser,
+                self._button(ui, "📂  File", self._open_browser,
                              enabled=available, style="filled"),
-                self._button(ui, "🔍  Найти .txt", self._go, "search",
+                self._button(ui, "🔍  Find .txt", self._go, "search",
                              enabled=available),
             ]),
-            self._button(ui, "📋  Импорт из буфера",
+            self._button(ui, "📋  Import from clipboard",
                          self._import_from_clipboard,
                          enabled=available, style="tonal"),
         ])]
 
         if not self._dicts:
             children.append(ui.card([
-                ui.text("📭  Словарей нет", "titleMedium"),
-                ui.text("Открой Download или найди .txt",
+                ui.text("📭  No dictionaries", "titleMedium"),
+                ui.text("Open Download or find a .txt",
                         "bodySmall", color="secondary"),
             ]))
 
@@ -3640,8 +3640,8 @@ class FastWiFiBruteforce(BasePlugin):
             valid = item.get("valid")
             enabled = path in self._enabled_dicts
             mark = "✅" if enabled else "⭕"
-            detail = ("Будет перечитан" if valid is None
-                      else "Строк: {} · валидных: {}".format(count, valid))
+            detail = ("Will be re-read" if valid is None
+                      else "Lines: {} · valid: {}".format(count, valid))
 
             children.append(ui.card([
                 ui.text(mark + "  " + item["name"], "titleMedium"),
@@ -3649,12 +3649,12 @@ class FastWiFiBruteforce(BasePlugin):
                 ui.text(path, "labelSmall", color="muted"),
                 ui.row([
                     self._button(ui,
-                                 "🚫  Отключить" if enabled else "✅  Включить",
+                                 "🚫  Disable" if enabled else "✅  Enable",
                                  lambda p=path, e=enabled:
                                  self._enable_dictionary(p, not e),
                                  enabled=available,
                                  style="tonal" if enabled else "filled"),
-                    self._button(ui, "🗑  Убрать", self._delete_dictionary,
+                    self._button(ui, "🗑  Remove", self._delete_dictionary,
                                  path, enabled=available, style="text"),
                 ]),
             ]))
@@ -3668,15 +3668,15 @@ class FastWiFiBruteforce(BasePlugin):
                   else os.path.dirname(self._folder))
 
         children = [
-            ui.button("←  К словарям", self._bind(self._go, "dicts"),
+            ui.button("←  Back to dictionaries", self._bind(self._go, "dicts"),
                       style="filled"),
             ui.card([
-                ui.text("📂  ФАЙЛЫ", "labelSmall", color="secondary"),
+                ui.text("📂  FILES", "labelSmall", color="secondary"),
                 ui.text(self._folder, "bodyMedium", color="primary"),
                 ui.row([
-                    self._button(ui, "⬆  Выше", self._open_browser, parent,
+                    self._button(ui, "⬆  Up", self._open_browser, parent,
                                  enabled=available),
-                    self._button(ui, "🔍  Поиск", self._go, "search",
+                    self._button(ui, "🔍  Search", self._go, "search",
                                  enabled=available),
                 ]),
                 ui.row([
@@ -3700,12 +3700,12 @@ class FastWiFiBruteforce(BasePlugin):
 
             if is_folder:
                 cb = self._bind(self._open_browser, path)
-                label = "📂  Открыть"
+                label = "📂  Open"
                 emoji = "📁"
             else:
                 cb = self._bind(self._launch,
                                 lambda p=path: self._import_dictionary(p))
-                label = "➕  Добавить"
+                label = "➕  Add"
                 emoji = "📄"
 
             children.append(ui.card([
@@ -3715,7 +3715,7 @@ class FastWiFiBruteforce(BasePlugin):
 
         if visible == 0:
             children.append(ui.card([
-                ui.text("📭  В папке нет .txt",
+                ui.text("📭  No .txt files in the folder",
                         "bodyMedium", color="secondary"),
             ]))
 
@@ -3725,22 +3725,22 @@ class FastWiFiBruteforce(BasePlugin):
     def _search_ui(self, ui):
         available = not self._busy
         children = [
-            ui.button("←  К словарям", self._bind(self._go, "dicts"),
+            ui.button("←  Back to dictionaries", self._bind(self._go, "dicts"),
                       style="filled"),
             ui.card([
-                ui.text("🔍  ПОИСК .TXT", "labelSmall", color="secondary"),
+                ui.text("🔍  .TXT SEARCH", "labelSmall", color="secondary"),
                 ui.text_field(value=self._query,
                               on_change=self._value(self._set_query, refresh=True),
-                              label="Часть имени файла"),
+                              label="Part of the file name"),
                 ui.slider(value=self._depth,
                           on_change=self._value(self._set_depth, refresh=True),
                           minimum=2, maximum=6, steps=3,
-                          title="Глубина: {}".format(self._depth)),
+                          title="Depth: {}".format(self._depth)),
                 ui.row([
-                    self._button(ui, "🔍  Искать", self._launch,
+                    self._button(ui, "🔍  Search", self._launch,
                                  lambda: self._search_files(False),
                                  enabled=available, style="filled"),
-                    self._button(ui, "📄  Все .txt", self._launch,
+                    self._button(ui, "📄  All .txt", self._launch,
                                  lambda: self._search_files(True),
                                  enabled=available),
                 ]),
@@ -3748,19 +3748,19 @@ class FastWiFiBruteforce(BasePlugin):
         ]
 
         if self._results:
-            children.append(ui.text("Найдено: {}".format(len(self._results)),
+            children.append(ui.text("Found: {}".format(len(self._results)),
                                     "titleMedium", color="success"))
             for path in list(self._results):
                 children.append(ui.card([
                     ui.text("📄  " + os.path.basename(path), "titleMedium"),
                     ui.text(path, "labelSmall", color="muted"),
-                    self._button(ui, "➕  Добавить", self._launch,
+                    self._button(ui, "➕  Add", self._launch,
                                  lambda p=path: self._import_dictionary(p),
                                  enabled=available, style="filled"),
                 ]))
         else:
             children.append(ui.card([
-                ui.text("Ничего не найдено", "bodyMedium",
+                ui.text("Nothing found", "bodyMedium",
                         color="secondary"),
             ]))
 
@@ -3770,14 +3770,14 @@ class FastWiFiBruteforce(BasePlugin):
     def _saved_ui(self, ui):
         available = not self._busy
         children = [
-            ui.button("←  На главную", self._bind(self._go, "main"),
+            ui.button("←  Home", self._bind(self._go, "main"),
                       style="filled"),
             ui.card([
-                ui.text("🔓  СОХРАНЁННЫЕ WI-FI", "labelSmall",
+                ui.text("🔓  SAVED WI-FI", "labelSmall",
                         color="secondary"),
-                ui.text("Чтение WifiConfigStore.xml (root)",
+                ui.text("Reads WifiConfigStore.xml (root)",
                         "bodySmall", color="secondary"),
-                self._button(ui, "🔄  Обновить",
+                self._button(ui, "🔄  Refresh",
                              self._refresh_saved_wifi,
                              enabled=available, style="filled"),
             ]),
@@ -3788,17 +3788,17 @@ class FastWiFiBruteforce(BasePlugin):
 
         if not self._root_available:
             children.append(ui.card([
-                ui.text("⚠️  Требуется root", "titleMedium",
+                ui.text("⚠️  Root required", "titleMedium",
                         color="warning"),
             ]))
         elif not items:
             children.append(ui.card([
-                ui.text("📭  Ничего не прочитано", "bodyMedium",
+                ui.text("📭  Nothing read", "bodyMedium",
                         color="secondary"),
-                ui.text("Нажмите «Обновить»", "bodySmall", color="muted"),
+                ui.text("Press \"Refresh\"", "bodySmall", color="muted"),
             ]))
         else:
-            children.append(ui.text("Найдено: {}".format(len(items)),
+            children.append(ui.text("Found: {}".format(len(items)),
                                     "titleMedium", color="success"))
             for item in items[:50]:
                 ssid = item.get("ssid", "")
@@ -3813,14 +3813,14 @@ class FastWiFiBruteforce(BasePlugin):
                     ui.text("BSSID: " + (item.get("bssid") or "—"),
                             "labelSmall", color="muted"),
                     ui.row([
-                        self._button(ui, "👁 Скрыть" if show else "👁 Показать",
+                        self._button(ui, "👁 Hide" if show else "👁 Show",
                                      lambda s=ssid: self._toggle_saved_psk(s),
                                      style="tonal"),
-                        self._button(ui, "📋  Скопировать",
+                        self._button(ui, "📋  Copy",
                                      self._bind(self._copy_saved_psk, psk),
                                      enabled=available, style="tonal"),
                     ]),
-                    ui.button("🎯  Выбрать эту сеть",
+                    ui.button("🎯  Select this network",
                               self._bind(self._use_saved_as_target, item),
                               enabled=available, style="filled"),
                 ]))
@@ -3832,9 +3832,9 @@ class FastWiFiBruteforce(BasePlugin):
         try:
             android = self.api.getAndroid()
             if android.clipboardSet(psk):
-                self._toast("PSK скопирован")
+                self._toast("PSK copied")
             else:
-                self._toast("Не удалось")
+                self._toast("Failed")
         except Exception as exc:
             self._log("error", "copy saved: " + str(exc)[:150])
 
@@ -3843,7 +3843,7 @@ class FastWiFiBruteforce(BasePlugin):
             ssid = item.get("ssid", "")
             bssid = item.get("bssid", "")
             if not ssid:
-                self._toast("Нет SSID")
+                self._toast("No SSID")
                 return
             self._network = {
                 "ssid": ssid, "bssid": bssid or "",
@@ -3854,9 +3854,9 @@ class FastWiFiBruteforce(BasePlugin):
             self._found_password = item.get("psk", "")
             self._reveal = False
             self._page = "main"
-            self._outcome = "Сеть: " + ssid
+            self._outcome = "Network: " + ssid
             self._save()
-            self._toast("Цель: " + ssid)
+            self._toast("Target: " + ssid)
         except Exception as exc:
             self._log("error", "use saved: " + str(exc)[:150])
 
@@ -3867,7 +3867,7 @@ class FastWiFiBruteforce(BasePlugin):
         except Exception:
             samples = []
 
-        ssid = self._text(self._network.get("ssid")) or "Сеть не выбрана"
+        ssid = self._text(self._network.get("ssid")) or "No network selected"
 
         if not samples:
             html = (
@@ -3881,9 +3881,9 @@ class FastWiFiBruteforce(BasePlugin):
                 '</style></head><body>'
                 '<div style="font-size:40px">📈</div>'
                 '<div style="margin-top:20px;font-size:15px">'
-                'Нет данных RSSI</div>'
+                'No RSSI data</div>'
                 '<div style="margin-top:8px;font-size:12px;color:#7a6d99">'
-                'Выберите сеть — сбор каждые 2 с</div>'
+                'Select a network — sampling every 2 s</div>'
                 '</body></html>'
             )
         else:
@@ -3989,7 +3989,7 @@ class FastWiFiBruteforce(BasePlugin):
                 '  ctx.fill();'
                 '  ctx.fillStyle = "#8f82a8";'
                 '  ctx.font = "11px monospace";'
-                '  ctx.fillText("время (с)", W - padR - 60, H - 10);'
+                '  ctx.fillText("time (s)", W - padR - 60, H - 10);'
                 '}'
                 'window.addEventListener("resize", function(){'
                 '  resize();'
@@ -4004,13 +4004,13 @@ class FastWiFiBruteforce(BasePlugin):
             ui.card([
                 ui.text("📈  RSSI", "labelSmall", color="secondary"),
                 ui.text(ssid, "titleMedium"),
-                ui.text("Обновление 2 с · до {} точек".format(
+                ui.text("Refresh every 2 s · up to {} points".format(
                     self.MAX_RSSI_SAMPLES), "bodySmall", color="secondary"),
                 ui.row([
-                    self._button(ui, "🗑  Очистить",
+                    self._button(ui, "🗑  Clear",
                                  self._clear_rssi_samples,
                                  enabled=not self._busy),
-                    self._button(ui, "↻  Обновить",
+                    self._button(ui, "↻  Refresh",
                                  lambda: self._refresh(force=True),
                                  style="text"),
                 ]),
@@ -4024,7 +4024,7 @@ class FastWiFiBruteforce(BasePlugin):
         except Exception as exc:
             self._log("error", "graph webview: " + str(exc)[:200])
             children.append(ui.card([
-                ui.text("График недоступен", "bodyMedium", color="error"),
+                ui.text("Chart unavailable", "bodyMedium", color="error"),
             ]))
 
         children.append(self._bottom_nav(ui))
@@ -4033,18 +4033,18 @@ class FastWiFiBruteforce(BasePlugin):
     def _clear_rssi_samples(self):
         with self._rssi_lock:
             self._rssi_samples = []
-        self._toast("График очищен")
+        self._toast("Chart cleared")
 
     def _qr_ui(self, ui):
         if not self._found_password:
             children = [
-                ui.button("←  На главную", self._bind(self._go, "main"),
+                ui.button("←  Home", self._bind(self._go, "main"),
                           style="filled"),
                 ui.card([
                     ui.text("🔳  QR", "labelSmall", color="secondary"),
-                    ui.text("Сначала нужен пароль", "bodyMedium",
+                    ui.text("A password is needed first", "bodyMedium",
                             color="secondary"),
-                    self._button(ui, "🏠  К обзору", self._go, "main",
+                    self._button(ui, "🏠  To overview", self._go, "main",
                                  style="filled"),
                 ]),
                 self._bottom_nav(ui),
@@ -4059,7 +4059,7 @@ class FastWiFiBruteforce(BasePlugin):
             return (str(s).replace("&", "&amp;").replace("<", "&lt;")
                     .replace(">", "&gt;").replace('"', "&quot;"))
 
-        # Локальный генератор QR на JS (без внешних API)
+        # Local QR generator in JS (no external APIs)
         qr_js = """
         var qrcode = function () {
             var qrcode = function (typeNumber, errorCorrectionLevel) {
@@ -4553,12 +4553,12 @@ class FastWiFiBruteforce(BasePlugin):
         )
 
         children = [
-            ui.button("←  На главную", self._bind(self._go, "main"),
+            ui.button("←  Home", self._bind(self._go, "main"),
                       style="filled"),
             ui.card([
-                ui.text("🔳  QR ПАРОЛЯ", "labelSmall", color="secondary"),
+                ui.text("🔳  PASSWORD QR", "labelSmall", color="secondary"),
                 ui.text(ssid, "titleMedium"),
-                ui.text("Отсканируйте другим телефоном (генерация на устройстве)",
+                ui.text("Scan with another phone (generated on the device)",
                         "bodySmall", color="secondary"),
             ]),
         ]
@@ -4570,18 +4570,18 @@ class FastWiFiBruteforce(BasePlugin):
         except Exception as exc:
             self._log("error", "qr webview: " + str(exc)[:200])
             children.append(ui.card([
-                ui.text("QR недоступен", "bodyMedium", color="error"),
+                ui.text("QR unavailable", "bodyMedium", color="error"),
                 ui.text(wifi_str, "bodySmall", color="muted"),
             ]))
 
         children.append(ui.card([
-            ui.text("💡  ФОРМАТ", "labelSmall", color="secondary"),
-            ui.text("WIFI:S:<SSID>;T:WPA;P:<пароль>;;",
+            ui.text("💡  FORMAT", "labelSmall", color="secondary"),
+            ui.text("WIFI:S:<SSID>;T:WPA;P:<password>;;",
                     "bodySmall", color="secondary"),
             ui.row([
-                self._button(ui, "📤  Поделиться", self._share_candidate,
+                self._button(ui, "📤  Share", self._share_candidate,
                              style="tonal"),
-                self._button(ui, "📋  Копировать", self._copy_wifi_string,
+                self._button(ui, "📋  Copy", self._copy_wifi_string,
                              style="tonal"),
             ]),
         ]))
@@ -4594,21 +4594,21 @@ class FastWiFiBruteforce(BasePlugin):
             logs = list(self._logs)
 
         children = [ui.card([
-            ui.text("📋  ЖУРНАЛ", "labelSmall", color="secondary"),
-            ui.text("Команды скрыты; ответы сохранены",
+            ui.text("📋  LOG", "labelSmall", color="secondary"),
+            ui.text("Commands hidden; replies kept",
                     "bodySmall", color="secondary"),
             ui.row([
-                self._button(ui, "💾  Экспорт", self._launch,
+                self._button(ui, "💾  Export", self._launch,
                              self._export_logs, enabled=not self._busy,
                              style="filled"),
-                self._button(ui, "🗑  Очистить", self._clear_logs,
+                self._button(ui, "🗑  Clear", self._clear_logs,
                              style="text"),
             ]),
         ])]
 
         if not logs:
             children.append(ui.card([
-                ui.text("Пусто", "bodyMedium", color="secondary"),
+                ui.text("Empty", "bodyMedium", color="secondary"),
             ]))
             children.append(self._bottom_nav(ui))
             return children
@@ -4627,7 +4627,7 @@ class FastWiFiBruteforce(BasePlugin):
         children.append(ui.card(log_lines))
         if len(logs) > 80:
             children.append(ui.text(
-                "Показаны 80 последних.", "bodySmall", color="muted"))
+                "Showing the last 80.", "bodySmall", color="muted"))
 
         children.append(self._bottom_nav(ui))
         return children
@@ -4639,7 +4639,7 @@ class FastWiFiBruteforce(BasePlugin):
             if not self._ready:
                 return ui.scaffold(
                     title="Fast WiFi Bruteforce",
-                    content=ui.text(self._init_error or "Не готов",
+                    content=ui.text(self._init_error or "Not ready",
                                     "bodyMedium", color="warning"))
 
             if (not self._shell_checked_with_api
@@ -4648,7 +4648,7 @@ class FastWiFiBruteforce(BasePlugin):
                 try:
                     self._detect_shell_mode()
                     self._log("info",
-                              "shell mode после api: " + self._shell_mode)
+                              "shell mode after api: " + self._shell_mode)
                 except Exception as exc:
                     self._log("warning",
                               "detect api: " + str(exc)[:150])
@@ -4688,12 +4688,12 @@ class FastWiFiBruteforce(BasePlugin):
                 return ui.scaffold(
                     title="Fast WiFi Bruteforce",
                     content=ui.column([
-                        ui.text("Ошибка UI", "titleLarge", color="error"),
+                        ui.text("UI error", "titleLarge", color="error"),
                         ui.text(str(exc)[:300], "bodySmall", color="warning"),
-                        ui.button("🏠  На главную",
+                        ui.button("🏠  Home",
                                   self._bind(self._go, "main"),
                                   style="tonal"),
                     ], padding=16, spacing=10, fill_max_size=False))
             except Exception:
-                return ui.scaffold(title="Ошибка",
-                                   content=ui.text("UI сломан"))
+                return ui.scaffold(title="Error",
+                                   content=ui.text("UI broken"))

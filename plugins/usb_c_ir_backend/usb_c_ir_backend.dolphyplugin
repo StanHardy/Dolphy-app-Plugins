@@ -2,7 +2,7 @@ __id__ = "usb_c_ir_backend"
 __name__ = "USB-C IR Backend"
 __version__ = "1.0.4"
 __author__ = "Pinaplast"
-__description__ = "Стабильный backend для отправки штатных IR-сигналов через внешний USB-C IR-донгл, если он подключен. Если будут баги или ошибки, просьба скидывать их мне. Спасибо @LolkaMan за тест."
+__description__ = "Stable backend for sending stock IR signals through an external USB-C IR dongle when connected. If you hit any bugs or errors, please report them to me. Thanks to @LolkaMan for testing."
 __icon__ = "rounded:usb"
 __permissions__ = ["usb", "ir"]
 
@@ -723,7 +723,7 @@ class UsbCIrBackend(BasePlugin):
         now = time.time()
         if force or now - self._last_missing_log_at >= 15:
             self._last_missing_log_at = now
-            self._log("Донгл не найден, продолжаю поиск")
+            self._log("Dongle not found, still searching")
 
 
     def _log(self, line):
@@ -750,13 +750,13 @@ class UsbCIrBackend(BasePlugin):
 
     def screen_tv_hack_warning(self, ui, api, state):
         return ui.scaffold(
-            title="Взломать телевизор",
+            title="Hack the TV",
             content=ui.column(
                 [
                     ui.card(
                         [
-                            ui.text("Обязательно включи ВПН", "titleMedium"),
-                            ui.button("ВПН включён", lambda: self.navigate("tv_hack_rickroll")),
+                            ui.text("Make sure to enable VPN", "titleMedium"),
+                            ui.button("VPN enabled", lambda: self.navigate("tv_hack_rickroll")),
                         ]
                     ),
                 ],
@@ -768,7 +768,7 @@ class UsbCIrBackend(BasePlugin):
 
     def screen_tv_hack_rickroll(self, ui, api, state):
         return ui.scaffold(
-            title="Взлом телевизора",
+            title="TV Hack",
             content=ui.column(
                 [
                     ui.webview(url="https://www.youtube.com/watch?v=dQw4w9WgXcQ", fill_max_size=True),
@@ -801,15 +801,15 @@ class UsbCIrBackend(BasePlugin):
                         [
                             ui.text(status_text, "titleSmall"),
                             ui.text(proto_text, "bodySmall", "muted"),
-                            ui.button("Обновить", self._manual_rescan),
-                            ui.button("Взломать телевизор", lambda: self.navigate("tv_hack_warning")),
+                            ui.button("Refresh", self._manual_rescan),
+                            ui.button("Hack the TV", lambda: self.navigate("tv_hack_warning")),
                         ]
                     ),
                     ui.text("Recent log", "titleSmall"),
                     ui.log_panel("\n".join(self._log_lines[-40:]), max_height=300),
 
-                    ui.text("Плагин стабильно работает. Если будут баги или ошибки - просьба скидывать @Pinaplast457", "bodySmall", "muted"),
-                    ui.text("Спасибо @LolkaMan за тест", "bodySmall", "muted"),
+                    ui.text("The plugin works reliably. If you hit any bugs or errors, please report them to @Pinaplast457", "bodySmall", "muted"),
+                    ui.text("Thanks to @LolkaMan for testing", "bodySmall", "muted"),
                 ],
                 padding=16,
                 spacing=12,

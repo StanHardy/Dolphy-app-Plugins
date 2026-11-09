@@ -15,7 +15,7 @@ import itertools
 
 
 # ============================================================
-#  СЛОВАРИ И КОНСТАНТЫ
+#  DICTIONARIES AND CONSTANTS
 # ============================================================
 
 MAX_PER_LINE = 20000
@@ -25,8 +25,8 @@ BUILTIN_ALIASES = {
     "wi_fi_name": "__ssid__", "wi-fi_name": "__ssid__",
     "wifi_name": "__ssid__", "wifiname": "__ssid__",
     "ssid": "__ssid__", "network": "__ssid__", "net": "__ssid__",
-    "net_name": "__ssid__", "имя_сети": "__ssid__",
-    "year": "__year__", "this_year": "__year__", "год": "__year__",
+    "net_name": "__ssid__", "network_name": "__ssid__",
+    "year": "__year__", "this_year": "__year__", "yr": "__year__",
     "last_year": "__year_minus_1__", "year_1": "__year_minus_1__",
 }
 
@@ -95,41 +95,41 @@ BUNDLED_WIFI = [
 STRINGS = {
     "ru": {
         "title": "Wi-Fi Wordlist Lab",
-        "ssid_label": "Имя сети (SSID)",
-        "builtin_hint": "Встроенные: Wi_Fi_name, ssid, year, last_year",
-        "vendor_detected": "Производитель",
-        "limit": "Максимум паролей",
-        "vars": "Переменные",
-        "vars_empty": "Пока нет переменных",
-        "name": "Имя",
-        "value": "Значение",
-        "add": "Добавить",
-        "script_editor": "Редактор скрипта",
-        "script_label": "Скрипт",
-        "script_hint": "Одна строка = один шаблон. Пример: Wi_Fi_name+{0..99}",
-        "resolve": "Резолвить",
-        "clear": "Очистить",
-        "copy": "Копировать",
-        "save": "Сохранить файл",
-        "add_base_rules": "+ Базовые правила",
-        "result": "Результат",
-        "no_results": "Нет результатов",
-        "saved": "Сохранено",
-        "copied": "Скопировано",
-        "empty_name": "Имя пустое",
-        "builtin_alias": "Это встроенный алиас",
-        "invalid_char": "Недопустимые символы",
-        "invalid_ssid": "Сначала укажи SSID",
-        "bundled_count": "Встроенный список: %d паролей",
-        "reload_bundled": "Обновить",
-        "path": "Путь",
-        "error": "Ошибка",
-        "no_lines": "Нет строк. Добавьте ниже.",
-        "edit_line": "Редактирование строки #%d",
-        "new_line": "Новая строка",
-        "btn_add_line": "Добавить строку",
-        "btn_save": "Сохранить",
-        "base_added": "Добавлены базовые правила",
+        "ssid_label": "Network name (SSID)",
+        "builtin_hint": "Built-in: Wi_Fi_name, ssid, year, last_year",
+        "vendor_detected": "Vendor",
+        "limit": "Max passwords",
+        "vars": "Variables",
+        "vars_empty": "No variables yet",
+        "name": "Name",
+        "value": "Value",
+        "add": "Add",
+        "script_editor": "Script editor",
+        "script_label": "Script",
+        "script_hint": "One line = one template. Example: Wi_Fi_name+{0..99}",
+        "resolve": "Resolve",
+        "clear": "Clear",
+        "copy": "Copy",
+        "save": "Save file",
+        "add_base_rules": "+ Base rules",
+        "result": "Result",
+        "no_results": "No results",
+        "saved": "Saved",
+        "copied": "Copied",
+        "empty_name": "Empty name",
+        "builtin_alias": "Built-in alias",
+        "invalid_char": "Invalid characters",
+        "invalid_ssid": "Set SSID first",
+        "bundled_count": "Bundled list: %d passwords",
+        "reload_bundled": "Reload",
+        "path": "Path",
+        "error": "Error",
+        "no_lines": "No lines. Add below.",
+        "edit_line": "Editing line #%d",
+        "new_line": "New line",
+        "btn_add_line": "Add line",
+        "btn_save": "Save",
+        "base_added": "Base rules added",
     },
     "en": {
         "title": "Wi-Fi Wordlist Lab",
@@ -173,7 +173,7 @@ STRINGS = {
 
 
 # ============================================================
-#  ПЛАГИН
+#  PLUGIN
 # ============================================================
 
 class WifiWordlistLab(BasePlugin):
@@ -490,7 +490,7 @@ class WifiWordlistLab(BasePlugin):
         return s
 
     def _resolve_line(self, line):
-        # Убираем пробелы вокруг плюса, чтобы "Wi_Fi_name + base" работало как "Wi_Fi_name+base"
+        # Strip spaces around plus so "Wi_Fi_name + base" works like "Wi_Fi_name+base"
         line = line.replace(" + ", "+").replace("+ ", "+").replace(" +", "+")
         parts = line.split()
         if not parts: return
@@ -512,7 +512,7 @@ class WifiWordlistLab(BasePlugin):
             s = self._apply_rules("".join(combo), rules)
             if 8 <= len(s) <= 63 and s not in seen:
                 seen.add(s)
-                yield str(s) # Явное приведение к строке
+                yield str(s) # Explicit cast to string
                 count += 1
 
     # ---------------- generator ----------------
@@ -522,7 +522,7 @@ class WifiWordlistLab(BasePlugin):
         seen = set()
         count = 0
         
-        # 1. Сначала генерируем строго по порядку из скрипта
+        # 1. First generate strictly in script order
         for text in self._script_lines:
             for cand in self._resolve_line(text):
                 if cand in seen: continue
@@ -531,7 +531,7 @@ class WifiWordlistLab(BasePlugin):
                 count += 1
                 if count >= limit: return
                 
-        # 2. Затем встроенный список
+        # 2. Then the bundled list
         for pw in self._bundled:
             if pw in seen: continue
             seen.add(pw)
@@ -552,7 +552,7 @@ class WifiWordlistLab(BasePlugin):
                 "Wi_Fi_name c $1 $2 $3",
                 "Wi_Fi_name+{1000..9999}",
             ]
-            # Добавляем только те, которых еще нет
+            # Add only the ones not present yet
             for b in base:
                 if b not in self._script_lines:
                     self._script_lines.append(b)
@@ -710,14 +710,14 @@ class WifiWordlistLab(BasePlugin):
         try:
             children = []
             
-            # Кнопка добавления базовых правил
+            # Add-base-rules button
             children.append(ui.button(
                 self._t("add_base_rules"),
                 on_click=lambda *args: self._add_base_rules(),
                 style="tonal", fill_max_width=True
             ))
             
-            # Список строк с кнопками
+            # Line list with buttons
             if not self._script_lines:
                 children.append(ui.text(self._t("no_lines"), "bodySmall", color="muted"))
             else:
@@ -736,7 +736,7 @@ class WifiWordlistLab(BasePlugin):
                         ]
                     ))
             
-            # Поле добавления/редактирования
+            # Add/edit field
             btn_text = self._t("btn_save") if self._editing_line_idx >= 0 else self._t("btn_add_line")
             if self._editing_line_idx >= 0:
                 children.append(ui.text(self._t("edit_line") % (self._editing_line_idx + 1), "bodySmall", color="primary"))

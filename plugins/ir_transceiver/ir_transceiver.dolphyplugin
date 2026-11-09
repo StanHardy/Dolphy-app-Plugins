@@ -2,7 +2,7 @@ __id__ = "ir_transceiver"
 __name__ = "IR Transceiver"
 __version__ = "2.1.1"
 __author__ = "RamboDonaT (@Abamazanat)"
-__description__ = "Контролируй технику через ИК. Отправляй и записывай сигналы, создавай виртуальные пульты, импортируй из Flipper/Pronto/LIRC. Поддержка USB OTG, Audio IR, встроенного ИК и Wi-Fi ADB для Android TV."
+__description__ = "Control devices via IR. Send and learn signals, create virtual remotes, import from Flipper/Pronto/LIRC. Supports USB OTG, Audio IR, built-in IR, and Wi-Fi ADB for Android TV."
 __description_en__ = "Control devices via IR. Send and learn signals, create virtual remotes, import from Flipper/Pronto/LIRC. Supports USB OTG, Audio IR, built-in IR, and Wi-Fi ADB for Android TV."
 __icon__ = "rounded:settings_remote"
 __library__ = False
@@ -66,16 +66,16 @@ except NameError:
 
 
 _CYRILLIC_TO_LATIN = {
-    'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e', 'ё': 'yo', 'ж': 'zh',
-    'з': 'z', 'и': 'i', 'й': 'y', 'к': 'k', 'л': 'l', 'м': 'm', 'н': 'n', 'о': 'o',
-    'п': 'p', 'р': 'r', 'с': 's', 'т': 't', 'у': 'u', 'ф': 'f', 'х': 'kh', 'ц': 'ts',
-    'ч': 'ch', 'ш': 'sh', 'щ': 'shch', 'ъ': '', 'ы': 'y', 'ь': '', 'э': 'e', 'ю': 'yu',
-    'я': 'ya',
-    'А': 'A', 'Б': 'B', 'В': 'V', 'Г': 'G', 'Д': 'D', 'Е': 'E', 'Ё': 'Yo', 'Ж': 'Zh',
-    'З': 'Z', 'И': 'I', 'Й': 'Y', 'К': 'K', 'Л': 'L', 'М': 'M', 'Н': 'N', 'О': 'O',
-    'П': 'P', 'Р': 'R', 'С': 'S', 'Т': 'T', 'У': 'U', 'Ф': 'F', 'Х': 'Kh', 'Ц': 'Ts',
-    'Ч': 'Ch', 'Ш': 'Sh', 'Щ': 'Shch', 'Ъ': '', 'Ы': 'Y', 'Ь': '', 'Э': 'E', 'Ю': 'Yu',
-    'Я': 'Ya',
+    '\u0430': 'a', '\u0431': 'b', '\u0432': 'v', '\u0433': 'g', '\u0434': 'd', '\u0435': 'e', '\u0451': 'yo', '\u0436': 'zh',
+    '\u0437': 'z', '\u0438': 'i', '\u0439': 'y', '\u043a': 'k', '\u043b': 'l', '\u043c': 'm', '\u043d': 'n', '\u043e': 'o',
+    '\u043f': 'p', '\u0440': 'r', '\u0441': 's', '\u0442': 't', '\u0443': 'u', '\u0444': 'f', '\u0445': 'kh', '\u0446': 'ts',
+    '\u0447': 'ch', '\u0448': 'sh', '\u0449': 'shch', '\u044a': '', '\u044b': 'y', '\u044c': '', '\u044d': 'e', '\u044e': 'yu',
+    '\u044f': 'ya',
+    '\u0410': 'A', '\u0411': 'B', '\u0412': 'V', '\u0413': 'G', '\u0414': 'D', '\u0415': 'E', '\u0401': 'Yo', '\u0416': 'Zh',
+    '\u0417': 'Z', '\u0418': 'I', '\u0419': 'Y', '\u041a': 'K', '\u041b': 'L', '\u041c': 'M', '\u041d': 'N', '\u041e': 'O',
+    '\u041f': 'P', '\u0420': 'R', '\u0421': 'S', '\u0422': 'T', '\u0423': 'U', '\u0424': 'F', '\u0425': 'Kh', '\u0426': 'Ts',
+    '\u0427': 'Ch', '\u0428': 'Sh', '\u0429': 'Shch', '\u042a': '', '\u042b': 'Y', '\u042c': '', '\u042d': 'E', '\u042e': 'Yu',
+    '\u042f': 'Ya',
 }
 
 _MANGLE_LUT = tuple((~int(f"{i:08b}"[::-1], 2)) & 0xFF for i in range(256))
@@ -117,28 +117,28 @@ def validate_signal(frequency, pattern):
     """Reject damaged mark/space sequences instead of dropping durations."""
     def integer(value):
         if isinstance(value, bool):
-            raise ValueError("Логическое значение вместо числа")
+            raise ValueError("Boolean value instead of a number")
         if isinstance(value, int):
             return value
         if isinstance(value, str) and re.fullmatch(r"[0-9]+", value.strip()):
             return int(value)
-        raise ValueError("Ожидалось целое число")
+        raise ValueError("Expected an integer")
     frequency = integer(frequency)
     if not 15000 <= frequency <= 70000:
-        raise ValueError("Частота должна быть 15000–70000 Гц")
+        raise ValueError("Frequency must be 15000–70000 Hz")
     if not isinstance(pattern, (list, tuple)) or not 1 <= len(pattern) <= 8192:
-        raise ValueError("Нужно 1–8192 импульсов")
+        raise ValueError("Need 1–8192 pulses")
     durations = [integer(value) for value in pattern]
     if any(value <= 0 for value in durations) or sum(durations) > 5000000:
-        raise ValueError("Импульсы должны быть положительными; сигнал не длиннее 5 с")
+        raise ValueError("Pulses must be positive; signal no longer than 5 s")
     return frequency, durations
 
 
 class SignalAddResult(int):
     """
-    Результат добавления сигнала в библиотеку:
-    наследует int(1/0) для обратной совместимости с `if result:`
-    и предоставляет явный атрибут `reason` ('ok', 'duplicate', 'invalid', 'failed').
+    Result of adding a signal to the library:
+    inherits int(1/0) for backward compatibility with `if result:`
+    and provides an explicit `reason` attribute ('ok', 'duplicate', 'invalid', 'failed').
     """
     def __new__(cls, success, reason=""):
         obj = super().__new__(cls, 1 if success else 0)
@@ -757,7 +757,7 @@ class AudioIrTransmitter:
         # Antiparallel LED adapters emit on both halves of the audio waveform.
         tone = frequency_hz / 2.0
         if tone >= sample_rate / 2.0:
-            raise ValueError("Частота вне полосы аудиовыхода")
+            raise ValueError("Frequency outside the audio output band")
         pcm = array("h")
         elapsed_us = 0
         emitted = 0
@@ -829,9 +829,9 @@ class IrProtocolEngine:
             cleaned = cleaned[2:]
         cleaned = cleaned.upper()
         if not cleaned or not re.fullmatch(r"[0-9A-F]+", cleaned):
-            raise ValueError("Некорректный NEC HEX")
+            raise ValueError("Invalid NEC HEX")
         if len(cleaned) > 8:
-            raise ValueError("NEC HEX не должен превышать 8 символов (32 бита)")
+            raise ValueError("NEC HEX must not exceed 8 characters (32 bits)")
         val = int(cleaned, 16)
         if len(cleaned) <= 4 and not extended:
             addr = (val >> 8) & 0xFF
@@ -972,9 +972,9 @@ class IrProtocolEngine:
         addr = int(address)
         cmd = int(command)
         if not (0 <= addr <= 15):
-            raise ValueError("RCA: адрес должен быть в диапазоне 0..15 (4 бита)")
+            raise ValueError("RCA: address must be in the range 0..15 (4 bits)")
         if not (0 <= cmd <= 255):
-            raise ValueError("RCA: команда должна быть в диапазоне 0..255 (8 бит)")
+            raise ValueError("RCA: command must be in the range 0..255 (8 bits)")
         val = (addr << 20) | (cmd << 12) | (((~addr) & 0x0F) << 8) | ((~cmd) & 0xFF)
         p = [4000, 4000]
         for i in range(23, -1, -1):
@@ -1096,7 +1096,7 @@ class IrProtocolEngine:
             cleaned = cleaned[2:]
         val = int(cleaned, 16)
         if val < 0 or val >= (1 << 36):
-            raise ValueError("Samsung36: значение должно быть в диапазоне 36-бит (0..0xFFFFFFFFF)")
+            raise ValueError("Samsung36: value must be in the 36-bit range (0..0xFFFFFFFFF)")
         bits = f"{val:036b}"
         p = [4500, 4500]
         for b in bits[:16]:
@@ -1142,14 +1142,14 @@ class IrProtocolEngine:
         address = int(address)
         command = int(command)
         if not (0 <= address <= 31):
-            raise ValueError("Denon/Sharp: адрес должен быть в диапазоне 0..31 (5 бит)")
+            raise ValueError("Denon/Sharp: address must be in the range 0..31 (5 bits)")
         if not (0 <= command <= 255):
-            raise ValueError("Denon/Sharp: команда должна быть в диапазоне 0..255 (8 бит)")
-        # marker = 2 для Sharp (бит 14=1, бит 13=0), marker = 0 для Denon
+            raise ValueError("Denon/Sharp: command must be in the range 0..255 (8 bits)")
+        # marker = 2 for Sharp (bit 14=1, bit 13=0), marker = 0 for Denon
         marker = 2 if sharp else 0
         normal = address | ((command | (marker << 8)) << 5)
-        # Инвертируем команду (биты 5..12) и 2-битный маркер (биты 13..14): маска 0x7FE0.
-        # Адрес (биты 0..4) остаётся неизменным.
+        # Invert the command (bits 5..12) and the 2-bit marker (bits 13..14): mask 0x7FE0.
+        # The address (bits 0..4) remains unchanged.
         inverted = normal ^ 0x7FE0
         seq = []
         def append_frame(value, gap):
@@ -1165,7 +1165,7 @@ class IrProtocolEngine:
     def _lsb_bits(value, width):
         value = int(value)
         if value < 0 or value >= (1 << width):
-            raise ValueError(f"Значение вне диапазона ({width} бит)")
+            raise ValueError(f"Value out of range ({width} bits)")
         return [(value >> bit) & 1 for bit in range(width)]
 
     @staticmethod
@@ -1201,7 +1201,7 @@ class IrProtocolEngine:
                 + IrProtocolEngine._lsb_bits(command, 16)
             )
         else:
-            raise ValueError(f"Неизвестный протокол Flipper NEC: {protocol}")
+            raise ValueError(f"Unknown Flipper NEC protocol: {protocol}")
 
         seq = [9000, 4500]
         for b in bits:
@@ -1237,7 +1237,7 @@ class IrProtocolEngine:
         vendor = re.fullmatch(r"(?:0[xX])?([0-9a-fA-F]{4})", str(vendor_hex).strip())
         data = re.fullmatch(r"(?:0[xX])?([0-9a-fA-F]{8})", str(data_hex).strip())
         if not vendor or not data:
-            raise ValueError("Panasonic: нужны 4 hex символа производителя и 8 символов данных")
+            raise ValueError("Panasonic: requires 4 hex chars of vendor and 8 chars of data")
         raw = bytes.fromhex(vendor[1] + data[1])
         wire = [int(f"{value:08b}"[::-1], 2) for value in raw]
         return IrProtocolEngine._kaseikyo_pattern(wire, 37000, 163296, 74736)
@@ -1246,7 +1246,7 @@ class IrProtocolEngine:
     def encode_kaseikyo_message(address, command):
         # Flipper parsed fields: id2/vendor16/genre4/genre4 and command10.
         if not 0 <= address < (1 << 26) or not 0 <= command < (1 << 10):
-            raise ValueError("Kaseikyo: адрес 26 бит, команда 10 бит")
+            raise ValueError("Kaseikyo: address is 26 bits, command is 10 bits")
         vendor = (address >> 8) & 0xFFFF
         b0, b1 = vendor & 255, vendor >> 8
         parity = b0 ^ b1
@@ -1260,7 +1260,7 @@ class IrProtocolEngine:
         vendor_parity = bytes_to_send[0] ^ bytes_to_send[1]
         vendor_parity = (vendor_parity & 15) ^ (vendor_parity >> 4)
         if (bytes_to_send[2] & 15) != vendor_parity or bytes_to_send[5] != (bytes_to_send[2] ^ bytes_to_send[3] ^ bytes_to_send[4]):
-            raise ValueError("Kaseikyo/Panasonic: неверная контрольная сумма")
+            raise ValueError("Kaseikyo/Panasonic: invalid checksum")
         p = [3456, 1728]
         for b in bytes_to_send:
             for i in range(8):
@@ -1376,11 +1376,11 @@ class MultiFormatRemoteParser:
     def analyze(text):
         """Pure preview: accepted entries plus explicit per-entry warnings."""
         text = str(text or "").strip()
-        result = {"format": "Неизвестный", "signals": [], "warnings": []}
+        result = {"format": "Unknown", "signals": [], "warnings": []}
         if not text:
             return result
         if len(text.encode("utf-8")) > MultiFormatRemoteParser.MAX_TEXT_BYTES:
-            result["warnings"].append("Файл больше 2 МБ")
+            result["warnings"].append("File larger than 2 MB")
             return result
 
         def add(name, frequency, pattern, metadata=None):
@@ -1403,21 +1403,21 @@ class MultiFormatRemoteParser:
                 data = json.loads(text)
                 if isinstance(data, dict) and "signals" in data:
                     if data.get("schema", "ir_transceiver") != "ir_transceiver" or data.get("version", 1) != 1:
-                        raise ValueError("Неподдерживаемая версия резервной копии")
+                        raise ValueError("Unsupported backup version")
                     data = data["signals"]
                 items = data if isinstance(data, list) else [data]
                 for index, item in enumerate(items):
                     if not isinstance(item, dict) or "pattern" not in item:
-                        result["warnings"].append(f"JSON #{index + 1}: нет массива pattern")
+                        result["warnings"].append(f"JSON #{index + 1}: no pattern array")
                         continue
                     add(item.get("name", "JSON_Signal"), item.get("frequency", 38000), item["pattern"], item)
             elif text.lower().startswith("<"):
                 result["format"] = "IRPLUS XML"
                 if "<!doctype" in text.lower() or "<!entity" in text.lower():
-                    raise ValueError("XML с DTD/сущностями не поддерживается")
+                    raise ValueError("XML with DTD/entities is not supported")
                 root = ET.fromstring(text)
                 if root.tag.lower() != "irplus":
-                    raise ValueError("Ожидался корневой элемент irplus")
+                    raise ValueError("Expected irplus root element")
                 for device in root.findall("device"):
                     fmt = device.get("format", "").upper()
                     for button in device.findall("button"):
@@ -1434,7 +1434,7 @@ class MultiFormatRemoteParser:
                             except ValueError as error:
                                 result["warnings"].append(f"{name}: {error}")
                         else:
-                            result["warnings"].append(f"{name}: IRPLUS {fmt or 'без формата'} не поддерживается; нужен RAW или Pronto")
+                            result["warnings"].append(f"{name}: IRPLUS {fmt or 'no format'} not supported; need RAW or Pronto")
             elif "begin remote" in text.lower():
                 result["format"] = "LIRC"
                 MultiFormatRemoteParser._parse_lirc(text, add, result["warnings"])
@@ -1463,18 +1463,18 @@ class MultiFormatRemoteParser:
                                 frequency, pattern = MultiFormatRemoteParser._encode_flipper_parsed(proto, addr, cmd)
                                 add(name, frequency, pattern)
                         else:
-                            raise ValueError("Неизвестный type")
+                            raise ValueError("Unknown type")
                     except (ValueError, TypeError) as error:
                         result["warnings"].append(f"{name}: {error}")
             else:
                 result["format"] = "Pronto Hex"
                 pronto = ProntoHexDecoder.decode(text)
                 if pronto is None:
-                    raise ValueError("Нужен полный модулированный Pronto 0000 или поддерживаемый файл")
+                    raise ValueError("Need a complete modulated Pronto 0000 or a supported file")
                 add("Pronto_Signal", *pronto)
         except RecursionError:
             result["signals"] = []
-            result["warnings"].append("JSON содержит слишком глубокую вложенность")
+            result["warnings"].append("JSON contains too deep nesting")
         except (ValueError, TypeError, ET.ParseError) as error:
             result["warnings"].append(str(error))
         return result
@@ -1505,7 +1505,7 @@ class MultiFormatRemoteParser:
                             try:
                                 add(name, frequency, [int(token) for token in values], {"group": group})
                             except ValueError as error:
-                                warnings.append(f"{name}: некорректные raw_codes ({error})")
+                                warnings.append(f"{name}: invalid raw_codes ({error})")
                     for line in raw.group(1).splitlines():
                         tokens = line.split("#", 1)[0].split()
                         if not tokens:
@@ -1515,63 +1515,63 @@ class MultiFormatRemoteParser:
                             name = " ".join(tokens[1:]) or "Signal"
                             values = []
                         elif name is None:
-                            warnings.append("LIRC raw_codes: интервалы без имени")
+                            warnings.append("LIRC raw_codes: intervals without a name")
                         else:
                             values.extend(tokens)
                     flush_raw()
                     continue
                 flags = set("".join(config.get("flags", [])).upper().split("|")) - {""}
                 if flags - {"SPACE_ENC", "CONST_LENGTH"}:
-                    raise ValueError("LIRC flags не поддерживаются: " + "|".join(sorted(flags)))
+                    raise ValueError("LIRC flags not supported: " + "|".join(sorted(flags)))
                 unsupported = {"plead", "pre", "post", "foot", "toggle_bit", "toggle_bit_mask", "repeat_mask", "min_repeat"}
                 present = sorted(unsupported.intersection(config))
                 if present:
-                    raise ValueError("LIRC параметры не поддерживаются: " + ", ".join(present))
+                    raise ValueError("LIRC parameters not supported: " + ", ".join(present))
                 def number(key, default="0"):
                     return int(config.get(key, [default])[0], 0)
                 def pair(key):
                     values = config.get(key, [])
                     if len(values) != 2:
-                        raise ValueError(f"LIRC: нужны два значения {key}")
+                        raise ValueError(f"LIRC: need two values for {key}")
                     durations = [int(value, 0) for value in values]
                     if any(value <= 0 for value in durations):
-                        raise ValueError(f"LIRC: {key} должен содержать положительные интервалы")
+                        raise ValueError(f"LIRC: {key} must contain positive intervals")
                     return durations
                 bits = number("bits")
                 pre_bits, post_bits = number("pre_data_bits"), number("post_data_bits")
                 if not 1 <= bits <= 64 or not 0 <= pre_bits <= 64 or not 0 <= post_bits <= 64:
-                    raise ValueError("LIRC: некорректное число бит")
+                    raise ValueError("LIRC: invalid bit count")
                 one, zero = pair("one"), pair("zero")
                 header = pair("header") if "header" in config else []
                 codes = re.search(r"begin\s+codes\b(.*?)end\s+codes\b", block, re.I | re.S)
                 if not codes:
-                    raise ValueError("LIRC: нет codes или raw_codes")
+                    raise ValueError("LIRC: no codes or raw_codes")
                 for line in codes.group(1).splitlines():
                     parts = line.split("#", 1)[0].split()
                     if not parts:
                         continue
                     if len(parts) != 2:
-                        warnings.append("LIRC: ожидались имя и один код")
+                        warnings.append("LIRC: expected name and one code")
                         continue
                     try:
                         code = int(parts[1], 0)
                         pre, post = number("pre_data"), number("post_data")
                         if not 0 <= code < (1 << bits) or not 0 <= pre < (1 << pre_bits) or not 0 <= post < (1 << post_bits):
-                            raise ValueError("LIRC: код вне диапазона bits")
+                            raise ValueError("LIRC: code outside bits range")
                         value = (((pre << bits) | code) << post_bits) | post
                         pattern = list(header)
                         for bit in range(pre_bits + bits + post_bits - 1, -1, -1):
                             pattern.extend(one if (value >> bit) & 1 else zero)
                         trail = number("ptrail")
                         if trail < 0:
-                            raise ValueError("LIRC: отрицательный ptrail")
+                            raise ValueError("LIRC: negative ptrail")
                         if trail:
                             pattern.append(trail)
                         gap = number("gap", "45000")
                         if "CONST_LENGTH" in flags:
                             gap -= sum(pattern)
                         if gap < 0:
-                            raise ValueError("LIRC: отрицательный gap или период короче кадра")
+                            raise ValueError("LIRC: negative gap or period shorter than frame")
                         if len(pattern) % 2:
                             pattern.append(max(1, gap))
                         else:
@@ -1586,7 +1586,7 @@ class MultiFormatRemoteParser:
     def _parse_flipper_hex(hex_str):
         s = str(hex_str or "").strip().replace(" ", "")
         if not s or not re.fullmatch(r"(?:[0-9a-fA-F]{2}){1,4}", s):
-            raise ValueError("Некорректное hex поле Flipper")
+            raise ValueError("Invalid Flipper hex field")
         try:
             raw = bytes.fromhex(s)
             return int.from_bytes(raw, byteorder="little")
@@ -1594,7 +1594,7 @@ class MultiFormatRemoteParser:
             try:
                 return int(s, 16)
             except Exception:
-                raise ValueError("Некорректное hex поле Flipper")
+                raise ValueError("Invalid Flipper hex field")
 
     @staticmethod
     def _encode_flipper_parsed(protocol, address, command):
@@ -1605,10 +1605,10 @@ class MultiFormatRemoteParser:
             "KASEIKYO": (26, 10), "RCA": (4, 8),
         }
         if protocol not in widths:
-            raise ValueError(f"Протокол {protocol} не поддерживается; используйте RAW")
+            raise ValueError(f"Protocol {protocol} not supported; use RAW")
         address_bits, command_bits = widths[protocol]
         if not 0 <= address < (1 << address_bits) or not 0 <= command < (1 << command_bits):
-            raise ValueError(f"Адрес/команда {protocol} вне диапазона")
+            raise ValueError(f"Address/command {protocol} out of range")
         if protocol in ("RC5", "RC5X"):
             return IrProtocolEngine.encode_rc5(address, command)
         if protocol == "RC6":
@@ -1683,328 +1683,328 @@ KNOWN_DONGLE_IDS = set(SUPPORTED_DONGLES.keys())
 
 
 _I18N_MAP = {
-    "ИК-лаборатория для управления техникой: отправка и захват сигналов через USB OTG, Audio IR 3.5мм и встроенный ИК. Создание виртуальных пультов, библиотека сигналов, импорт/экспорт Flipper Zero, Pronto, LIRC. Подбор кодов (Finder), TV-B-Gone, управление Android TV по Wi-Fi ADB и переворот экрана 180° для донглов.": "IR lab for controlling devices: transmit and capture signals via USB OTG, 3.5mm Audio IR, and built-in IR. Create virtual remotes, signal library, Flipper Zero, Pronto, LIRC import/export. Code finder, TV-B-Gone, Android TV control over Wi-Fi ADB, and 180° screen flip for dongles.",
-    "Логическое значение вместо числа": "Boolean value instead of a number",
-    "Ожидалось целое число": "Expected an integer",
-    "Частота должна быть 15000–70000 Гц": "Frequency must be 15000–70000 Hz",
-    "Нужно 1–4096 импульсов": "Need 1–4096 pulses",
-    "Импульсы должны быть положительными; сигнал не длиннее 2 с": "Pulses must be positive; signal no longer than 2 s",
-    "Частота вне полосы аудиовыхода": "Frequency outside the audio output band",
-    "Panasonic: нужны 4 hex символа производителя и 8 символов данных": "Panasonic: requires 4 hex chars of vendor and 8 chars of data",
-    "Kaseikyo: адрес 26 бит, команда 10 бит": "Kaseikyo: address is 26 bits, command is 10 bits",
-    "Kaseikyo/Panasonic: неверная контрольная сумма": "Kaseikyo/Panasonic: invalid checksum",
-    "Неизвестный": "Unknown",
-    "Файл больше 2 МБ": "File larger than 2 MB",
-    "Неподдерживаемая версия резервной копии": "Unsupported backup version",
-    "JSON #{index + 1}: нет массива pattern": "JSON #{index + 1}: no pattern array",
-    "XML с DTD/сущностями не поддерживается": "XML with DTD/entities is not supported",
-    "Ожидался корневой элемент irplus": "Expected irplus root element",
-    "{name}: IRPLUS {fmt or 'без формата'} не поддерживается; нужен RAW или Pronto": "{name}: IRPLUS {fmt or 'no format'} not supported; need RAW or Pronto",
-    "без формата": "no format",
-    "Адрес/команда NEC вне диапазона": "NEC address/command out of range",
-    "Неизвестный type": "Unknown type",
-    "Нужен полный модулированный Pronto 0000 или поддерживаемый файл": "Need a complete modulated Pronto 0000 or a supported file",
-    "JSON содержит слишком глубокую вложенность": "JSON contains too deep nesting",
-    "{name}: некорректные raw_codes ({error})": "{name}: invalid raw_codes ({error})",
-    "LIRC raw_codes: интервалы без имени": "LIRC raw_codes: intervals without a name",
-    "LIRC flags не поддерживаются: ": "LIRC flags not supported: ",
-    "LIRC параметры не поддерживаются: ": "LIRC parameters not supported: ",
-    "LIRC: нужны два значения {key}": "LIRC: need two values for {key}",
-    "LIRC: {key} должен содержать положительные интервалы": "LIRC: {key} must contain positive intervals",
-    "LIRC: некорректное число бит": "LIRC: invalid bit count",
-    "LIRC: нет codes или raw_codes": "LIRC: no codes or raw_codes",
-    "LIRC: ожидались имя и один код": "LIRC: expected name and one code",
-    "LIRC: код вне диапазона bits": "LIRC: code outside bits range",
-    "LIRC: отрицательный ptrail": "LIRC: negative ptrail",
-    "LIRC: отрицательный gap или период короче кадра": "LIRC: negative gap or period shorter than frame",
-    "Некорректное hex поле Flipper": "Invalid Flipper hex field",
-    "Протокол {protocol} не поддерживается; используйте RAW": "Protocol {protocol} not supported; use RAW",
-    "Адрес/команда {protocol} вне диапазона": "Address/command {protocol} out of range",
-    "Ожидание": "Idle",
-    "Нет передач": "No transmissions",
-    "Готов к запуску": "Ready to start",
-    "Нужны ADB на телефоне и разрешённое подключение на ТВ": "Need ADB on the phone and an authorized connection on the TV",
-    "Готов к передаче": "Ready to transmit",
-    "Ожидался список сигналов": "Expected a list of signals",
-    "Библиотека #{index + 1}: {error}": "Library #{index + 1}: {error}",
-    "Не удалось прочитать библиотеку: {error}; исходные данные сохранены": "Failed to read library: {error}; original data preserved",
-    "Библиотека больше 900 КБ. Экспортируйте резервную копию": "Library larger than 900 KB. Export a backup",
-    "Ошибка сохранения библиотеки: {error}": "Library save error: {error}",
-    "Сохранено {count}; дубликатов {skipped}": "Saved {count}; duplicates {skipped}",
-    "Резервная копия": "Backup",
-    "Имя: 1–120 символов; группа: до 120. Без переносов строк": "Name: 1–120 chars; group: up to 120. No line breaks",
-    "Сигнал уже удалён": "Signal already deleted",
-    "Нет сигналов для экспорта": "No signals to export",
-    "Экспорт .ir отменён: лимит Flipper 1024 интервала на сигнал. Используйте JSON.": ".ir export cancelled: Flipper limit is 1024 intervals per signal. Use JSON.",
-    "Слишком много данных для экспорта .ir; используйте JSON": "Too much data for .ir export; use JSON",
-    "Пульт (.ir)": "Remote (.ir)",
-    "Передатчик занят или недоступен. Остановите текущую последовательность": "Transmitter busy or unavailable. Stop the current sequence",
-    "{name}: ошибка передачи ({sent}/{repeats})": "{name}: transmit error ({sent}/{repeats})",
-    "{name}: {'остановлено' if stopped else 'отправлено'} {sent}/{repeats}": "{name}: {'stopped' if stopped else 'sent'} {sent}/{repeats}",
-    "остановлено": "stopped",
-    "отправлено": "sent",
-    "{name}: ошибка {error}": "{name}: error {error}",
-    "Кнопка пульта": "Remote button",
-    "Имя и устройство": "Name and device",
-    "Имя кнопки": "Button name",
-    "Пульт / группа": "Remote / group",
-    "Одинаковая группа объединяет кнопки в один пульт. Пустая группа — без устройства": "Same group merges buttons into one remote. Empty group — no device",
-    "Сохранить кнопку": "Save button",
-    "Отмена": "Cancel",
-    "Мои пульты": "My remotes",
-    "Кнопки создаются из вашей библиотеки. Назначьте им группу через «Изменить»": "Buttons are created from your library. Assign them a group via “Edit”",
-    "Без группы": "Ungrouped",
-    "Устройство": "Device",
-    "{len(entries)} кнопок": "{len(entries)} buttons",
-    "Одна отправка": "One press",
-    "Повторить 3 раза": "Repeat 3 times",
-    "Повторить 5 раз": "Repeat 5 times",
-    "Повторы кнопки": "Button repeats",
-    "Повторы удобны для громкости и каналов": "Repeats are convenient for volume and channels",
-    "Остановить повторы": "Stop repeats",
-    "Экспорт этого пульта (.ir)": "Export this remote (.ir)",
-    "Открыть библиотеку": "Open library",
-    "Назад": "Back",
-    "Далее": "Next",
-    "Сигнал '{name}' удалён из библиотеки": "Signal '{name}' removed from library",
-    "Библиотека сигналов очищена": "Signal library cleared",
-    "Библиотека не очищена: ошибка сохранения": "Library not cleared: save error",
-    "Ошибка: нет доступного передатчика": "Error: no transmitter available",
-    "JSON скопирован": "JSON copied",
-    "Файл": "File",
-    "💾 {label} сохранён в Download/Dolphy/{filename}": "💾 {label} saved to Download/Dolphy/{filename}",
-    "Сохранено: Download/Dolphy/{filename}": "Saved: Download/Dolphy/{filename}",
-    "{filename} скопирован в буфер": "{filename} copied to clipboard",
-    " и сохранён в Download/Dolphy": " and saved to Download/Dolphy",
-    "Сигнал .ir": "Signal .ir",
-    "Дамп библиотеки (.ir)": "Library dump (.ir)",
-    "Не удалось распознать формат (Flipper .ir, IRPLUS, LIRC, Pronto, JSON)": "Failed to recognize format (Flipper .ir, IRPLUS, LIRC, Pronto, JSON)",
-    "Формат не распознан": "Format not recognized",
-    "Импортировано {count} сигналов": "Imported {count} signals",
-    " (дубликатов {skipped})": " (duplicates {skipped})",
-    "Ошибка копирования: {e}": "Copy error: {e}",
-    "Ошибка встроенного ИК: {e}": "Built-in IR error: {e}",
-    "Экран: 180°": "Screen: 180°",
-    "Экран: 0°": "Screen: 0°",
-    "ИК-лаборатория: передатчики, обучение, библиотека пультов и импорт": "IR lab: transmitters, learning, remote library and import",
-    "Сбой регистрации хуков: {e}": "Hook registration failure: {e}",
-    "Встроенный ИК-порт": "Built-in IR port",
-    "Использовать встроенный ИК передатчик телефона (Xiaomi, Poco, Vivo) при отсутствии USB": "Use the phone's built-in IR emitter (Xiaomi, Poco, Vivo) when USB is absent",
-    "Audio IR (3.5мм адаптеры)": "Audio IR (3.5mm adapters)",
-    "Использовать аудиовыход смартфона при отсутствии USB-донгла (установите громкость на 100%)": "Use phone audio output when no USB dongle is present (set volume to 100%)",
-    "Переворот экрана (180°)": "Screen flip (180°)",
-    "Поворот экрана на 180° для ИК-донглов (USB / Audio), подключенных снизу": "Rotate screen 180° for IR dongles (USB / Audio) plugged at the bottom",
-    "Таймаут обучения (сек)": "Learning timeout (sec)",
-    "Автосохранение захваченных сигналов": "Auto-save captured signals",
-    "Сразу добавлять принятый сигнал в Библиотеку": "Immediately add the received signal to Library",
-    "ElkSmart режим Ocrustar v1.5": "ElkSmart Ocrustar v1.5 mode",
-    "Совместимость с редкими ревизиями D226": "Compatibility with rare D226 revisions",
-    "Настройка изменена: {k} = {v}": "Setting changed: {k} = {v}",
-    "Для Audio IR установите громкость медиа на 100%": "Set media volume to 100% for Audio IR",
-    "Предыдущая передача завершается. Повторите включение после её завершения": "Previous transmission is finishing. Retry enable after it completes",
-    "Плагин включен": "Plugin enabled",
-    "Плагин выключен": "Plugin disabled",
-    "Плагин выгружен": "Plugin unloaded",
-    "Ошибка доступа к USB сервису: {e}": "USB service access error: {e}",
-    "Сбой сканирования USB: {e}": "USB scan failure: {e}",
-    "Адаптер отключен: {curr_dev.getDeviceName()}": "Adapter disconnected: {curr_dev.getDeviceName()}",
-    "Запрос прав USB для {dev.getDeviceName()}...": "Requesting USB permission for {dev.getDeviceName()}...",
-    "Ошибка запроса прав USB: {e}": "USB permission request error: {e}",
-    "Нет профиля протокола для VID:PID {key[0]:04X}:{key[1]:04X}": "No protocol profile for VID:PID {key[0]:04X}:{key[1]:04X}",
-    "Каналы USB не найдены: {dev.getDeviceName()}": "USB channels not found: {dev.getDeviceName()}",
-    "🟢 Подключен: {self._dongle_name} ": "🟢 Connected: {self._dongle_name} ",
-    "Не удалось открыть {dongle_name}": "Failed to open {dongle_name}",
-    "Ошибка передачи USB: {e}": "USB transmit error: {e}",
-    "Встроенный ИК TX: {'OK' if ok else 'FAIL'} ({freq}Hz, {len(pattern)} имп.)": "Built-in IR TX: {'OK' if ok else 'FAIL'} ({freq}Hz, {len(pattern)} pulses)",
-    "Audio IR TX: {'OK' if ok else 'FAIL'} ({freq}Hz, {len(pattern)} имп.)": "Audio IR TX: {'OK' if ok else 'FAIL'} ({freq}Hz, {len(pattern)} pulses)",
-    "Ошибка кодирования: {e}": "Encode error: {e}",
-    "TX: {'OK' if ok else 'FAIL'} ({freq}Hz, {len(pattern)} имп.)": "TX: {'OK' if ok else 'FAIL'} ({freq}Hz, {len(pattern)} pulses)",
-    "⚠ 3 ошибки подряд — сброс адаптера": "⚠ 3 errors in a row — resetting adapter",
-    "Адаптер не подключен": "Adapter not connected",
-    "Запись не поддерживается устройством": "Recording not supported by device",
-    "Ошибка записи: адаптер не подключен": "Recording error: adapter not connected",
-    "Запись не поддерживается текущим адаптером": "Recording not supported by current adapter",
-    "Направьте пульт на адаптер и нажмите кнопку...": "Point the remote at the adapter and press a button...",
-    "Записано {len(self._learned_timings)} имп. [{proto}]": "Recorded {len(self._learned_timings)} pulses [{proto}]",
-    "Запись Tiqiaa завершена: {len(self._learned_timings)} имп. ({proto})": "Tiqiaa recording complete: {len(self._learned_timings)} pulses ({proto})",
-    "Запись остановлена": "Recording stopped",
-    "Таймаут или сигнал не распознан": "Timeout or signal not recognized",
-    "ElkSmart авторизация не подтверждена": "ElkSmart authorization not confirmed",
-    "Команда записи отвергнута": "Recording command rejected",
-    "Режим записи ElkSmart включен": "ElkSmart recording mode enabled",
-    "Некорректная длина learn payload": "Invalid learn payload length",
-    "Запись ElkSmart завершена: {len(self._learned_timings)} имп. ({proto})": "ElkSmart recording complete: {len(self._learned_timings)} pulses ({proto})",
-    "Запись остановлена или таймаут": "Recording stopped or timed out",
-    "Ошибка записи: {e}": "Recording error: {e}",
-    "Сбой обучения: {e}": "Learning failure: {e}",
-    "Буфер пуст: сначала запишите сигнал": "Buffer empty: record a signal first",
-    "Записанный .ir": "Recorded .ir",
-    "Нет записанного сигнала для сохранения": "No recorded signal to save",
-    "IR Finder: нет доступного передатчика": "IR Finder: no transmitter available",
-    "Подключите адаптер или включите Audio/Встроенный ИК": "Connect an adapter or enable Audio/Built-in IR",
-    "Сканирование...": "Scanning...",
-    "Остановлен": "Stopped",
-    "Ошибка брутфорс кодирования: {e}": "Brute-force encode error: {e}",
-    "Остановлен: ошибка передачи": "Stopped: transmit error",
-    "Код: 0x{self._finder_current_code:02X} ({self._finder_current_code}/{self._finder_max_code})": "Code: 0x{self._finder_current_code:02X} ({self._finder_current_code}/{self._finder_max_code})",
-    "Сканирование завершено": "Scanning complete",
-    "Сохранён код: {self._finder_last_sent}": "Saved code: {self._finder_last_sent}",
-    "Запуск Universal Power Sweep": "Starting Universal Power Sweep",
-    "Power Sweep: ошибка передачи": "Power Sweep: transmit error",
-    "Universal Power Sweep остановлен": "Universal Power Sweep stopped",
-    "Universal Power Sweep завершён": "Universal Power Sweep complete",
-    "Перебор: передатчик занят": "Sweep: transmitter busy",
-    "Адаптер уже отключен": "Adapter already disconnected",
-    "Ручное отключение": "Manual disconnect",
-    "Ручной поиск USB-адаптера...": "Manual USB adapter search...",
-    "USB сервис недоступен": "USB service unavailable",
-    "USB-устройства не обнаружены в системе": "No USB devices detected in the system",
-    "--- Найдено USB устройств: {len(devices)} ---": "--- Found USB devices: {len(devices)} ---",
-    "ДА": "YES",
-    "НЕТ": "NO",
-    "VID: 0x{vid:04X}, PID: 0x{pid:04X} | Права: {perm} | {prod or name}": "VID: 0x{vid:04X}, PID: 0x{pid:04X} | Permission: {perm} | {prod or name}",
-    "Журнал скопирован": "Log copied",
-    "ИК-адаптер не найден (вставьте OTG-донгл)": "IR adapter not found (plug in an OTG dongle)",
-    "{elapsed}с": "{elapsed}s",
-    "{elapsed // 60}м {elapsed % 60}с": "{elapsed // 60}m {elapsed % 60}s",
-    "{elapsed // 3600}ч {(elapsed % 3600) // 60}м": "{elapsed // 3600}h {(elapsed % 3600) // 60}m",
-    "Очередь заполнена. Дождитесь окончания передачи": "Queue full. Wait for the current transmission to finish",
-    "Ошибка команды: {error}": "Command error: {error}",
-    "Некорректный IPv6 адрес": "Invalid IPv6 address",
-    "Некорректный порт": "Invalid port",
-    "IPv6 scope не поддерживается; используйте обычный IP адрес": "IPv6 scope not supported; use a plain IP address",
-    "Порт должен быть 1–65535": "Port must be 1–65535",
-    "Неизвестная команда ADB": "Unknown ADB command",
-    "Выполняется…": "Running…",
-    "Dolphy не вернул результат shell": "Dolphy did not return a shell result",
-    "Ошибка: ": "Error: ",
-    "код {res.get('code', '?')}": "code {res.get('code', '?')}",
-    "Ошибка ADB: {e}": "ADB error: {e}",
-    "Есть": "Yes",
-    "Нет": "No",
-    "Вкл": "On",
-    "Выкл": "Off",
-    "🔴 Адаптер не подключен": "🔴 Adapter not connected",
-    "Встроенный ИК: {builtin_ir_str} | Audio IR: {audio_ir_str}": "Built-in IR: {builtin_ir_str} | Audio IR: {audio_ir_str}",
-    "Передатчик": "Transmitter",
-    "Авто: USB → встроенный → Audio": "Auto: USB → built-in → Audio",
-    "Только USB OTG": "USB OTG only",
-    "Только встроенный ИК": "Built-in IR only",
-    "Только Audio IR": "Audio IR only",
-    "Способ передачи": "Transmit mode",
-    "Активен: ": "Active: ",
-    "Встроенный ИК": "Built-in IR",
-    "нет доступного передатчика": "no transmitter available",
-    "Разрешить встроенный ИК": "Allow built-in IR",
-    "Разрешить Audio IR": "Allow Audio IR",
-    "Нужен ИК LED-адаптер и проводной аудиовыход": "Requires IR LED adapter and wired audio output",
-    "Стерео Audio IR": "Stereo Audio IR",
-    "Выключите для моноадаптера": "Turn off for mono adapter",
-    "Откл.": "Disconnect",
-    "Найти адаптер": "Find adapter",
-    "Тест NEC": "NEC test",
-    "Тест RC-5": "RC-5 test",
-    "Тест Sony": "Sony test",
-    "Диагностика USB": "USB diagnostics",
-    "Перехват ИК Dolphy:": "Dolphy IR hook:",
-    "Готов": "Ready",
-    "Нет передатчика": "No transmitter",
-    "Журнал": "Log",
-    "Копировать": "Copy",
-    "Очистить": "Clear",
-    "Журнал пуст": "Log is empty",
-    "Запись сигнала...": "Recording signal...",
-    "Стоп": "Stop",
-    "Направьте пульт на адаптер и зажмите кнопку на 1-2 сек": "Point the remote at the adapter and hold the button for 1-2 sec",
-    "{guess} • {len(self._learned_timings)} имп., ~{sum(self._learned_timings) // 1000} мс": "{guess} • {len(self._learned_timings)} pulses, ~{sum(self._learned_timings) // 1000} ms",
-    "Приёмник ИК": "IR receiver",
-    "Запись": "Record",
-    "Повтор": "Replay",
-    "Имя для сохранения": "Name to save",
-    "В библиотеку": "To library",
-    "Статус: {self._learned_status}": "Status: {self._learned_status}",
-    "Библиотека · {len(self._signal_library)} сигналов": "Library · {len(self._signal_library)} signals",
-    "Поиск по имени или группе": "Search by name or group",
-    "Только избранное": "Favorites only",
-    "Резервная копия JSON": "JSON backup",
-    "Нет сигналов по этому фильтру": "No signals match this filter",
-    "Библиотека пуста": "Library is empty",
-    "Запишите или импортируйте сигналы во вкладках 'Приёмник' или 'Импорт'": "Record or import signals in the 'Receiver' or 'Import' tabs",
-    "Приёмник": "Receiver",
-    "Импорт": "Import",
-    "Сохранено сигналов: {len(lib)}": "Signals saved: {len(lib)}",
-    "Экспорт всех (.ir)": "Export all (.ir)",
-    "Очистить всё": "Clear all",
-    "{freq // 1000}kHz • {len(p)} имп. • ~{dur_ms}мс": "{freq // 1000}kHz • {len(p)} pulses • ~{dur_ms}ms",
-    "Удалить": "Delete",
-    "Изменить имя / пульт": "Edit name / remote",
-    "Универсальный импорт пультов": "Universal remote import",
-    "Поддерживает Flipper Zero .ir (raw + parsed), IRPLUS XML, LIRC, Pronto Hex, JSON": "Supports Flipper Zero .ir (raw + parsed), IRPLUS XML, LIRC, Pronto Hex, JSON",
-    "Вставьте содержимое файла или Pronto Hex код": "Paste file contents or Pronto Hex code",
-    "Имена сохраняются. Дубликаты пропускаются. Импорт ничего не передаёт": "Names are preserved. Duplicates are skipped. Import does not transmit",
-    "Предпросмотр": "Preview",
-    "{preview['format']} · {len(entries)} сигналов": "{preview['format']} · {len(entries)} signals",
-    "Новых: {new_count} · Повторных: {len(entries) - new_count}": "New: {new_count} · Duplicates: {len(entries) - new_count}",
-    "{entry['name']} · {entry['frequency']} Гц · {len(entry['pattern'])} имп.": "{entry['name']} · {entry['frequency']} Hz · {len(entry['pattern'])} pulses",
-    "Добавить в библиотеку": "Add to Library",
-    "IR Finder (Инфракрасный брутфорсер)": "IR Finder (Infrared brute-forcer)",
-    "Поиск неизвестных кодов и команд для целевого устройства": "Search unknown codes and commands for the target device",
-    "Протокол: {self._finder_proto}": "Protocol: {self._finder_proto}",
-    "Сменить протокол": "Change protocol",
-    "Hex префикс адреса": "Hex address prefix",
-    "Пауза между кодами: {self._finder_delay_ms} мс": "Delay between codes: {self._finder_delay_ms} ms",
-    "Запуск": "Start",
-    "Статус: {self._finder_status}": "Status: {self._finder_status}",
-    "Посл. код: {self._finder_last_sent}": "Last code: {self._finder_last_sent}",
-    "Сохранить код в библиотеку": "Save code to library",
-    "Быстрая отправка команд питания мировых брендов через адаптер": "Quick power command blast for global brands via adapter",
-    "Остановить Power Sweep": "Stop Power Sweep",
-    "Power Sweep: все бренды": "Power Sweep: all brands",
-    "Wi-Fi пульт (ADB Android TV)": "Wi-Fi remote (ADB Android TV)",
-    "Сетевое управление ТВ и приставками по TCP/IP": "Network control of TVs and set-top boxes over TCP/IP",
-    "ADB должен быть установлен на телефоне; на ТВ нужны отладка и разрешение подключения": "ADB must be installed on the phone; the TV needs debugging and authorized connection",
-    "IP ТВ и порт (192.168.1.50:5555)": "TV IP and port (192.168.1.50:5555)",
-    "Подключить": "Connect",
-    "Отключить ADB": "Disconnect ADB",
-    "Крестовина D-Pad": "D-Pad",
-    "▲ Вверх": "▲ Up",
-    "◀ Влево": "◀ Left",
-    "Вправо ▶": "Right ▶",
-    "▼ Вниз": "▼ Down",
-    "Домой": "Home",
-    "Меню": "Menu",
-    "Запуск приложений": "Launch apps",
-    "Адаптер": "Adapter",
-    "Библиотека": "Library",
-    "Удалить сигнал?": "Delete signal?",
-    "Удалить '{delete_name}' из библиотеки?": "Remove '{delete_name}' from library?",
-    "Очистить библиотеку?": "Clear library?",
-    "Удалить все {len(self._signal_library)} сигналов?": "Remove all {len(self._signal_library)} signals?",
-    "Язык интерфейса": "Interface language",
-    "Русский (RU)": "Russian (RU)",
+    "IR lab for controlling devices: transmit and capture signals via USB OTG, 3.5mm Audio IR, and built-in IR. Create virtual remotes, signal library, Flipper Zero, Pronto, LIRC import/export. Code finder, TV-B-Gone, Android TV control over Wi-Fi ADB, and 180° screen flip for dongles.": "IR lab for controlling devices: transmit and capture signals via USB OTG, 3.5mm Audio IR, and built-in IR. Create virtual remotes, signal library, Flipper Zero, Pronto, LIRC import/export. Code finder, TV-B-Gone, Android TV control over Wi-Fi ADB, and 180° screen flip for dongles.",
+    "Boolean value instead of a number": "Boolean value instead of a number",
+    "Expected an integer": "Expected an integer",
+    "Frequency must be 15000–70000 Hz": "Frequency must be 15000–70000 Hz",
+    "Need 1–4096 pulses": "Need 1–4096 pulses",
+    "Pulses must be positive; signal no longer than 2 s": "Pulses must be positive; signal no longer than 2 s",
+    "Frequency outside the audio output band": "Frequency outside the audio output band",
+    "Panasonic: requires 4 hex chars of vendor and 8 chars of data": "Panasonic: requires 4 hex chars of vendor and 8 chars of data",
+    "Kaseikyo: address is 26 bits, command is 10 bits": "Kaseikyo: address is 26 bits, command is 10 bits",
+    "Kaseikyo/Panasonic: invalid checksum": "Kaseikyo/Panasonic: invalid checksum",
+    "Unknown": "Unknown",
+    "File larger than 2 MB": "File larger than 2 MB",
+    "Unsupported backup version": "Unsupported backup version",
+    "JSON #{index + 1}: no pattern array": "JSON #{index + 1}: no pattern array",
+    "XML with DTD/entities is not supported": "XML with DTD/entities is not supported",
+    "Expected irplus root element": "Expected irplus root element",
+    "{name}: IRPLUS {fmt or 'no format'} not supported; need RAW or Pronto": "{name}: IRPLUS {fmt or 'no format'} not supported; need RAW or Pronto",
+    "no format": "no format",
+    "NEC address/command out of range": "NEC address/command out of range",
+    "Unknown type": "Unknown type",
+    "Need a complete modulated Pronto 0000 or a supported file": "Need a complete modulated Pronto 0000 or a supported file",
+    "JSON contains too deep nesting": "JSON contains too deep nesting",
+    "{name}: invalid raw_codes ({error})": "{name}: invalid raw_codes ({error})",
+    "LIRC raw_codes: intervals without a name": "LIRC raw_codes: intervals without a name",
+    "LIRC flags not supported: ": "LIRC flags not supported: ",
+    "LIRC parameters not supported: ": "LIRC parameters not supported: ",
+    "LIRC: need two values for {key}": "LIRC: need two values for {key}",
+    "LIRC: {key} must contain positive intervals": "LIRC: {key} must contain positive intervals",
+    "LIRC: invalid bit count": "LIRC: invalid bit count",
+    "LIRC: no codes or raw_codes": "LIRC: no codes or raw_codes",
+    "LIRC: expected name and one code": "LIRC: expected name and one code",
+    "LIRC: code outside bits range": "LIRC: code outside bits range",
+    "LIRC: negative ptrail": "LIRC: negative ptrail",
+    "LIRC: negative gap or period shorter than frame": "LIRC: negative gap or period shorter than frame",
+    "Invalid Flipper hex field": "Invalid Flipper hex field",
+    "Protocol {protocol} not supported; use RAW": "Protocol {protocol} not supported; use RAW",
+    "Address/command {protocol} out of range": "Address/command {protocol} out of range",
+    "Idle": "Idle",
+    "No transmissions": "No transmissions",
+    "Ready to start": "Ready to start",
+    "Need ADB on the phone and an authorized connection on the TV": "Need ADB on the phone and an authorized connection on the TV",
+    "Ready to transmit": "Ready to transmit",
+    "Expected a list of signals": "Expected a list of signals",
+    "Library #{index + 1}: {error}": "Library #{index + 1}: {error}",
+    "Failed to read library: {error}; original data preserved": "Failed to read library: {error}; original data preserved",
+    "Library larger than 900 KB. Export a backup": "Library larger than 900 KB. Export a backup",
+    "Library save error: {error}": "Library save error: {error}",
+    "Saved {count}; duplicates {skipped}": "Saved {count}; duplicates {skipped}",
+    "Backup": "Backup",
+    "Name: 1–120 chars; group: up to 120. No line breaks": "Name: 1–120 chars; group: up to 120. No line breaks",
+    "Signal already deleted": "Signal already deleted",
+    "No signals to export": "No signals to export",
+    ".ir export cancelled: Flipper limit is 1024 intervals per signal. Use JSON.": ".ir export cancelled: Flipper limit is 1024 intervals per signal. Use JSON.",
+    "Too much data for .ir export; use JSON": "Too much data for .ir export; use JSON",
+    "Remote (.ir)": "Remote (.ir)",
+    "Transmitter busy or unavailable. Stop the current sequence": "Transmitter busy or unavailable. Stop the current sequence",
+    "{name}: transmit error ({sent}/{repeats})": "{name}: transmit error ({sent}/{repeats})",
+    "{name}: {'stopped' if stopped else 'sent'} {sent}/{repeats}": "{name}: {'stopped' if stopped else 'sent'} {sent}/{repeats}",
+    "stopped": "stopped",
+    "sent": "sent",
+    "{name}: error {error}": "{name}: error {error}",
+    "Remote button": "Remote button",
+    "Name and device": "Name and device",
+    "Button name": "Button name",
+    "Remote / group": "Remote / group",
+    "Same group merges buttons into one remote. Empty group — no device": "Same group merges buttons into one remote. Empty group — no device",
+    "Save button": "Save button",
+    "Cancel": "Cancel",
+    "My remotes": "My remotes",
+    "Buttons are created from your library. Assign them a group via “Edit”": "Buttons are created from your library. Assign them a group via “Edit”",
+    "Ungrouped": "Ungrouped",
+    "Device": "Device",
+    "{len(entries)} buttons": "{len(entries)} buttons",
+    "One press": "One press",
+    "Repeat 3 times": "Repeat 3 times",
+    "Repeat 5 times": "Repeat 5 times",
+    "Button repeats": "Button repeats",
+    "Repeats are convenient for volume and channels": "Repeats are convenient for volume and channels",
+    "Stop repeats": "Stop repeats",
+    "Export this remote (.ir)": "Export this remote (.ir)",
+    "Open library": "Open library",
+    "Back": "Back",
+    "Next": "Next",
+    "Signal '{name}' removed from library": "Signal '{name}' removed from library",
+    "Signal library cleared": "Signal library cleared",
+    "Library not cleared: save error": "Library not cleared: save error",
+    "Error: no transmitter available": "Error: no transmitter available",
+    "JSON copied": "JSON copied",
+    "File": "File",
+    "💾 {label} saved to Download/Dolphy/{filename}": "💾 {label} saved to Download/Dolphy/{filename}",
+    "Saved: Download/Dolphy/{filename}": "Saved: Download/Dolphy/{filename}",
+    "{filename} copied to clipboard": "{filename} copied to clipboard",
+    " and saved to Download/Dolphy": " and saved to Download/Dolphy",
+    "Signal .ir": "Signal .ir",
+    "Library dump (.ir)": "Library dump (.ir)",
+    "Failed to recognize format (Flipper .ir, IRPLUS, LIRC, Pronto, JSON)": "Failed to recognize format (Flipper .ir, IRPLUS, LIRC, Pronto, JSON)",
+    "Format not recognized": "Format not recognized",
+    "Imported {count} signals": "Imported {count} signals",
+    " (duplicates {skipped})": " (duplicates {skipped})",
+    "Copy error: {e}": "Copy error: {e}",
+    "Built-in IR error: {e}": "Built-in IR error: {e}",
+    "Screen: 180°": "Screen: 180°",
+    "Screen: 0°": "Screen: 0°",
+    "IR lab: transmitters, learning, remote library and import": "IR lab: transmitters, learning, remote library and import",
+    "Hook registration failure: {e}": "Hook registration failure: {e}",
+    "Built-in IR port": "Built-in IR port",
+    "Use the phone's built-in IR emitter (Xiaomi, Poco, Vivo) when USB is absent": "Use the phone's built-in IR emitter (Xiaomi, Poco, Vivo) when USB is absent",
+    "Audio IR (3.5mm adapters)": "Audio IR (3.5mm adapters)",
+    "Use phone audio output when no USB dongle is present (set volume to 100%)": "Use phone audio output when no USB dongle is present (set volume to 100%)",
+    "Screen flip (180°)": "Screen flip (180°)",
+    "Rotate screen 180° for IR dongles (USB / Audio) plugged at the bottom": "Rotate screen 180° for IR dongles (USB / Audio) plugged at the bottom",
+    "Learning timeout (sec)": "Learning timeout (sec)",
+    "Auto-save captured signals": "Auto-save captured signals",
+    "Immediately add the received signal to Library": "Immediately add the received signal to Library",
+    "ElkSmart Ocrustar v1.5 mode": "ElkSmart Ocrustar v1.5 mode",
+    "Compatibility with rare D226 revisions": "Compatibility with rare D226 revisions",
+    "Setting changed: {k} = {v}": "Setting changed: {k} = {v}",
+    "Set media volume to 100% for Audio IR": "Set media volume to 100% for Audio IR",
+    "Previous transmission is finishing. Retry enable after it completes": "Previous transmission is finishing. Retry enable after it completes",
+    "Plugin enabled": "Plugin enabled",
+    "Plugin disabled": "Plugin disabled",
+    "Plugin unloaded": "Plugin unloaded",
+    "USB service access error: {e}": "USB service access error: {e}",
+    "USB scan failure: {e}": "USB scan failure: {e}",
+    "Adapter disconnected: {curr_dev.getDeviceName()}": "Adapter disconnected: {curr_dev.getDeviceName()}",
+    "Requesting USB permission for {dev.getDeviceName()}...": "Requesting USB permission for {dev.getDeviceName()}...",
+    "USB permission request error: {e}": "USB permission request error: {e}",
+    "No protocol profile for VID:PID {key[0]:04X}:{key[1]:04X}": "No protocol profile for VID:PID {key[0]:04X}:{key[1]:04X}",
+    "USB channels not found: {dev.getDeviceName()}": "USB channels not found: {dev.getDeviceName()}",
+    "🟢 Connected: {self._dongle_name} ": "🟢 Connected: {self._dongle_name} ",
+    "Failed to open {dongle_name}": "Failed to open {dongle_name}",
+    "USB transmit error: {e}": "USB transmit error: {e}",
+    "Built-in IR TX: {'OK' if ok else 'FAIL'} ({freq}Hz, {len(pattern)} pulses)": "Built-in IR TX: {'OK' if ok else 'FAIL'} ({freq}Hz, {len(pattern)} pulses)",
+    "Audio IR TX: {'OK' if ok else 'FAIL'} ({freq}Hz, {len(pattern)} pulses)": "Audio IR TX: {'OK' if ok else 'FAIL'} ({freq}Hz, {len(pattern)} pulses)",
+    "Encode error: {e}": "Encode error: {e}",
+    "TX: {'OK' if ok else 'FAIL'} ({freq}Hz, {len(pattern)} pulses)": "TX: {'OK' if ok else 'FAIL'} ({freq}Hz, {len(pattern)} pulses)",
+    "⚠ 3 errors in a row — resetting adapter": "⚠ 3 errors in a row — resetting adapter",
+    "Adapter not connected": "Adapter not connected",
+    "Recording not supported by device": "Recording not supported by device",
+    "Recording error: adapter not connected": "Recording error: adapter not connected",
+    "Recording not supported by current adapter": "Recording not supported by current adapter",
+    "Point the remote at the adapter and press a button...": "Point the remote at the adapter and press a button...",
+    "Recorded {len(self._learned_timings)} pulses [{proto}]": "Recorded {len(self._learned_timings)} pulses [{proto}]",
+    "Tiqiaa recording complete: {len(self._learned_timings)} pulses ({proto})": "Tiqiaa recording complete: {len(self._learned_timings)} pulses ({proto})",
+    "Recording stopped": "Recording stopped",
+    "Timeout or signal not recognized": "Timeout or signal not recognized",
+    "ElkSmart authorization not confirmed": "ElkSmart authorization not confirmed",
+    "Recording command rejected": "Recording command rejected",
+    "ElkSmart recording mode enabled": "ElkSmart recording mode enabled",
+    "Invalid learn payload length": "Invalid learn payload length",
+    "ElkSmart recording complete: {len(self._learned_timings)} pulses ({proto})": "ElkSmart recording complete: {len(self._learned_timings)} pulses ({proto})",
+    "Recording stopped or timed out": "Recording stopped or timed out",
+    "Recording error: {e}": "Recording error: {e}",
+    "Learning failure: {e}": "Learning failure: {e}",
+    "Buffer empty: record a signal first": "Buffer empty: record a signal first",
+    "Recorded .ir": "Recorded .ir",
+    "No recorded signal to save": "No recorded signal to save",
+    "IR Finder: no transmitter available": "IR Finder: no transmitter available",
+    "Connect an adapter or enable Audio/Built-in IR": "Connect an adapter or enable Audio/Built-in IR",
+    "Scanning...": "Scanning...",
+    "Stopped": "Stopped",
+    "Brute-force encode error: {e}": "Brute-force encode error: {e}",
+    "Stopped: transmit error": "Stopped: transmit error",
+    "Code: 0x{self._finder_current_code:02X} ({self._finder_current_code}/{self._finder_max_code})": "Code: 0x{self._finder_current_code:02X} ({self._finder_current_code}/{self._finder_max_code})",
+    "Scanning complete": "Scanning complete",
+    "Saved code: {self._finder_last_sent}": "Saved code: {self._finder_last_sent}",
+    "Starting Universal Power Sweep": "Starting Universal Power Sweep",
+    "Power Sweep: transmit error": "Power Sweep: transmit error",
+    "Universal Power Sweep stopped": "Universal Power Sweep stopped",
+    "Universal Power Sweep complete": "Universal Power Sweep complete",
+    "Sweep: transmitter busy": "Sweep: transmitter busy",
+    "Adapter already disconnected": "Adapter already disconnected",
+    "Manual disconnect": "Manual disconnect",
+    "Manual USB adapter search...": "Manual USB adapter search...",
+    "USB service unavailable": "USB service unavailable",
+    "No USB devices detected in the system": "No USB devices detected in the system",
+    "--- Found USB devices: {len(devices)} ---": "--- Found USB devices: {len(devices)} ---",
+    "YES": "YES",
+    "NO": "NO",
+    "VID: 0x{vid:04X}, PID: 0x{pid:04X} | Permission: {perm} | {prod or name}": "VID: 0x{vid:04X}, PID: 0x{pid:04X} | Permission: {perm} | {prod or name}",
+    "Log copied": "Log copied",
+    "IR adapter not found (plug in an OTG dongle)": "IR adapter not found (plug in an OTG dongle)",
+    "{elapsed}s": "{elapsed}s",
+    "{elapsed // 60}m {elapsed % 60}s": "{elapsed // 60}m {elapsed % 60}s",
+    "{elapsed // 3600}h {(elapsed % 3600) // 60}m": "{elapsed // 3600}h {(elapsed % 3600) // 60}m",
+    "Queue full. Wait for the current transmission to finish": "Queue full. Wait for the current transmission to finish",
+    "Command error: {error}": "Command error: {error}",
+    "Invalid IPv6 address": "Invalid IPv6 address",
+    "Invalid port": "Invalid port",
+    "IPv6 scope not supported; use a plain IP address": "IPv6 scope not supported; use a plain IP address",
+    "Port must be 1–65535": "Port must be 1–65535",
+    "Unknown ADB command": "Unknown ADB command",
+    "Running…": "Running…",
+    "Dolphy did not return a shell result": "Dolphy did not return a shell result",
+    "Error: ": "Error: ",
+    "code {res.get('code', '?')}": "code {res.get('code', '?')}",
+    "ADB error: {e}": "ADB error: {e}",
+    "Yes": "Yes",
+    "No": "No",
+    "On": "On",
+    "Off": "Off",
+    "🔴 Adapter not connected": "🔴 Adapter not connected",
+    "Built-in IR: {builtin_ir_str} | Audio IR: {audio_ir_str}": "Built-in IR: {builtin_ir_str} | Audio IR: {audio_ir_str}",
+    "Transmitter": "Transmitter",
+    "Auto: USB → built-in → Audio": "Auto: USB → built-in → Audio",
+    "USB OTG only": "USB OTG only",
+    "Built-in IR only": "Built-in IR only",
+    "Audio IR only": "Audio IR only",
+    "Transmit mode": "Transmit mode",
+    "Active: ": "Active: ",
+    "Built-in IR": "Built-in IR",
+    "no transmitter available": "no transmitter available",
+    "Allow built-in IR": "Allow built-in IR",
+    "Allow Audio IR": "Allow Audio IR",
+    "Requires IR LED adapter and wired audio output": "Requires IR LED adapter and wired audio output",
+    "Stereo Audio IR": "Stereo Audio IR",
+    "Turn off for mono adapter": "Turn off for mono adapter",
+    "Disconnect": "Disconnect",
+    "Find adapter": "Find adapter",
+    "NEC test": "NEC test",
+    "RC-5 test": "RC-5 test",
+    "Sony test": "Sony test",
+    "USB diagnostics": "USB diagnostics",
+    "Dolphy IR hook:": "Dolphy IR hook:",
+    "Ready": "Ready",
+    "No transmitter": "No transmitter",
+    "Log": "Log",
+    "Copy": "Copy",
+    "Clear": "Clear",
+    "Log is empty": "Log is empty",
+    "Recording signal...": "Recording signal...",
+    "Stop": "Stop",
+    "Point the remote at the adapter and hold the button for 1-2 sec": "Point the remote at the adapter and hold the button for 1-2 sec",
+    "{guess} • {len(self._learned_timings)} pulses, ~{sum(self._learned_timings) // 1000} ms": "{guess} • {len(self._learned_timings)} pulses, ~{sum(self._learned_timings) // 1000} ms",
+    "IR receiver": "IR receiver",
+    "Record": "Record",
+    "Replay": "Replay",
+    "Name to save": "Name to save",
+    "To library": "To library",
+    "Status: {self._learned_status}": "Status: {self._learned_status}",
+    "Library · {len(self._signal_library)} signals": "Library · {len(self._signal_library)} signals",
+    "Search by name or group": "Search by name or group",
+    "Favorites only": "Favorites only",
+    "JSON backup": "JSON backup",
+    "No signals match this filter": "No signals match this filter",
+    "Library is empty": "Library is empty",
+    "Record or import signals in the 'Receiver' or 'Import' tabs": "Record or import signals in the 'Receiver' or 'Import' tabs",
+    "Receiver": "Receiver",
+    "Import": "Import",
+    "Signals saved: {len(lib)}": "Signals saved: {len(lib)}",
+    "Export all (.ir)": "Export all (.ir)",
+    "Clear all": "Clear all",
+    "{freq // 1000}kHz • {len(p)} pulses • ~{dur_ms}ms": "{freq // 1000}kHz • {len(p)} pulses • ~{dur_ms}ms",
+    "Delete": "Delete",
+    "Edit name / remote": "Edit name / remote",
+    "Universal remote import": "Universal remote import",
+    "Supports Flipper Zero .ir (raw + parsed), IRPLUS XML, LIRC, Pronto Hex, JSON": "Supports Flipper Zero .ir (raw + parsed), IRPLUS XML, LIRC, Pronto Hex, JSON",
+    "Paste file contents or Pronto Hex code": "Paste file contents or Pronto Hex code",
+    "Names are preserved. Duplicates are skipped. Import does not transmit": "Names are preserved. Duplicates are skipped. Import does not transmit",
+    "Preview": "Preview",
+    "{preview['format']} · {len(entries)} signals": "{preview['format']} · {len(entries)} signals",
+    "New: {new_count} · Duplicates: {len(entries) - new_count}": "New: {new_count} · Duplicates: {len(entries) - new_count}",
+    "{entry['name']} · {entry['frequency']} Hz · {len(entry['pattern'])} pulses": "{entry['name']} · {entry['frequency']} Hz · {len(entry['pattern'])} pulses",
+    "Add to Library": "Add to Library",
+    "IR Finder (Infrared brute-forcer)": "IR Finder (Infrared brute-forcer)",
+    "Search unknown codes and commands for the target device": "Search unknown codes and commands for the target device",
+    "Protocol: {self._finder_proto}": "Protocol: {self._finder_proto}",
+    "Change protocol": "Change protocol",
+    "Hex address prefix": "Hex address prefix",
+    "Delay between codes: {self._finder_delay_ms} ms": "Delay between codes: {self._finder_delay_ms} ms",
+    "Start": "Start",
+    "Status: {self._finder_status}": "Status: {self._finder_status}",
+    "Last code: {self._finder_last_sent}": "Last code: {self._finder_last_sent}",
+    "Save code to library": "Save code to library",
+    "Quick power command blast for global brands via adapter": "Quick power command blast for global brands via adapter",
+    "Stop Power Sweep": "Stop Power Sweep",
+    "Power Sweep: all brands": "Power Sweep: all brands",
+    "Wi-Fi remote (ADB Android TV)": "Wi-Fi remote (ADB Android TV)",
+    "Network control of TVs and set-top boxes over TCP/IP": "Network control of TVs and set-top boxes over TCP/IP",
+    "ADB must be installed on the phone; the TV needs debugging and authorized connection": "ADB must be installed on the phone; the TV needs debugging and authorized connection",
+    "TV IP and port (192.168.1.50:5555)": "TV IP and port (192.168.1.50:5555)",
+    "Connect": "Connect",
+    "Disconnect ADB": "Disconnect ADB",
+    "D-Pad": "D-Pad",
+    "▲ Up": "▲ Up",
+    "◀ Left": "◀ Left",
+    "Right ▶": "Right ▶",
+    "▼ Down": "▼ Down",
+    "Home": "Home",
+    "Menu": "Menu",
+    "Launch apps": "Launch apps",
+    "Adapter": "Adapter",
+    "Library": "Library",
+    "Delete signal?": "Delete signal?",
+    "Remove '{delete_name}' from library?": "Remove '{delete_name}' from library?",
+    "Clear library?": "Clear library?",
+    "Remove all {len(self._signal_library)} signals?": "Remove all {len(self._signal_library)} signals?",
+    "Interface language": "Interface language",
+    "Russian (RU)": "Russian (RU)",
     "English (EN)": "English (EN)",
-    "Язык: Русский": "Language: Russian",
+    "Language: Russian": "Language: Russian",
     "Language: English": "Language: English",
-    "Конструктор сигналов": "Signal Generator",
-    "Генерация кода по протоколу": "Protocol Code Generator",
-    "Протокол": "Protocol",
-    "Адрес (HEX/DEC)": "Address (HEX/DEC)",
-    "Команда (HEX/DEC)": "Command (HEX/DEC)",
-    "Тест передачи": "Test Transmit",
-    "Сигнал сгенерирован и отправлен": "Signal generated and transmitted",
-    "Сигнал сохранён в библиотеку": "Signal saved to library",
-    "Сигнал уже есть в библиотеке": "Signal already exists in library",
-    "Не удалось сохранить сигнал": "Failed to save signal",
-    "Сигнал отправлен в очередь": "Signal queued for transmission",
-    "Ошибка: передатчик занят или недоступен": "Error: transmitter busy or unavailable",
-    "Виброотклик кнопок": "Button haptic feedback",
-    "Тактильная отдача при нажатии клавиш пульта": "Tactile vibration when pressing remote buttons",
-    "Ошибка генерации сигнала": "Signal generation error",
-    "Нужно 1–8192 импульсов": "Need 1–8192 pulses",
-    "Импульсы должны быть положительными; сигнал не длиннее 5 с": "Pulses must be positive; signal no longer than 5 s",
-    "Передатчик занят обучением": "Transmitter is busy learning",
-    "Пауза: идёт обучение": "Paused: learning in progress",
-    "Статус": "Status",
+    "Signal Generator": "Signal Generator",
+    "Protocol Code Generator": "Protocol Code Generator",
+    "Protocol": "Protocol",
+    "Address (HEX/DEC)": "Address (HEX/DEC)",
+    "Command (HEX/DEC)": "Command (HEX/DEC)",
+    "Test Transmit": "Test Transmit",
+    "Signal generated and transmitted": "Signal generated and transmitted",
+    "Signal saved to library": "Signal saved to library",
+    "Signal already exists in library": "Signal already exists in library",
+    "Failed to save signal": "Failed to save signal",
+    "Signal queued for transmission": "Signal queued for transmission",
+    "Error: transmitter busy or unavailable": "Error: transmitter busy or unavailable",
+    "Button haptic feedback": "Button haptic feedback",
+    "Tactile vibration when pressing remote buttons": "Tactile vibration when pressing remote buttons",
+    "Signal generation error": "Signal generation error",
+    "Need 1–8192 pulses": "Need 1–8192 pulses",
+    "Pulses must be positive; signal no longer than 5 s": "Pulses must be positive; signal no longer than 5 s",
+    "Transmitter is busy learning": "Transmitter is busy learning",
+    "Paused: learning in progress": "Paused: learning in progress",
+    "Status": "Status",
 }
 
 class UsbCIrBackend(BasePlugin):
@@ -2013,7 +2013,7 @@ class UsbCIrBackend(BasePlugin):
     # --------------------------------------------------------------------------
     def _t(self, text, *args, **kwargs):
         """
-        Возвращает локализованную строку для текущего языка (ru или en).
+        Returns the localized string for the current language (ru or en).
         """
         if not isinstance(text, str):
             return text
@@ -2032,77 +2032,77 @@ class UsbCIrBackend(BasePlugin):
         return trans
 
     _LOG_REGEX_RULES = [
-        (re.compile(r"^Встроенный ИК TX:\s*(OK|FAIL)\s*\(([0-9]+)Hz,\s*([0-9]+)\s*имп\.\)", re.I),
+        (re.compile(r"^Built-in IR TX:\s*(OK|FAIL)\s*\(([0-9]+)Hz,\s*([0-9]+)\s*pulses\)", re.I),
          r"Built-in IR TX: \1 (\2Hz, \3 pulses)"),
-        (re.compile(r"^Audio IR TX:\s*(OK|FAIL)\s*\(([0-9]+)Hz,\s*([0-9]+)\s*имп\.\)", re.I),
+        (re.compile(r"^Audio IR TX:\s*(OK|FAIL)\s*\(([0-9]+)Hz,\s*([0-9]+)\s*pulses\)", re.I),
          r"Audio IR TX: \1 (\2Hz, \3 pulses)"),
-        (re.compile(r"^TX:\s*(OK|FAIL)\s*\(([0-9]+)Hz,\s*([0-9]+)\s*имп\.\)", re.I),
+        (re.compile(r"^TX:\s*(OK|FAIL)\s*\(([0-9]+)Hz,\s*([0-9]+)\s*pulses\)", re.I),
          r"TX: \1 (\2Hz, \3 pulses)"),
-        (re.compile(r"^Сохранено\s*([0-9]+);\s*дубликатов\s*([0-9]+)", re.I),
+        (re.compile(r"^Saved\s*([0-9]+);\s*duplicates\s*([0-9]+)", re.I),
          r"Saved \1; duplicates \2"),
-        (re.compile(r"^Сигнал\s*['\"]([^'\"]*)['\"]\s*удалён из библиотеки", re.I),
+        (re.compile(r"^Signal\s*['\"]([^'\"]*)['\"]\s*removed from library", re.I),
          r"Signal '\1' removed from library"),
-        (re.compile(r"^💾\s*(.*?)\s*сохранён в\s*(.*)", re.I),
+        (re.compile(r"^💾\s*(.*?)\s*saved to\s*(.*)", re.I),
          r"💾 \1 saved to \2"),
-        (re.compile(r"^Библиотека\s*#([0-9]+):\s*(.*)", re.I),
+        (re.compile(r"^Library\s*#([0-9]+):\s*(.*)", re.I),
          r"Library #\1: \2"),
-        (re.compile(r"^Не удалось прочитать библиотеку:\s*(.*?);\s*исходные данные сохранены", re.I),
+        (re.compile(r"^Failed to read library:\s*(.*?);\s*original data preserved", re.I),
          r"Failed to read library: \1; raw data saved"),
-        (re.compile(r"^Ошибка сохранения библиотеки:\s*(.*)", re.I),
+        (re.compile(r"^Library save error:\s*(.*)", re.I),
          r"Library save error: \1"),
-        (re.compile(r"^Ошибка копирования:\s*(.*)", re.I),
+        (re.compile(r"^Copy error:\s*(.*)", re.I),
          r"Copy error: \1"),
-        (re.compile(r"^Ошибка встроенного ИК:\s*(.*)", re.I),
+        (re.compile(r"^Built-in IR error:\s*(.*)", re.I),
          r"Built-in IR error: \1"),
-        (re.compile(r"^Сбой регистрации хуков:\s*(.*)", re.I),
+        (re.compile(r"^Hook registration failure:\s*(.*)", re.I),
          r"Hook registration failure: \1"),
-        (re.compile(r"^Настройка изменена:\s*(.*?)\s*=\s*(.*)", re.I),
+        (re.compile(r"^Setting changed:\s*(.*?)\s*=\s*(.*)", re.I),
          r"Setting changed: \1 = \2"),
-        (re.compile(r"^Ошибка доступа к USB сервису:\s*(.*)", re.I),
+        (re.compile(r"^USB service access error:\s*(.*)", re.I),
          r"USB service access error: \1"),
-        (re.compile(r"^Сбой сканирования USB:\s*(.*)", re.I),
+        (re.compile(r"^USB scan failure:\s*(.*)", re.I),
          r"USB scan failure: \1"),
-        (re.compile(r"^Адаптер отключен:\s*(.*)", re.I),
+        (re.compile(r"^Adapter disconnected:\s*(.*)", re.I),
          r"Adapter disconnected: \1"),
-        (re.compile(r"^Запрос прав USB для\s*(.*?)\.\.\.", re.I),
+        (re.compile(r"^Requesting USB permission for\s*(.*?)\.\.\.", re.I),
          r"Requesting USB permissions for \1..."),
-        (re.compile(r"^Ошибка запроса прав USB:\s*(.*)", re.I),
+        (re.compile(r"^USB permission request error:\s*(.*)", re.I),
          r"USB permission request error: \1"),
-        (re.compile(r"^Нет профиля протокола для VID:PID\s*(.*)", re.I),
+        (re.compile(r"^No protocol profile for VID:PID\s*(.*)", re.I),
          r"No protocol profile for VID:PID \1"),
-        (re.compile(r"^Каналы USB не найдены:\s*(.*)", re.I),
+        (re.compile(r"^USB channels not found:\s*(.*)", re.I),
          r"USB endpoints not found: \1"),
-        (re.compile(r"^Не удалось открыть\s*(.*)", re.I),
+        (re.compile(r"^Failed to open\s*(.*)", re.I),
          r"Failed to open \1"),
-        (re.compile(r"^Ошибка передачи USB:\s*(.*)", re.I),
+        (re.compile(r"^USB transmit error:\s*(.*)", re.I),
          r"USB transmit error: \1"),
-        (re.compile(r"^Ошибка кодирования:\s*(.*)", re.I),
+        (re.compile(r"^Encode error:\s*(.*)", re.I),
          r"Encoding error: \1"),
-        (re.compile(r"^Запись Tiqiaa завершена:\s*([0-9]+)\s*имп\.\s*\((.*?)\)", re.I),
+        (re.compile(r"^Tiqiaa recording complete:\s*([0-9]+)\s*pulses\s*\((.*?)\)", re.I),
          r"Tiqiaa recording complete: \1 pulses (\2)"),
-        (re.compile(r"^Запись ElkSmart завершена:\s*([0-9]+)\s*имп\.\s*\((.*?)\)", re.I),
+        (re.compile(r"^ElkSmart recording complete:\s*([0-9]+)\s*pulses\s*\((.*?)\)", re.I),
          r"ElkSmart recording complete: \1 pulses (\2)"),
-        (re.compile(r"^Сбой обучения:\s*(.*)", re.I),
+        (re.compile(r"^Learning failure:\s*(.*)", re.I),
          r"Learning failure: \1"),
-        (re.compile(r"^Ошибка брутфорс кодирования:\s*(.*)", re.I),
+        (re.compile(r"^Brute-force encode error:\s*(.*)", re.I),
          r"Brute-force encoding error: \1"),
-        (re.compile(r"^---\s*Найдено USB устройств:\s*([0-9]+)\s*---", re.I),
+        (re.compile(r"^---\s*Found USB devices:\s*([0-9]+)\s*---", re.I),
          r"--- Found USB devices: \1 ---"),
-        (re.compile(r"^VID:\s*(0x[0-9a-fA-F]+),\s*PID:\s*(0x[0-9a-fA-F]+)\s*\|\s*Права:\s*(Да|Нет|True|False)\s*\|\s*(.*)", re.I),
-         lambda m: f"VID: {m.group(1)}, PID: {m.group(2)} | Permission: {'Yes' if m.group(3) in ('Да','True','true') else 'No'} | {m.group(4)}"),
-        (re.compile(r"^Ошибка команды:\s*(.*)", re.I),
+        (re.compile(r"^VID:\s*(0x[0-9a-fA-F]+),\s*PID:\s*(0x[0-9a-fA-F]+)\s*\|\s*Permission:\s*(YES|NO|True|False)\s*\|\s*(.*)", re.I),
+         lambda m: f"VID: {m.group(1)}, PID: {m.group(2)} | Permission: {'Yes' if m.group(3) in ('YES','True','true') else 'No'} | {m.group(4)}"),
+        (re.compile(r"^Command error:\s*(.*)", re.I),
          r"Command error: \1"),
-        (re.compile(r"^(.*?):\s*ошибка\s*(.*)", re.I),
+        (re.compile(r"^(.*?):\s*error\s*(.*)", re.I),
          r"\1: error \2"),
-        (re.compile(r"^(.*?):\s*остановлено\s*([0-9]+)/([0-9]+)", re.I),
+        (re.compile(r"^(.*?):\s*stopped\s*([0-9]+)/([0-9]+)", re.I),
          r"\1: stopped \2/\3"),
-        (re.compile(r"^(.*?):\s*отправлено\s*([0-9]+)/([0-9]+)", re.I),
+        (re.compile(r"^(.*?):\s*sent\s*([0-9]+)/([0-9]+)", re.I),
          r"\1: sent \2/\3"),
-        (re.compile(r"^Некорректный сигнал:\s*(.*)", re.I),
+        (re.compile(r"^Invalid signal:\s*(.*)", re.I),
          r"Invalid signal: \1"),
-        (re.compile(r"^Импортировано\s*([0-9]+)\s*сигналов", re.I),
+        (re.compile(r"^Imported\s*([0-9]+)\s*signals", re.I),
          r"Imported \1 signals"),
-        (re.compile(r"^Код найден:\s*(.*)", re.I),
+        (re.compile(r"^Code found:\s*(.*)", re.I),
          r"Code found: \1"),
     ]
 
@@ -2119,26 +2119,26 @@ class UsbCIrBackend(BasePlugin):
                     return pattern.sub(repl, text)
                 except Exception:
                     pass
-        return text.replace(" имп.", " pulses").replace(" имп", " pulses")
+        return text
 
 
 
     def _toggle_lang(self):
         """
-        Мгновенно переключает язык интерфейса между RU и EN с сохранением в настройках.
-        Также синхронно переводит весь журнал логов на выбранный язык.
-        Race condition fix: атомарная замена _log_lines вместо .clear() + append.
+        Instantly switches the UI language between RU and EN, persisting the choice in settings.
+        Also synchronously translates the whole log to the selected language.
+        Race condition fix: atomic replacement of _log_lines instead of .clear() + append.
         """
         self._lang = "en" if getattr(self, "_lang", "ru") == "ru" else "ru"
         self.set_setting("lang", self._lang)
-        msg = "Язык: Русский" if self._lang == "ru" else "Language: English"
+        msg = "Language: Russian" if self._lang == "ru" else "Language: English"
         try:
             self.toast(msg)
         except Exception:
             pass
         with self._refresh_lock:
             if hasattr(self, "_raw_log_entries") and self._raw_log_entries:
-                # Атомарная замена: создаём новый deque, затем заменяем целиком
+                # Atomic replacement: build a new deque, then swap it in wholesale
                 new_log_lines = deque(maxlen=80)
                 for ts, raw in self._raw_log_entries:
                     new_log_lines.append(f"[{ts}] {self._translate_log(raw)}")
@@ -2148,8 +2148,8 @@ class UsbCIrBackend(BasePlugin):
 
     def _haptic_tick(self):
         """
-        Тактильный виброотклик при нажатии на кнопки пультов (как в android-ir-blaster).
-        Учитывает как локальную настройку плагина, так и системную настройку Android.
+        Tactile haptic feedback on remote button presses (as in android-ir-blaster).
+        Respects both the plugin's local setting and the Android system setting.
         """
         if not bool(self.get_setting("haptic_feedback", True)):
             return
@@ -2229,7 +2229,7 @@ class UsbCIrBackend(BasePlugin):
         self._ignored_device_name = None
         self._learned_timings = []
         self._learned_frequency = 38000
-        self._learned_status = "Ожидание"
+        self._learned_status = "Idle"
         self._learned_protocol_guess = ""
         self._signal_name_input = ""
         self._learning_cancel_event = threading.Event()
@@ -2237,7 +2237,7 @@ class UsbCIrBackend(BasePlugin):
         self._tx_count = 0
         self._tx_success_count = 0
         self._tx_fail_streak = 0
-        self._last_tx_info = "Нет передач"
+        self._last_tx_info = "No transmissions"
         self._last_tx_at = 0.0
         self._connected_at = 0.0
         self._active_tab = 0
@@ -2255,7 +2255,7 @@ class UsbCIrBackend(BasePlugin):
         self._finder_current_code = 0
         self._finder_max_code = 255
         self._finder_delay_ms = 400
-        self._finder_status = "Готов к запуску"
+        self._finder_status = "Ready to start"
         self._finder_last_sent = ""
         self._finder_last_code = 0
         self._backoff_interval = 1.5
@@ -2273,7 +2273,7 @@ class UsbCIrBackend(BasePlugin):
         self._job_lock = threading.Lock()
         self._job_thread = None
         self._adb_busy = False
-        self._adb_status = "Нужны ADB на телефоне и разрешённое подключение на ТВ"
+        self._adb_status = "Need ADB on the phone and an authorized connection on the TV"
         self._remote_group = ""
         self._remote_page = 0
         self._edit_signal_id = None
@@ -2282,14 +2282,14 @@ class UsbCIrBackend(BasePlugin):
         self._burst_cancel = threading.Event()
         self._burst_thread = None
         self._burst_running = False
-        self._burst_status = "Готов к передаче"
+        self._burst_status = "Ready to transmit"
 
     def _load_signal_library(self):
         try:
             raw = self.get_setting("signal_library", "[]")
             items = json.loads(raw) if isinstance(raw, str) else raw
             if not isinstance(items, list):
-                raise ValueError("Ожидался список сигналов")
+                raise ValueError("Expected a list of signals")
             entries = []
             ids = set()
             for index, item in enumerate(items):
@@ -2309,25 +2309,25 @@ class UsbCIrBackend(BasePlugin):
                     entry["group"] = str(item.get("group", ""))[:120]
                     entries.append(entry)
                 except (ValueError, TypeError, KeyError) as error:
-                    self._log(f"Библиотека #{index + 1}: {error}", notify_ui=False)
+                    self._log(f"Library #{index + 1}: {error}", notify_ui=False)
             self._signal_library = entries
             # Keep the original store intact if it contains damaged entries.
             if len(entries) == len(items) and entries != items:
                 self._commit_library(entries)
         except (ValueError, TypeError, RecursionError) as error:
-            self._log(f"Не удалось прочитать библиотеку: {error}; исходные данные сохранены", notify_ui=False)
+            self._log(f"Failed to read library: {error}; original data preserved", notify_ui=False)
 
     def _commit_library(self, entries):
         with self._library_lock:
             try:
                 data = json.dumps(entries, ensure_ascii=False, separators=(",", ":"))
                 if len(data.encode("utf-8")) > 900000:
-                    raise ValueError("Библиотека больше 900 КБ. Экспортируйте резервную копию")
+                    raise ValueError("Library larger than 900 KB. Export a backup")
                 self.set_setting("signal_library", data)
                 self._signal_library = entries
                 return True
             except Exception as error:
-                self._log(f"Ошибка сохранения библиотеки: {error}")
+                self._log(f"Library save error: {error}")
                 return False
 
     def _save_signal_library(self):
@@ -2335,9 +2335,9 @@ class UsbCIrBackend(BasePlugin):
 
     def _add_signal_to_library(self, name, frequency, pattern, group="", favorite=False):
         """
-        Добавляет сигнал в библиотеку.
-        Возвращает SignalAddResult(bool, reason), где reason: 'ok' | 'duplicate' | 'invalid' | 'failed'.
-        Сохраняет обратную совместимость с if self._add_signal_to_library(...).
+        Adds a signal to the library.
+        Returns SignalAddResult(bool, reason) where reason: 'ok' | 'duplicate' | 'invalid' | 'failed'.
+        Preserves backward compatibility with if self._add_signal_to_library(...).
         """
         try:
             frequency, pattern = validate_signal(frequency, pattern)
@@ -2385,7 +2385,7 @@ class UsbCIrBackend(BasePlugin):
             count = len(entries) - len(self._signal_library)
             if count and not self._commit_library(entries):
                 return 0, skipped
-            self._log(f"Сохранено {count}; дубликатов {skipped}")
+            self._log(f"Saved {count}; duplicates {skipped}")
             return count, skipped
 
     def _library_index(self, index):
@@ -2415,7 +2415,7 @@ class UsbCIrBackend(BasePlugin):
                               ensure_ascii=False, separators=(",", ":"))
 
     def _export_backup(self):
-        self._save_to_downloads("IR_Transceiver_Backup.json", self._backup_json(), "Резервная копия")
+        self._save_to_downloads("IR_Transceiver_Backup.json", self._backup_json(), "Backup")
 
     def _remote_groups(self):
         with self._library_lock:
@@ -2447,12 +2447,12 @@ class UsbCIrBackend(BasePlugin):
     def _update_signal_metadata(self, ident, name, group):
         name, group = str(name).strip(), str(group).strip()
         if not name or len(name) > 120 or len(group) > 120 or "\n" in name + group or "\r" in name + group:
-            self.toast("Имя: 1–120 символов; группа: до 120. Без переносов строк")
+            self.toast("Name: 1–120 chars; group: up to 120. No line breaks")
             return False
         with self._library_lock:
             index = self._library_index(ident)
             if not 0 <= index < len(self._signal_library):
-                self.toast("Сигнал уже удалён")
+                self.toast("Signal already deleted")
                 return False
             entries = list(self._signal_library)
             entries[index] = dict(entries[index], name=name, group=group)
@@ -2487,11 +2487,11 @@ class UsbCIrBackend(BasePlugin):
 
     def _export_flipper_entries(self, entries, filename, label):
         if not entries:
-            self._log("Нет сигналов для экспорта")
+            self._log("No signals to export")
             return
         for entry in entries:
             if len(entry["pattern"]) > 1024:
-                message = "Экспорт .ir отменён: лимит Flipper 1024 интервала на сигнал. Используйте JSON."
+                message = ".ir export cancelled: Flipper limit is 1024 intervals per signal. Use JSON."
                 self._log(message)
                 try:
                     self.toast(message)
@@ -2500,24 +2500,24 @@ class UsbCIrBackend(BasePlugin):
                 return
         text = self._flipper_text(entries)
         if len(text.encode("utf-8")) > 900_000:
-            self._log("Слишком много данных для экспорта .ir; используйте JSON")
+            self._log("Too much data for .ir export; use JSON")
             return
         self._save_to_downloads(filename, text, label)
 
     def _export_remote(self):
         filename = self._flipper_clean_name(self._remote_group or "Ungrouped") + ".ir"
-        self._export_flipper_entries(self._remote_entries(self._remote_group), filename, "Пульт (.ir)")
+        self._export_flipper_entries(self._remote_entries(self._remote_group), filename, "Remote (.ir)")
 
     def _burst_busy(self):
         return self._burst_running or (self._burst_thread is not None and self._burst_thread.is_alive())
 
     def _sequence_busy(self):
-        """Проверяет, занят ли передатчик какой-либо последовательностью (finder, power, burst)."""
+        """Checks whether the transmitter is busy with any sequence (finder, power, burst)."""
         if self._burst_running:
             return True
         if self._finder_running or self._power_running:
             return True
-        # Проверка потоков только если флаги активны
+        # Thread check only when the flags are active
         return any(
             worker is not None and worker.is_alive()
             for worker in (self._finder_thread, self._power_thread, self._burst_thread)
@@ -2540,7 +2540,7 @@ class UsbCIrBackend(BasePlugin):
             repeats = 1
         with self._state_lock:
             if self._stop_event.is_set() or not self._can_transmit() or self._sequence_busy():
-                self.toast("Передатчик занят или недоступен. Остановите текущую последовательность")
+                self.toast("Transmitter busy or unavailable. Stop the current sequence")
                 return False
             self._burst_cancel.clear()
             self._burst_running = True
@@ -2558,14 +2558,14 @@ class UsbCIrBackend(BasePlugin):
                 if self._stop_event.is_set() or self._burst_cancel.is_set():
                     break
                 if self._learning_active.is_set() or getattr(self, "_state", None) == DongleState.LEARNING:
-                    self._burst_status = f"{name}: передатчик занят обучением"
+                    self._burst_status = f"{name}: transmitter busy learning"
                     return
                 with self._tx_lock:
                     if self._stop_event.is_set() or self._burst_cancel.is_set():
                         break
                     result = self.service_infrared_transmitter_transmit(payload)
                 if not result.get("ok"):
-                    self._burst_status = f"{name}: ошибка передачи ({sent}/{repeats})"
+                    self._burst_status = f"{name}: transmit error ({sent}/{repeats})"
                     return
                 sent += 1
                 self._burst_status = f"{name}: {sent}/{repeats}"
@@ -2573,9 +2573,9 @@ class UsbCIrBackend(BasePlugin):
                 if index + 1 < repeats and self._burst_cancel.wait(0.15):
                     break
             stopped = self._stop_event.is_set() or self._burst_cancel.is_set()
-            self._burst_status = f"{name}: {'остановлено' if stopped else 'отправлено'} {sent}/{repeats}"
+            self._burst_status = f"{name}: {'stopped' if stopped else 'sent'} {sent}/{repeats}"
         except Exception as error:
-            self._burst_status = f"{name}: ошибка {error}"
+            self._burst_status = f"{name}: error {error}"
             self._log(self._burst_status)
         finally:
             self._burst_running = False
@@ -2596,26 +2596,26 @@ class UsbCIrBackend(BasePlugin):
         ]
         if entry is None:
             return ui.scaffold(
-                title=self._t("Кнопка пульта"),
+                title=self._t("Remote button"),
                 actions=top_actions,
                 content=ui.column([
-                    ui.text(self._t("Сигнал не найден"), "titleMedium"),
-                    ui.button(self._t("Назад"), lambda: self.navigate("main")),
+                    ui.text(self._t("Signal not found"), "titleMedium"),
+                    ui.button(self._t("Back"), lambda: self.navigate("main")),
                 ], padding=16),
             )
         return ui.scaffold(
-            title=self._t("Кнопка пульта"),
+            title=self._t("Remote button"),
             content=ui.column([
                 ui.card([
-                    ui.text(self._t("Имя и устройство"), "titleMedium"),
+                    ui.text(self._t("Name and device"), "titleMedium"),
                     ui.text_field(value=self._edit_signal_name,
                                   on_change=lambda value: self._on_signal_name_change(value),
-                                  label=self._t("Имя кнопки")),
+                                  label=self._t("Button name")),
                     ui.text_field(value=self._edit_signal_group,
-                                  on_change=lambda value: setattr(self, "_edit_signal_group", str(value)), label=self._t("Пульт / группа")),
-                    ui.text(self._t("Одинаковая группа объединяет кнопки в один пульт. Пустая группа — без устройства"), "bodySmall", "muted"),
-                    ui.button(self._t("Сохранить кнопку"), self._save_signal_editor),
-                    ui.button(self._t("Отмена"), lambda: self.navigate("main"), style="text"),
+                                  on_change=lambda value: setattr(self, "_edit_signal_group", str(value)), label=self._t("Remote / group")),
+                    ui.text(self._t("Same group merges buttons into one remote. Empty group — no device"), "bodySmall", "muted"),
+                    ui.button(self._t("Save button"), self._save_signal_editor),
+                    ui.button(self._t("Cancel"), lambda: self.navigate("main"), style="text"),
                 ], padding=16),
             ], padding=16),
             actions=top_actions,
@@ -2627,25 +2627,25 @@ class UsbCIrBackend(BasePlugin):
             self._remote_group = next((group for group in groups if group), groups[0])
             self._remote_page = 0
         entries = self._remote_entries()
-        btn_count_text = f"{len(entries)} кнопок" if self._lang == "ru" else f"{len(entries)} buttons"
-        controls = [ui.text(self._t("Мои пульты"), "titleLarge"),
-                    ui.text(self._t("Кнопки создаются из вашей библиотеки. Назначьте им группу через «Изменить»"), "bodySmall", "muted")]
+        btn_count_text = f"{len(entries)} buttons" if self._lang == "ru" else f"{len(entries)} buttons"
+        controls = [ui.text(self._t("My remotes"), "titleLarge"),
+                    ui.text(self._t("Buttons are created from your library. Assign them a group via “Edit”"), "bodySmall", "muted")]
         if groups:
             controls.extend([
-                ui.dropdown([(group, group or self._t("Без группы")) for group in groups], selected=self._remote_group,
-                            on_select=self._select_remote, label=self._t("Устройство")),
+                ui.dropdown([(group, group or self._t("Ungrouped")) for group in groups], selected=self._remote_group,
+                            on_select=self._select_remote, label=self._t("Device")),
                 ui.text(btn_count_text, "labelLarge"),
-                ui.dropdown([("1", self._t("Одна отправка")), ("3", self._t("Повторить 3 раза")), ("5", self._t("Повторить 5 раз"))],
+                ui.dropdown([("1", self._t("One press")), ("3", self._t("Repeat 3 times")), ("5", self._t("Repeat 5 times"))],
                             selected=str(self.get_setting("remote_repeat", 1)),
-                            on_select=lambda value: self._set_option("remote_repeat", int(value)), label=self._t("Повторы кнопки"),
+                            on_select=lambda value: self._set_option("remote_repeat", int(value)), label=self._t("Button repeats"),
                             enabled=not self._burst_busy()),
-                ui.text(self._t("Повторы удобны для громкости и каналов"), "bodySmall", "muted"),
+                ui.text(self._t("Repeats are convenient for volume and channels"), "bodySmall", "muted"),
                 ui.text(self._burst_status, "bodySmall", "accent"),
-                ui.button(self._t("Остановить повторы"), self._stop_remote_repeat, style="tonal", enabled=self._burst_busy()),
-                ui.button(self._t("Экспорт этого пульта (.ir)"), self._export_remote, style="tonal", enabled=bool(entries)),
+                ui.button(self._t("Stop repeats"), self._stop_remote_repeat, style="tonal", enabled=self._burst_busy()),
+                ui.button(self._t("Export this remote (.ir)"), self._export_remote, style="tonal", enabled=bool(entries)),
             ])
         else:
-            controls.append(ui.button(self._t("Открыть библиотеку"), lambda: self._on_tab_select(2)))
+            controls.append(ui.button(self._t("Open library"), lambda: self._on_tab_select(2)))
         pages = max(1, (len(entries) + 19) // 20)
         self._remote_page = min(self._remote_page, pages - 1)
         visible = entries[self._remote_page * 20:(self._remote_page + 1) * 20]
@@ -2658,9 +2658,9 @@ class UsbCIrBackend(BasePlugin):
             ], spacing=8))
         if pages > 1:
             controls.append(ui.row([
-                ui.button(self._t("Назад"), lambda: self._change_remote_page(-1), enabled=self._remote_page > 0),
+                ui.button(self._t("Back"), lambda: self._change_remote_page(-1), enabled=self._remote_page > 0),
                 ui.text(f"{self._remote_page + 1} / {pages}", "labelLarge"),
-                ui.button(self._t("Далее"), lambda: self._change_remote_page(1), enabled=self._remote_page + 1 < pages),
+                ui.button(self._t("Next"), lambda: self._change_remote_page(1), enabled=self._remote_page + 1 < pages),
             ]))
         return [ui.card(controls, padding=16)]
 
@@ -2679,7 +2679,7 @@ class UsbCIrBackend(BasePlugin):
                     name = entry.get("name", "?")
                     entries = self._signal_library[:index] + self._signal_library[index + 1:]
                     if self._commit_library(entries):
-                        self._log(f"Сигнал '{name}' удалён из библиотеки")
+                        self._log(f"Signal '{name}' removed from library")
         self._confirm_delete_id = ""
         self._confirm_delete_name = None
         self._refresh_ui()
@@ -2687,12 +2687,12 @@ class UsbCIrBackend(BasePlugin):
     def _clear_all_library(self):
         self._commit_library([])
         self._confirm_clear_all = False
-        self._log("Библиотека сигналов очищена" if not self._signal_library else "Библиотека не очищена: ошибка сохранения")
+        self._log("Signal library cleared" if not self._signal_library else "Library not cleared: save error")
         self._refresh_ui()
 
     def _send_library_signal(self, index):
         if not self._can_transmit():
-            self._log("Ошибка: нет доступного передатчика")
+            self._log("Error: no transmitter available")
             return
         with self._library_lock:
             index = self._library_index(index)
@@ -2711,9 +2711,9 @@ class UsbCIrBackend(BasePlugin):
             if not 0 <= index < len(self._signal_library):
                 return
             entry = dict(self._signal_library[index])
-        self._clipboard_copy("IR_Signal_JSON", json.dumps(entry, ensure_ascii=False), "JSON скопирован")
+        self._clipboard_copy("IR_Signal_JSON", json.dumps(entry, ensure_ascii=False), "JSON copied")
 
-    def _save_to_downloads(self, filename, content, label="Файл"):
+    def _save_to_downloads(self, filename, content, label="File"):
         saved = False
         stream = None
         uri = None
@@ -2741,9 +2741,9 @@ class UsbCIrBackend(BasePlugin):
                     completed.put("is_pending", 0)
                     resolver.update(uri, completed, None, None)
                     saved = True
-                    self._log(f"💾 {label} сохранён в Download/Dolphy/{filename}")
+                    self._log(f"💾 {label} saved to Download/Dolphy/{filename}")
                     try:
-                        self.toast(f"Сохранено: Download/Dolphy/{filename}")
+                        self.toast(f"Saved: Download/Dolphy/{filename}")
                     except Exception:
                         pass
         except Exception as e:
@@ -2760,7 +2760,7 @@ class UsbCIrBackend(BasePlugin):
                 except Exception:
                     pass
 
-        toast_text = f"{filename} скопирован в буфер" + (" и сохранён в Download/Dolphy" if saved else "")
+        toast_text = f"{filename} copied to clipboard" + (" and saved to Download/Dolphy" if saved else "")
         self._clipboard_copy("Flipper_IR", content, toast_text)
 
     def _export_library_signal_flipper(self, index):
@@ -2770,12 +2770,12 @@ class UsbCIrBackend(BasePlugin):
                 return
             entry = dict(self._signal_library[index], pattern=list(self._signal_library[index]["pattern"]))
         filename = self._flipper_clean_name(entry["name"]) + ".ir"
-        self._export_flipper_entries([entry], filename, "Сигнал .ir")
+        self._export_flipper_entries([entry], filename, "Signal .ir")
 
     def _export_all_library_flipper(self):
         with self._library_lock:
             entries = [dict(entry, pattern=list(entry["pattern"])) for entry in self._signal_library]
-        self._export_flipper_entries(entries, "Remote_Export.ir", "Дамп библиотеки (.ir)")
+        self._export_flipper_entries(entries, "Remote_Export.ir", "Library dump (.ir)")
 
     @staticmethod
     def _flipper_clean_name(name):
@@ -2798,9 +2798,9 @@ class UsbCIrBackend(BasePlugin):
         self._import_preview = preview
         signals = preview["signals"]
         if not signals:
-            self._log("Не удалось распознать формат (Flipper .ir, IRPLUS, LIRC, Pronto, JSON)")
+            self._log("Failed to recognize format (Flipper .ir, IRPLUS, LIRC, Pronto, JSON)")
             try:
-                self.toast("Формат не распознан")
+                self.toast("Format not recognized")
             except Exception:
                 pass
             return
@@ -2808,9 +2808,9 @@ class UsbCIrBackend(BasePlugin):
         if count:
             self._learned_timings = list(signals[-1]["pattern"])
             self._learned_frequency = signals[-1]["frequency"]
-        msg = f"Импортировано {count} сигналов"
+        msg = f"Imported {count} signals"
         if skipped:
-            msg += f" (дубликатов {skipped})"
+            msg += f" (duplicates {skipped})"
         self._log(msg)
         try:
             self.toast(msg)
@@ -2851,7 +2851,7 @@ class UsbCIrBackend(BasePlugin):
             except Exception:
                 pass
         except Exception as e:
-            self._log(f"Ошибка копирования: {e}")
+            self._log(f"Copy error: {e}")
 
     def _inc_tx(self, success, freq, pattern_len):
         with self._stats_lock:
@@ -2884,7 +2884,7 @@ class UsbCIrBackend(BasePlugin):
                 values = jarray(jint)(pattern) if jarray and jint else pattern
                 return bool(android.irTransmit(int(freq), values))
         except Exception as e:
-            self._log(f"Ошибка встроенного ИК: {e}")
+            self._log(f"Built-in IR error: {e}")
         return False
 
     def _can_transmit(self):
@@ -2906,8 +2906,8 @@ class UsbCIrBackend(BasePlugin):
     # ==============================================================================
     def _get_current_activity(self):
         """
-        Возвращает текущую Activity Android для управления ориентацией окна,
-        безопасно распаковывая ContextWrapper.
+        Returns the current Android Activity for window orientation control,
+        safely unwrapping ContextWrapper.
         """
         candidates = []
         try:
@@ -2945,9 +2945,9 @@ class UsbCIrBackend(BasePlugin):
 
     def _determine_reverse_orientation(self, activity):
         """
-        Определяет перевёрнутую ориентацию (180°) с учётом типа устройства (телефон/планшет):
-        - В альбомном режиме (Landscape) -> SCREEN_ORIENTATION_REVERSE_LANDSCAPE (8)
-        - В портретном режиме (Portrait) -> SCREEN_ORIENTATION_REVERSE_PORTRAIT (9)
+        Determines the reversed orientation (180°) based on device type (phone/tablet):
+        - In landscape -> SCREEN_ORIENTATION_REVERSE_LANDSCAPE (8)
+        - In portrait -> SCREEN_ORIENTATION_REVERSE_PORTRAIT (9)
         """
         try:
             if activity is not None:
@@ -2962,8 +2962,8 @@ class UsbCIrBackend(BasePlugin):
 
     def _set_activity_orientation(self, target_orientation):
         """
-        Безопасно переключает ориентацию окна на UI-потоке Android.
-        Проверяет текущую ориентацию перед установкой во избежание лишней нагрузки и мерцания.
+        Safely switches the window orientation on the Android UI thread.
+        Checks the current orientation before applying to avoid extra churn and flicker.
         """
         act = self._get_current_activity()
         if act is None:
@@ -3002,7 +3002,7 @@ class UsbCIrBackend(BasePlugin):
 
     def _apply_screen_orientation(self):
         """
-        Применяет 180° переворот экрана или восстанавливает стандартную ориентацию (-1 / UNSPECIFIED).
+        Applies the 180° screen flip or restores the standard orientation (-1 / UNSPECIFIED).
         """
         if self._screen_flipped:
             act = self._get_current_activity()
@@ -3012,11 +3012,11 @@ class UsbCIrBackend(BasePlugin):
             self._set_activity_orientation(-1)
 
     def _restore_screen_orientation(self):
-        """Восстанавливает стандартную системную ориентацию экрана (-1 / UNSPECIFIED)."""
+        """Restores the standard system screen orientation (-1 / UNSPECIFIED)."""
         self._set_activity_orientation(-1)
 
     def _set_screen_flip(self, flipped, persist=True):
-        """Устанавливает и сохраняет состояние переворота экрана."""
+        """Sets and persists the screen flip state."""
         new_state = bool(flipped)
         changed = (self._screen_flipped != new_state)
         self._screen_flipped = new_state
@@ -3024,7 +3024,7 @@ class UsbCIrBackend(BasePlugin):
             self.set_setting("remote_view_flipped", self._screen_flipped)
         self._apply_screen_orientation()
         if changed or persist:
-            msg = self._t("Экран: 180°") if self._screen_flipped else self._t("Экран: 0°")
+            msg = self._t("Screen: 180°") if self._screen_flipped else self._t("Screen: 0°")
             try:
                 self.toast(msg)
             except Exception:
@@ -3032,7 +3032,7 @@ class UsbCIrBackend(BasePlugin):
         self._refresh_ui()
 
     def _toggle_screen_flip(self):
-        """Переключает поворот экрана (0° <-> 180°)."""
+        """Toggles the screen rotation (0° <-> 180°)."""
         self._set_screen_flip(not self._screen_flipped, persist=True)
     # ==============================================================================
     # <<< END [SMART_ROTATION_AND_ORIENTATION]
@@ -3046,29 +3046,29 @@ class UsbCIrBackend(BasePlugin):
         if value_str is None:
             if default is not None:
                 return default
-            raise ValueError("Введите число")
+            raise ValueError("Enter a number")
         s = str(value_str).strip()
         if not s:
             if default is not None:
                 return default
-            raise ValueError("Введите число")
+            raise ValueError("Enter a number")
         if s.startswith("#"):
             token = s[1:]
             if not re.fullmatch(r"[0-9a-fA-F]+", token):
-                raise ValueError(f"Некорректный HEX: {s!r}")
+                raise ValueError(f"Invalid HEX: {s!r}")
             return int(token, 16)
         if s.lower().startswith("0x"):
             token = s[2:]
             if not re.fullmatch(r"[0-9a-fA-F]+", token):
-                raise ValueError(f"Некорректный HEX: {s!r}")
+                raise ValueError(f"Invalid HEX: {s!r}")
             return int(token, 16)
         if re.search(r"[a-fA-F]", s):
             if not re.fullmatch(r"[0-9a-fA-F]+", s):
-                raise ValueError(f"Некорректный HEX: {s!r}")
+                raise ValueError(f"Invalid HEX: {s!r}")
             return int(s, 16)
         if re.fullmatch(r"[0-9]+", s):
             return int(s, 10)
-        raise ValueError(f"Не удалось распознать число: {s!r}")
+        raise ValueError(f"Could not parse number: {s!r}")
 
     def _generate_code_signal(self, proto, addr_str, cmd_str):
         proto = str(proto or "NEC").upper()
@@ -3090,9 +3090,9 @@ class UsbCIrBackend(BasePlugin):
         if proto in limits:
             addr_bits, cmd_bits = limits[proto]
             if addr_bits > 0 and not (0 <= addr < (1 << addr_bits)):
-                raise ValueError(f"Адрес вне диапазона протокола {proto} (0..{(1 << addr_bits) - 1})")
+                raise ValueError(f"Address out of range for protocol {proto} (0..{(1 << addr_bits) - 1})")
             if cmd_bits > 0 and not (0 <= cmd < (1 << cmd_bits)):
-                raise ValueError(f"Команда вне диапазона протокола {proto} (0..{(1 << cmd_bits) - 1})")
+                raise ValueError(f"Command out of range for protocol {proto} (0..{(1 << cmd_bits) - 1})")
 
         if proto == "NEC":
             hex_code = f"{addr:02X}{((~addr) & 0xFF):02X}{cmd:02X}{((~cmd) & 0xFF):02X}"
@@ -3126,11 +3126,11 @@ class UsbCIrBackend(BasePlugin):
             )
             ok = self._enqueue_tx({"frequency": freq, "pattern": pattern})
             if ok:
-                self.toast(self._t("Сигнал отправлен в очередь"))
+                self.toast(self._t("Signal queued for transmission"))
             else:
-                self.toast(self._t("Ошибка: передатчик занят или недоступен"))
+                self.toast(self._t("Error: transmitter busy or unavailable"))
         except Exception as e:
-            self.toast(f"{self._t('Ошибка генерации сигнала')}: {e}")
+            self.toast(f"{self._t('Signal generation error')}: {e}")
 
     def _save_generated_code(self):
         self._haptic_tick()
@@ -3143,19 +3143,19 @@ class UsbCIrBackend(BasePlugin):
                 name, freq, pattern, group=self._generator_proto, favorite=False
             )
             if res:
-                self.toast(self._t("Сигнал сохранён в библиотеку"))
+                self.toast(self._t("Signal saved to library"))
             elif getattr(res, "reason", "") == "duplicate":
-                self.toast(self._t("Сигнал уже есть в библиотеке"))
+                self.toast(self._t("Signal already exists in library"))
             else:
-                self.toast(self._t("Не удалось сохранить сигнал"))
+                self.toast(self._t("Failed to save signal"))
             self._refresh_ui()
         except Exception as e:
-            self.toast(f"{self._t('Ошибка генерации сигнала')}: {e}")
+            self.toast(f"{self._t('Signal generation error')}: {e}")
 
     def on_plugin_load(self):
         self.add_module(
             title="IR Transceiver",
-            description="ИК-лаборатория: передатчики, обучение, библиотека пультов и импорт",
+            description="IR lab: transmitters, learning, remote library and import",
             icon="settings_remote",
             screen="main",
             section="INFRARED",
@@ -3167,37 +3167,37 @@ class UsbCIrBackend(BasePlugin):
             self.hook_screen("ir_*", "usb_status_badge", "fab", 50)
             self.hook_screen("other/ir_*", "usb_status_badge", "fab", 50)
         except Exception as e:
-            self._log(f"Сбой регистрации хуков: {e}")
+            self._log(f"Hook registration failure: {e}")
         try:
             self.api.registerSettings("IR Transceiver", json.dumps([
-                {"type": "select", "key": "lang", "title": self._t("Язык интерфейса"),
+                {"type": "select", "key": "lang", "title": self._t("Interface language"),
                  "options": [
-                     {"value": "ru", "label": "Русский (RU)"},
+                     {"value": "ru", "label": "Russian (RU)"},
                      {"value": "en", "label": "English (EN)"}
                  ], "default": "ru"},
-                {"type": "select", "key": "transmitter_mode", "title": self._t("Способ передачи"),
+                {"type": "select", "key": "transmitter_mode", "title": self._t("Transmit mode"),
                  "options": [
-                     {"value": "auto", "label": self._t("Авто: USB → встроенный → Audio")},
-                     {"value": "usb", "label": self._t("Только USB OTG")},
-                     {"value": "builtin", "label": self._t("Только встроенный ИК")},
-                     {"value": "audio", "label": self._t("Только Audio IR")}
+                     {"value": "auto", "label": self._t("Auto: USB → built-in → Audio")},
+                     {"value": "usb", "label": self._t("USB OTG only")},
+                     {"value": "builtin", "label": self._t("Built-in IR only")},
+                     {"value": "audio", "label": self._t("Audio IR only")}
                  ], "default": "auto"},
-                {"type": "switch", "key": "builtin_ir_fallback", "title": self._t("Встроенный ИК-порт"),
-                 "subtitle": self._t("Использовать встроенный ИК передатчик телефона (Xiaomi, Poco, Vivo) при отсутствии USB"), "default": True},
-                {"type": "switch", "key": "audio_ir_fallback", "title": self._t("Audio IR (3.5мм адаптеры)"),
-                 "subtitle": self._t("Использовать аудиовыход смартфона при отсутствии USB-донгла (установите громкость на 100%)"), "default": False},
-                {"type": "switch", "key": "audio_stereo", "title": self._t("Стерео Audio IR"),
-                 "subtitle": self._t("Выключите для моноадаптера"), "default": True},
-                {"type": "switch", "key": "remote_view_flipped", "title": self._t("Переворот экрана (180°)"),
-                 "subtitle": self._t("Поворот экрана на 180° для ИК-донглов (USB / Audio), подключенных снизу"), "default": False},
-                {"type": "switch", "key": "haptic_feedback", "title": self._t("Виброотклик кнопок"),
-                 "subtitle": self._t("Тактильная отдача при нажатии клавиш пульта"), "default": True},
-                {"type": "slider", "key": "learn_timeout", "title": self._t("Таймаут обучения (сек)"),
+                {"type": "switch", "key": "builtin_ir_fallback", "title": self._t("Built-in IR port"),
+                 "subtitle": self._t("Use the phone's built-in IR emitter (Xiaomi, Poco, Vivo) when USB is absent"), "default": True},
+                {"type": "switch", "key": "audio_ir_fallback", "title": self._t("Audio IR (3.5mm adapters)"),
+                 "subtitle": self._t("Use phone audio output when no USB dongle is present (set volume to 100%)"), "default": False},
+                {"type": "switch", "key": "audio_stereo", "title": self._t("Stereo Audio IR"),
+                 "subtitle": self._t("Turn off for mono adapter"), "default": True},
+                {"type": "switch", "key": "remote_view_flipped", "title": self._t("Screen flip (180°)"),
+                 "subtitle": self._t("Rotate screen 180° for IR dongles (USB / Audio) plugged at the bottom"), "default": False},
+                {"type": "switch", "key": "haptic_feedback", "title": self._t("Button haptic feedback"),
+                 "subtitle": self._t("Tactile vibration when pressing remote buttons"), "default": True},
+                {"type": "slider", "key": "learn_timeout", "title": self._t("Learning timeout (sec)"),
                  "min": 3, "max": 20, "default": 8, "steps": 17},
-                {"type": "switch", "key": "auto_save_learned", "title": self._t("Автосохранение захваченных сигналов"),
-                 "subtitle": self._t("Сразу добавлять принятый сигнал в Библиотеку"), "default": False},
-                {"type": "switch", "key": "elksmart_v15_compat", "title": self._t("ElkSmart режим Ocrustar v1.5"),
-                 "subtitle": self._t("Совместимость с редкими ревизиями D226"), "default": False},
+                {"type": "switch", "key": "auto_save_learned", "title": self._t("Auto-save captured signals"),
+                 "subtitle": self._t("Immediately add the received signal to Library"), "default": False},
+                {"type": "switch", "key": "elksmart_v15_compat", "title": self._t("ElkSmart Ocrustar v1.5 mode"),
+                 "subtitle": self._t("Compatibility with rare D226 revisions"), "default": False},
             ]), 10)
         except Exception:
             pass
@@ -3213,7 +3213,7 @@ class UsbCIrBackend(BasePlugin):
             self._finder_delay_ms = max(150, min(2000, int(self.get_setting("finder_delay_ms", 400))))
         except (ValueError, TypeError):
             self._finder_delay_ms = 400
-        # [FLIP_SCREEN_FEATURE] Загрузка сохранённого состояния переворота [TODO: REVIEW/FIX BUGS]
+        # [FLIP_SCREEN_FEATURE] Load the saved flip state [TODO: REVIEW/FIX BUGS]
         self._screen_flipped = bool(self.get_setting("remote_view_flipped", False))
         if self._screen_flipped:
             self._apply_screen_orientation()
@@ -3224,12 +3224,12 @@ class UsbCIrBackend(BasePlugin):
         try:
             k = payload.get("key")
             v = payload.get("value")
-            self._log(f"Настройка изменена: {k} = {v}")
+            self._log(f"Setting changed: {k} = {v}")
             if k == "elksmart_v15_compat" and isinstance(self._encoder, ElkSmartBulkEncoder):
                 self._encoder.compat_mode = "ocrustar_v15" if bool(v) else "android"
             elif k == "audio_ir_fallback" and bool(v):
                 try:
-                    self.toast("Для Audio IR установите громкость медиа на 100%")
+                    self.toast("Set media volume to 100% for Audio IR")
                 except Exception:
                     pass
             elif k == "lang":
@@ -3247,7 +3247,7 @@ class UsbCIrBackend(BasePlugin):
         if any(worker is not None and worker.is_alive() for worker in
                (self._finder_thread, self._power_thread, self._burst_thread, self._job_thread, self._learning_thread,
                 self._poll_thread, self._reader_thread)) and self._stop_event.is_set():
-            self._log("Предыдущая передача завершается. Повторите включение после её завершения", notify_ui=False)
+            self._log("Previous transmission is finishing. Retry enable after it completes", notify_ui=False)
             return
         with self._state_lock:
             if self._state == DongleState.CLOSING:
@@ -3256,15 +3256,15 @@ class UsbCIrBackend(BasePlugin):
         self._stop_event.clear()
         if self._usb_manager is not None:
             self._start_polling()
-        # [FLIP_SCREEN_FEATURE] Применение ориентации при включении [TODO: REVIEW/FIX BUGS]
+        # [FLIP_SCREEN_FEATURE] Apply orientation on enable [TODO: REVIEW/FIX BUGS]
         if self._screen_flipped:
             self._apply_screen_orientation()
-        self._log("Плагин включен")
+        self._log("Plugin enabled")
         self._refresh_ui()
 
     def on_plugin_disable(self):
         self._shutdown()
-        self._log("Плагин выключен", notify_ui=False)
+        self._log("Plugin disabled", notify_ui=False)
 
     def _shutdown(self):
         self._stop_event.set()
@@ -3287,14 +3287,14 @@ class UsbCIrBackend(BasePlugin):
             if self._pending_refresh_timer is not None:
                 self._pending_refresh_timer.cancel()
                 self._pending_refresh_timer = None
-        # [FLIP_SCREEN_FEATURE] Восстановление нормальной ориентации при выходе [TODO: REVIEW/FIX BUGS]
+        # [FLIP_SCREEN_FEATURE] Restore normal orientation on exit [TODO: REVIEW/FIX BUGS]
         if self._screen_flipped:
             self._restore_screen_orientation()
         self._release_usb()
 
     def on_plugin_unload(self):
         self._shutdown()
-        self._log("Плагин выгружен", notify_ui=False)
+        self._log("Plugin unloaded", notify_ui=False)
 
     def _get_state(self):
         with self._state_lock:
@@ -3316,7 +3316,7 @@ class UsbCIrBackend(BasePlugin):
             self._context = self.api.getContext()
             self._usb_manager = self._context.getSystemService(Context.USB_SERVICE)
         except Exception as e:
-            self._log(f"Ошибка доступа к USB сервису: {e}")
+            self._log(f"USB service access error: {e}")
 
     def _start_polling(self):
         with self._state_lock:
@@ -3353,7 +3353,7 @@ class UsbCIrBackend(BasePlugin):
                 if state in (DongleState.DISCONNECTED, DongleState.CONNECTED):
                     self._scan_once()
             except Exception as e:
-                self._log(f"Сбой сканирования USB: {e}", notify_ui=False)
+                self._log(f"USB scan failure: {e}", notify_ui=False)
             with self._state_lock:
                 if self._is_connected():
                     sleep_time = 2.5
@@ -3436,7 +3436,7 @@ class UsbCIrBackend(BasePlugin):
         curr_dev = self._device
         if curr_dev is not None:
             if not any(d.getDeviceName() == curr_dev.getDeviceName() for d in devices):
-                self._log(f"Адаптер отключен: {curr_dev.getDeviceName()}")
+                self._log(f"Adapter disconnected: {curr_dev.getDeviceName()}")
                 self._release_usb()
                 with self._state_lock:
                     self._backoff_fast_retries = 3
@@ -3448,7 +3448,7 @@ class UsbCIrBackend(BasePlugin):
             if profile is None:
                 continue
             if dev.getDeviceName() == self._ignored_device_name:
-                # Если права появились вручную — сбрасываем игнор и пробуем подключиться
+                # If permission was granted manually, clear the ignore flag and retry connecting
                 if self._usb_manager.hasPermission(dev):
                     self._ignored_device_name = None
                 else:
@@ -3497,10 +3497,10 @@ class UsbCIrBackend(BasePlugin):
             if int(BuildVersion.SDK_INT) >= 31:
                 flags |= 0x02000000
             pi = PendingIntent.getBroadcast(self._context, 0, intent, flags)
-            self._log(f"Запрос прав USB для {dev.getDeviceName()}...")
+            self._log(f"Requesting USB permission for {dev.getDeviceName()}...")
             self._usb_manager.requestPermission(dev, pi)
         except Exception as e:
-            self._log(f"Ошибка запроса прав USB: {e}")
+            self._log(f"USB permission request error: {e}")
 
     def _open_device(self, dev, profile=None):
         should_refresh = False
@@ -3518,7 +3518,7 @@ class UsbCIrBackend(BasePlugin):
             key = (int(dev.getVendorId()), int(dev.getProductId()))
             resolved_profile = profile or self._resolve_device_profile(dev)
             if resolved_profile is None:
-                self._log(f"Нет профиля протокола для VID:PID {key[0]:04X}:{key[1]:04X}")
+                self._log(f"No protocol profile for VID:PID {key[0]:04X}:{key[1]:04X}")
                 self._set_state(DongleState.DISCONNECTED)
                 return
             dongle_name, encoder_class = resolved_profile
@@ -3547,7 +3547,7 @@ class UsbCIrBackend(BasePlugin):
                         pass
                     candidates.append((score, i, intf, out_ep, in_ep))
             if not candidates:
-                self._log(f"Каналы USB не найдены: {dev.getDeviceName()}")
+                self._log(f"USB channels not found: {dev.getDeviceName()}")
                 self._set_state(DongleState.DISCONNECTED)
                 return
             candidates.sort(key=lambda item: item[0], reverse=True)
@@ -3612,7 +3612,7 @@ class UsbCIrBackend(BasePlugin):
                     in_addr = int(in_ep.getAddress()) & 0xFF
                     ep_type = "BULK" if int(out_ep.getType()) == UsbConstants.USB_ENDPOINT_XFER_BULK else "INT"
                     self._log(
-                        f"🟢 Подключен: {self._dongle_name} "
+                        f"🟢 Connected: {self._dongle_name} "
                         f"(VID: 0x{dev.getVendorId():04X}, PID: 0x{dev.getProductId():04X}, "
                         f"IF{if_index} {ep_type} 0x{out_addr:02X}/0x{in_addr:02X})"
                     )
@@ -3628,7 +3628,7 @@ class UsbCIrBackend(BasePlugin):
                     continue
             if not should_refresh:
                 self._set_state(DongleState.DISCONNECTED)
-                self._log(f"Не удалось открыть {dongle_name}" + (f": {last_error}" if last_error else ""))
+                self._log(f"Failed to open {dongle_name}" + (f": {last_error}" if last_error else ""))
                 return
         if should_refresh:
             self._refresh_ui()
@@ -3852,7 +3852,7 @@ class UsbCIrBackend(BasePlugin):
                 self._encoder.drain_after_transmit(self._connection, self._in_endpoint, self._drain_in_endpoint)
             return True, chunks_sent
         except Exception as e:
-            self._log(f"Ошибка передачи USB: {e}")
+            self._log(f"USB transmit error: {e}")
             return False, chunks_sent
 
     def hook_infrared_transmit(self, payload):
@@ -3897,12 +3897,12 @@ class UsbCIrBackend(BasePlugin):
             if backend == "builtin":
                 ok = self._transmit_builtin_ir(freq, pattern)
                 self._inc_tx(ok, freq, len(pattern))
-                self._log(f"Встроенный ИК TX: {'OK' if ok else 'FAIL'} ({freq}Hz, {len(pattern)} имп.)")
+                self._log(f"Built-in IR TX: {'OK' if ok else 'FAIL'} ({freq}Hz, {len(pattern)} pulses)")
                 return {"handled": True, "ok": ok}
             if backend == "audio":
                 ok = AudioIrTransmitter.transmit(freq, pattern, stereo=bool(self.get_setting("audio_stereo", True)))
                 self._inc_tx(ok, freq, len(pattern))
-                self._log(f"Audio IR TX: {'OK' if ok else 'FAIL'} ({freq}Hz, {len(pattern)} имп.)")
+                self._log(f"Audio IR TX: {'OK' if ok else 'FAIL'} ({freq}Hz, {len(pattern)} pulses)")
                 return {"handled": True, "ok": ok}
             return {"handled": False, "ok": False, "error": "dongle_disconnected"}
 
@@ -3923,14 +3923,14 @@ class UsbCIrBackend(BasePlugin):
             try:
                 encoded = self._encoder.encode(freq, pattern)
             except Exception as e:
-                self._log(f"Ошибка кодирования: {e}")
+                self._log(f"Encode error: {e}")
                 return {"handled": False, "ok": False, "error": "encode_failed", "message": str(e)}
             if encoded is None:
                 return {"handled": False, "ok": False, "error": "unsupported_protocol"}
             ok, sent_count = self._usb_write(encoded, session_id, pattern)
             # A failed chunk may have reached the device partially; do not replay it.
             delay_ms = getattr(self._encoder, "post_transmit_delay_ms", lambda p: 50)(pattern)
-            self._log(f"TX: {'OK' if ok else 'FAIL'} ({freq}Hz, {len(pattern)} имп.)")
+            self._log(f"TX: {'OK' if ok else 'FAIL'} ({freq}Hz, {len(pattern)} pulses)")
             if not ok:
                 need_release = True
                 release_session = session_id
@@ -3942,7 +3942,7 @@ class UsbCIrBackend(BasePlugin):
         with self._stats_lock:
             streak = self._tx_fail_streak
         if streak >= 3:
-            self._log("⚠ 3 ошибки подряд — сброс адаптера")
+            self._log("⚠ 3 errors in a row — resetting adapter")
             need_release = True
         if need_release:
             self._release_usb(release_session)
@@ -3955,10 +3955,10 @@ class UsbCIrBackend(BasePlugin):
             if self._state == DongleState.LEARNING:
                 action = "stop"
             elif self._connection is None or self._state != DongleState.CONNECTED:
-                self._learned_status = "Адаптер не подключен"
+                self._learned_status = "Adapter not connected"
                 action = "error_not_connected"
             elif not getattr(self._encoder, "supports_learning", False):
-                self._learned_status = "Запись не поддерживается устройством"
+                self._learned_status = "Recording not supported by device"
                 action = "error_not_supported"
             else:
                 self._state = DongleState.LEARNING
@@ -3970,14 +3970,14 @@ class UsbCIrBackend(BasePlugin):
             self._refresh_ui()
             return
         if action == "error_not_connected":
-            self._log("Ошибка записи: адаптер не подключен")
+            self._log("Recording error: adapter not connected")
             self._refresh_ui()
             return
         if action == "error_not_supported":
-            self._log("Запись не поддерживается текущим адаптером")
+            self._log("Recording not supported by current adapter")
             self._refresh_ui()
             return
-        self._learned_status = "Направьте пульт на адаптер и нажмите кнопку..."
+        self._learned_status = "Point the remote at the adapter and press a button..."
         self._learned_protocol_guess = ""
         self._refresh_ui()
         self._learning_thread = threading.Thread(target=self._learning_worker, args=(session_id,), daemon=True)
@@ -3988,7 +3988,7 @@ class UsbCIrBackend(BasePlugin):
             with self._state_lock:
                 self._state = DongleState.CONNECTED
                 self._learning_active.clear()
-            self._log(f"Сбой запуска потока обучения: {e}")
+            self._log(f"Failed to start learning thread: {e}")
             self._refresh_ui()
 
     def stop_learning(self):
@@ -4068,13 +4068,13 @@ class UsbCIrBackend(BasePlugin):
                     self._learned_frequency, self._learned_timings = validate_signal(frequency, raw_timings)
                     proto, _ = IrProtocolEngine.detect_protocol(self._learned_timings, self._learned_frequency)
                     self._learned_protocol_guess = proto
-                    self._learned_status = f"Записано {len(self._learned_timings)} имп. [{proto}]"
-                    self._log(f"Запись Tiqiaa завершена: {len(self._learned_timings)} имп. ({proto})")
+                    self._learned_status = f"Recorded {len(self._learned_timings)} pulses [{proto}]"
+                    self._log(f"Tiqiaa recording complete: {len(self._learned_timings)} pulses ({proto})")
                     self._auto_save_learned("Learned (Tiqiaa USB)")
                 elif cancelled():
-                    self._learned_status = "Запись остановлена"
+                    self._learned_status = "Recording stopped"
                 else:
-                    self._learned_status = "Таймаут или сигнал не распознан"
+                    self._learned_status = "Timeout or signal not recognized"
                 return
             if hasattr(encoder, "authorize_for_learning"):
                 with self._tx_lock:
@@ -4087,17 +4087,17 @@ class UsbCIrBackend(BasePlugin):
                         self._read_one_reply,
                     )
                     if not ok:
-                        raise RuntimeError("ElkSmart авторизация не подтверждена")
+                        raise RuntimeError("ElkSmart authorization not confirmed")
                     if not self._write_chunk(conn, out_ep, bytes([0xFE] * 4), 300):
-                        raise RuntimeError("Команда записи отвергнута")
+                        raise RuntimeError("Recording command rejected")
                     learn_mode_started = True
             else:
                 with self._tx_lock:
                     self._drain_in_endpoint(conn, in_ep, 100)
                     if not self._write_chunk(conn, out_ep, bytes([0xFE] * 4), 250):
-                        raise RuntimeError("Команда записи отвергнута")
+                        raise RuntimeError("Recording command rejected")
                     learn_mode_started = True
-            self._log("Режим записи ElkSmart включен")
+            self._log("ElkSmart recording mode enabled")
             size = max(64, int(in_ep.getMaxPacketSize()))
             resp_buf = jarray(jbyte)([0] * size)
             header = bytes([0xFE] * 4)
@@ -4121,25 +4121,25 @@ class UsbCIrBackend(BasePlugin):
                             expected_len = (stream[4] << 8) | stream[5]
                             del stream[:6]
                             if expected_len <= 0 or expected_len > 0x10000:
-                                raise RuntimeError("Некорректная длина learn payload")
+                                raise RuntimeError("Invalid learn payload length")
                 if expected_len is not None and len(stream) >= expected_len:
                     break
             if cancelled():
-                self._learned_status = "Запись остановлена"
+                self._learned_status = "Recording stopped"
                 return
             if expected_len is not None and len(stream) >= expected_len:
                 timings = encoder.decode_learned_signal(stream[:expected_len])
                 self._learned_frequency, self._learned_timings = validate_signal(38000, timings)
                 proto, _ = IrProtocolEngine.detect_protocol(self._learned_timings, self._learned_frequency)
                 self._learned_protocol_guess = proto
-                self._learned_status = f"Записано {len(self._learned_timings)} имп. [{proto}]"
-                self._log(f"Запись ElkSmart завершена: {len(self._learned_timings)} имп. ({proto})")
+                self._learned_status = f"Recorded {len(self._learned_timings)} pulses [{proto}]"
+                self._log(f"ElkSmart recording complete: {len(self._learned_timings)} pulses ({proto})")
                 self._auto_save_learned("Learned (ElkSmart USB)")
             else:
-                self._learned_status = "Запись остановлена или таймаут"
+                self._learned_status = "Recording stopped or timed out"
         except Exception as e:
-            self._learned_status = f"Ошибка записи: {e}"
-            self._log(f"Сбой обучения: {e}")
+            self._learned_status = f"Recording error: {e}"
+            self._log(f"Learning failure: {e}")
         finally:
             if learn_mode_started:
                 with self._tx_lock:
@@ -4167,9 +4167,9 @@ class UsbCIrBackend(BasePlugin):
         res = self._add_signal_to_library(name, self._learned_frequency, self._learned_timings, group="Learned")
         if res:
             self._signal_name_input = ""
-            self._log(f"💾 {name} сохранён в библиотеку ({len(self._learned_timings)} имп.)")
+            self._log(f"💾 {name} saved to library ({len(self._learned_timings)} pulses)")
         elif getattr(res, "reason", "") == "duplicate":
-            self._log(f"Сигнал '{name}' уже есть в библиотеке (дубликат пропущен)")
+            self._log(f"Signal '{name}' already in library (duplicate skipped)")
 
     def _replay_learned(self):
         if not self._learned_timings:
@@ -4178,34 +4178,34 @@ class UsbCIrBackend(BasePlugin):
 
     def _copy_learned_json(self):
         if not self._learned_timings:
-            self._log("Буфер пуст: сначала запишите сигнал")
+            self._log("Buffer empty: record a signal first")
             return
         self._clipboard_copy("IR_Signal_JSON", json.dumps({
             "frequency": self._learned_frequency,
             "pattern": self._learned_timings,
-        }), "JSON скопирован")
+        }), "JSON copied")
 
     def _copy_learned_flipper(self):
         if not self._learned_timings:
-            self._log("Буфер пуст: сначала запишите сигнал")
+            self._log("Buffer empty: record a signal first")
             return
         name = self._signal_name_input.strip() or "Learned_Signal"
         entry = {"name": name, "frequency": self._learned_frequency, "pattern": list(self._learned_timings)}
-        self._export_flipper_entries([entry], self._flipper_clean_name(name) + ".ir", "Записанный .ir")
+        self._export_flipper_entries([entry], self._flipper_clean_name(name) + ".ir", "Recorded .ir")
 
     def _save_learned_to_library(self):
         if not self._learned_timings:
-            self._log("Нет записанного сигнала для сохранения")
+            self._log("No recorded signal to save")
             return
         name = self._signal_name_input.strip() or f"Signal_{len(self._signal_library) + 1}"
         res = self._add_signal_to_library(name, self._learned_frequency, self._learned_timings, group="Learned")
         if res:
             self._signal_name_input = ""
-            self.toast(self._t("Сигнал сохранён в библиотеку"))
+            self.toast(self._t("Signal saved to library"))
         elif getattr(res, "reason", "") == "duplicate":
-            self.toast(self._t("Сигнал уже есть в библиотеке"))
+            self.toast(self._t("Signal already exists in library"))
         else:
-            self.toast(self._t("Не удалось сохранить сигнал"))
+            self.toast(self._t("Failed to save signal"))
         self._refresh_ui()
 
     def _start_finder(self):
@@ -4215,15 +4215,15 @@ class UsbCIrBackend(BasePlugin):
                 if self._sequence_busy() or self._stop_event.is_set():
                     return
                 if not self._can_transmit():
-                    self._log("IR Finder: нет доступного передатчика")
+                    self._log("IR Finder: no transmitter available")
                     try:
-                        self.toast("Подключите адаптер или включите Audio/Встроенный ИК")
+                        self.toast("Connect an adapter or enable Audio/Built-in IR")
                     except Exception:
                         pass
                     return
                 self._finder_running = True
                 self._finder_cancel.clear()
-                self._finder_status = "Сканирование..."
+                self._finder_status = "Scanning..."
                 self._finder_thread = threading.Thread(target=self._finder_worker, daemon=True)
                 self._finder_thread.start()
         if stop:
@@ -4234,7 +4234,7 @@ class UsbCIrBackend(BasePlugin):
     def _stop_finder(self):
         self._finder_cancel.set()
         self._finder_running = False
-        self._finder_status = "Остановлен"
+        self._finder_status = "Stopped"
         self._refresh_ui()
 
     def _finder_step_forward(self):
@@ -4348,7 +4348,7 @@ class UsbCIrBackend(BasePlugin):
                 freq, pattern = IrProtocolEngine.encode_sharp(addr, code_val)
                 sent_label = f"A:{addr:02X}_C:{code_val:02X}"
         except Exception as e:
-            self._log(f"Ошибка брутфорс кодирования: {e}")
+            self._log(f"Brute-force encode error: {e}")
             return None, freq, ""
         return pattern, freq, sent_label
 
@@ -4371,7 +4371,7 @@ class UsbCIrBackend(BasePlugin):
             if self._finder_cancel.is_set():
                 break
             if self._learning_active.is_set() or getattr(self, "_state", None) == DongleState.LEARNING:
-                self._finder_status = "Finder: передатчик занят обучением"
+                self._finder_status = "Finder: transmitter busy learning"
                 self._refresh_ui()
                 if self._finder_cancel.wait(0.5):
                     break
@@ -4383,12 +4383,12 @@ class UsbCIrBackend(BasePlugin):
             if self._finder_cancel.is_set() or self._stop_event.is_set():
                 break
             if not sent:
-                self._finder_status = "Остановлен: ошибка передачи"
+                self._finder_status = "Stopped: transmit error"
                 break
-            self._finder_status = f"Код: 0x{self._finder_current_code:02X} ({self._finder_current_code}/{self._finder_max_code})"
+            self._finder_status = f"Code: 0x{self._finder_current_code:02X} ({self._finder_current_code}/{self._finder_max_code})"
             self._refresh_ui()
             if self._finder_current_code >= self._finder_max_code:
-                self._finder_status = "Сканирование завершено"
+                self._finder_status = "Scanning complete"
                 self._finder_running = False
                 break
             self._finder_current_code += 1
@@ -4405,13 +4405,13 @@ class UsbCIrBackend(BasePlugin):
         res = self._add_signal_to_library(hit["name"], hit["frequency"], hit["pattern"], group="Finder")
         if res:
             try:
-                self.toast(f"Сохранён код: {self._finder_last_sent}")
+                self.toast(f"Saved code: {self._finder_last_sent}")
             except Exception:
                 pass
         elif getattr(res, "reason", "") == "duplicate":
-            self.toast(self._t("Сигнал уже есть в библиотеке"))
+            self.toast(self._t("Signal already exists in library"))
         else:
-            self.toast(self._t("Не удалось сохранить сигнал"))
+            self.toast(self._t("Failed to save signal"))
 
     def _send_power_code(self, index):
         self._haptic_tick()
@@ -4423,12 +4423,12 @@ class UsbCIrBackend(BasePlugin):
     def _sweep_universal_power(self):
         def sweep():
             try:
-                self._log("Запуск Universal Power Sweep")
+                self._log("Starting Universal Power Sweep")
                 for name, freq, pattern in _UNIVERSAL_POWER_CODES:
                     if self._stop_event.is_set() or self._power_cancel.is_set() or not self._can_transmit():
                         break
                     if self._learning_active.is_set() or getattr(self, "_state", None) == DongleState.LEARNING:
-                        self._log("Power Sweep: передатчик занят обучением")
+                        self._log("Power Sweep: transmitter busy learning")
                         if self._power_cancel.wait(0.5):
                             break
                         continue
@@ -4438,13 +4438,13 @@ class UsbCIrBackend(BasePlugin):
                             break
                         result = self.service_infrared_transmitter_transmit({"frequency": freq, "pattern": pattern})
                     if not result.get("ok"):
-                        self._log("Power Sweep: ошибка передачи")
+                        self._log("Power Sweep: transmit error")
                         break
                     if self._power_cancel.wait(0.35):
                         break
             finally:
                 self._power_running = False
-                self._log("Universal Power Sweep остановлен" if self._power_cancel.is_set() else "Universal Power Sweep завершён")
+                self._log("Universal Power Sweep stopped" if self._power_cancel.is_set() else "Universal Power Sweep complete")
                 self._refresh_ui()
         with self._state_lock:
             if self._power_running:
@@ -4452,7 +4452,7 @@ class UsbCIrBackend(BasePlugin):
                 self._refresh_ui()
                 return
             if self._sequence_busy() or self._stop_event.is_set():
-                self._log("Перебор: передатчик занят")
+                self._log("Sweep: transmitter busy")
                 return
             self._power_cancel.clear()
             self._power_running = True
@@ -4474,9 +4474,9 @@ class UsbCIrBackend(BasePlugin):
 
     def _manual_disconnect(self):
         if not self._is_connected():
-            self._log("Адаптер уже отключен")
+            self._log("Adapter already disconnected")
             return
-        self._log("Ручное отключение")
+        self._log("Manual disconnect")
         if self._device is not None:
             try:
                 self._ignored_device_name = self._device.getDeviceName()
@@ -4486,7 +4486,7 @@ class UsbCIrBackend(BasePlugin):
         self._release_usb()
 
     def _manual_rescan(self):
-        self._log("Ручной поиск USB-адаптера...")
+        self._log("Manual USB adapter search...")
         self._ignored_device_name = None
         with self._state_lock:
             self._backoff_interval = 0.5
@@ -4496,20 +4496,20 @@ class UsbCIrBackend(BasePlugin):
 
     def _dump_usb_devices(self):
         if self._usb_manager is None:
-            self._log("USB сервис недоступен")
+            self._log("USB service unavailable")
             return
         devices = self._java_collection_to_list(self._usb_manager.getDeviceList().values())
         if not devices:
-            self._log("USB-устройства не обнаружены в системе")
+            self._log("No USB devices detected in the system")
             return
-        self._log(f"--- Найдено USB устройств: {len(devices)} ---")
+        self._log(f"--- Found USB devices: {len(devices)} ---")
         for d in devices:
             vid = d.getVendorId()
             pid = d.getProductId()
             name = d.getDeviceName()
             prod = self._safe_usb_string(d, "getProductName")
-            perm = "ДА" if self._usb_manager.hasPermission(d) else "НЕТ"
-            self._log(f"VID: 0x{vid:04X}, PID: 0x{pid:04X} | Права: {perm} | {prod or name}")
+            perm = "YES" if self._usb_manager.hasPermission(d) else "NO"
+            self._log(f"VID: 0x{vid:04X}, PID: 0x{pid:04X} | Permission: {perm} | {prod or name}")
 
     def _clear_log(self):
         with self._refresh_lock:
@@ -4522,13 +4522,13 @@ class UsbCIrBackend(BasePlugin):
     def _copy_log(self):
         if not self._log_cache_text:
             return
-        self._clipboard_copy("IR_Log", self._log_cache_text, "Журнал скопирован")
+        self._clipboard_copy("IR_Log", self._log_cache_text, "Log copied")
 
     def _log_dongle_missing(self, force=False):
         now = time.monotonic()
         if force or (now - self._last_missing_log_at > 15.0):
             self._last_missing_log_at = now
-            self._log("ИК-адаптер не найден (вставьте OTG-донгл)", notify_ui=False)
+            self._log("IR adapter not found (plug in an OTG dongle)", notify_ui=False)
 
     def _log(self, line, notify_ui=True):
         raw_line = str(line or "")
@@ -4635,10 +4635,10 @@ class UsbCIrBackend(BasePlugin):
             return ""
         elapsed = int(time.monotonic() - self._connected_at)
         if elapsed < 60:
-            return f"{elapsed}с"
+            return f"{elapsed}s"
         if elapsed < 3600:
-            return f"{elapsed // 60}м {elapsed % 60}с"
-        return f"{elapsed // 3600}ч {(elapsed % 3600) // 60}м"
+            return f"{elapsed // 60}m {elapsed % 60}s"
+        return f"{elapsed // 3600}h {(elapsed % 3600) // 60}m"
 
     def _on_adb_ip_change(self, value):
         self._adb_ip = str(value).strip()
@@ -4651,7 +4651,7 @@ class UsbCIrBackend(BasePlugin):
             try:
                 self._jobs.put_nowait(job)
             except queue.Full:
-                self.toast("Очередь заполнена. Дождитесь окончания передачи")
+                self.toast("Queue full. Wait for the current transmission to finish")
                 return False
             if self._job_thread is None or not self._job_thread.is_alive():
                 self._job_thread = threading.Thread(target=self._job_worker, daemon=True, name="IrCommands")
@@ -4668,7 +4668,7 @@ class UsbCIrBackend(BasePlugin):
                 if not self._stop_event.is_set():
                     job()
             except Exception as error:
-                self._log(f"Ошибка команды: {error}")
+                self._log(f"Command error: {error}")
             finally:
                 self._jobs.task_done()
 
@@ -4705,19 +4705,19 @@ class UsbCIrBackend(BasePlugin):
         if host.startswith("["):
             match = re.fullmatch(r"\[([^\]]+)\](?::([0-9]{1,5}))?", host)
             if not match:
-                raise ValueError("Некорректный IPv6 адрес")
+                raise ValueError("Invalid IPv6 address")
             host, raw_port = match.groups()
             port = int(raw_port or 5555)
         elif host.count(":") == 1:
             host, raw_port = host.split(":")
             if not raw_port.isdigit():
-                raise ValueError("Некорректный порт")
+                raise ValueError("Invalid port")
             port = int(raw_port)
         if "%" in host:
-            raise ValueError("IPv6 scope не поддерживается; используйте обычный IP адрес")
+            raise ValueError("IPv6 scope not supported; use a plain IP address")
         address = ipaddress.ip_address(host)
         if not 1 <= port <= 65535:
-            raise ValueError("Порт должен быть 1–65535")
+            raise ValueError("Port must be 1–65535")
         target = shlex.quote((f"[{address}]" if address.version == 6 else str(address)) + f":{port}")
         if cmd_args == "connect":
             return f"adb connect {target}"
@@ -4728,7 +4728,7 @@ class UsbCIrBackend(BasePlugin):
         packages = {"com.google.android.youtube.tv", "com.liskovsoft.smarttubetv.beta", "org.xbmc.kodi"}
         package = re.fullmatch(r"shell monkey -p ([a-zA-Z0-9_.]+) 1", cmd_args)
         if not ((match and int(match[1]) in allowed_keys) or (package and package[1] in packages)):
-            raise ValueError("Неизвестная команда ADB")
+            raise ValueError("Unknown ADB command")
         return f"adb -s {target} {cmd_args}"
 
     def _adb_shell_async(self, cmd_args):
@@ -4743,7 +4743,7 @@ class UsbCIrBackend(BasePlugin):
             if self._adb_busy or self._stop_event.is_set():
                 return
             self._adb_busy = True
-        self._adb_status = "Выполняется…"
+        self._adb_status = "Running…"
         self._refresh_ui()
 
         def _worker():
@@ -4752,13 +4752,13 @@ class UsbCIrBackend(BasePlugin):
                     return
                 res = self.shell(full_cmd)
                 if not isinstance(res, dict):
-                    raise ValueError("Dolphy не вернул результат shell")
+                    raise ValueError("Dolphy did not return a shell result")
                 output = (str(res.get("out", "")) + " " + str(res.get("err", ""))).strip()
                 ok = bool(res.get("ok")) and not re.search(r"failed|unable|not found|error|unauthorized", output, re.I)
-                self._adb_status = ("OK: " if ok else "Ошибка: ") + (output[:240] or f"код {res.get('code', '?')}")
+                self._adb_status = ("OK: " if ok else "Error: ") + (output[:240] or f"code {res.get('code', '?')}")
                 self._log(f"ADB {cmd_args}: {self._adb_status}")
             except Exception as e:
-                self._adb_status = f"Ошибка ADB: {e}"
+                self._adb_status = f"ADB error: {e}"
                 self._log(self._adb_status)
             finally:
                 with self._state_lock:
@@ -4775,8 +4775,8 @@ class UsbCIrBackend(BasePlugin):
         tx_count, tx_ok, tx_streak, last_tx, last_tx_at = self._get_tx_stats()
         tab_content = []
         if tab == 0:
-            builtin_ir_str = self._t("Есть") if self._has_builtin_ir() else self._t("Нет")
-            audio_ir_str = self._t("Вкл") if bool(self.get_setting("audio_ir_fallback", False)) else self._t("Выкл")
+            builtin_ir_str = self._t("Yes") if self._has_builtin_ir() else self._t("No")
+            audio_ir_str = self._t("On") if bool(self.get_setting("audio_ir_fallback", False)) else self._t("Off")
             if connected:
                 try:
                     vid = dev.getVendorId()
@@ -4791,66 +4791,66 @@ class UsbCIrBackend(BasePlugin):
                     status_sub = f"{self._get_state()} • TX: {tx_count}"
                 status_title = f"🟢 {self._dongle_name}"
             else:
-                status_title = f"🔴 {self._t('Адаптер не подключен')}"
-                status_sub = f"{self._t('Встроенный ИК')}: {builtin_ir_str} | Audio IR: {audio_ir_str}"
+                status_title = f"🔴 {self._t('Adapter not connected')}"
+                status_sub = f"{self._t('Built-in IR')}: {builtin_ir_str} | Audio IR: {audio_ir_str}"
             tab_content = [
                 ui.card([
                     ui.row([
                         ui.text(status_title, "titleMedium"),
-                        ui.button(self._t("Откл.") if connected else self._t("Найти адаптер"),
+                        ui.button(self._t("Disconnect") if connected else self._t("Find adapter"),
                                   self._manual_disconnect if connected else self._manual_rescan),
                     ], spacing=6),
                     ui.text(status_sub, "bodySmall", "muted"),
                     ui.switch(
                         checked=bool(self.get_setting("haptic_feedback", True)),
                         on_change=lambda value: self._set_option("haptic_feedback", bool(value)),
-                        title=self._t("Виброотклик кнопок")
+                        title=self._t("Button haptic feedback")
                     ),
                     ui.row([
-                        ui.button(self._t("Тест NEC"), self._send_nec_test, enabled=can_tx),
-                        ui.button(self._t("Тест RC-5"), self._send_rc5_test, enabled=can_tx),
+                        ui.button(self._t("NEC test"), self._send_nec_test, enabled=can_tx),
+                        ui.button(self._t("RC-5 test"), self._send_rc5_test, enabled=can_tx),
                     ], spacing=6),
                     ui.row([
-                        ui.button(self._t("Тест Sony"), self._send_sony_test, enabled=can_tx),
-                        ui.button(self._t("Диагностика USB"), self._dump_usb_devices),
+                        ui.button(self._t("Sony test"), self._send_sony_test, enabled=can_tx),
+                        ui.button(self._t("USB diagnostics"), self._dump_usb_devices),
                     ], spacing=6),
                     ui.row([
-                        ui.text(self._t("Перехват ИК Dolphy:"), "bodyMedium"),
-                        ui.text(self._t("Готов") if can_tx else self._t("Нет передатчика"), "bodyMedium", "accent" if can_tx else "muted"),
+                        ui.text(self._t("Dolphy IR hook:"), "bodyMedium"),
+                        ui.text(self._t("Ready") if can_tx else self._t("No transmitter"), "bodyMedium", "accent" if can_tx else "muted"),
                     ], spacing=6),
                 ], padding=10),
                 ui.row([
-                    ui.text(self._t("Журнал"), "labelLarge"),
+                    ui.text(self._t("Log"), "labelLarge"),
                     ui.row([
-                        ui.button(self._t("Копировать"), self._copy_log),
-                        ui.button(self._t("Очистить"), self._clear_log),
+                        ui.button(self._t("Copy"), self._copy_log),
+                        ui.button(self._t("Clear"), self._clear_log),
                     ], spacing=4),
                 ], spacing=6),
-                ui.log_panel(self._log_cache_text or self._t("Журнал пуст"), max_height=120),
+                ui.log_panel(self._log_cache_text or self._t("Log is empty"), max_height=120),
             ]
         elif tab == 1:
             if is_learning:
                 tab_content = [
                     ui.card([
                         ui.row([
-                            ui.text(self._t("Запись сигнала..."), "titleSmall", "warning"),
-                            ui.button(self._t("Стоп"), self.start_learning_async),
+                            ui.text(self._t("Recording signal..."), "titleSmall", "warning"),
+                            ui.button(self._t("Stop"), self.start_learning_async),
                         ], spacing=6),
                         ui.linear_progress(),
-                        ui.text(self._t("Направьте пульт на адаптер и зажмите кнопку на 1-2 сек"), "bodySmall", "muted"),
+                        ui.text(self._t("Point the remote at the adapter and hold the button for 1-2 sec"), "bodySmall", "muted"),
                     ], padding=10),
                 ]
             else:
                 pulse_stat = ""
                 if self._learned_timings:
                     guess = f" [{self._learned_protocol_guess}]" if self._learned_protocol_guess else ""
-                    pulses_word = "имп." if self._lang == "ru" else "pulses"
+                    pulses_word = "pulses" if self._lang == "ru" else "pulses"
                     pulse_stat = f"{guess} • {len(self._learned_timings)} {pulses_word}, ~{sum(self._learned_timings) // 1000} ms"
                 learn_items = [
                     ui.row([
-                        ui.text(self._t("Приёмник ИК"), "titleSmall"),
-                        ui.button(self._t("Запись"), self.start_learning_async),
-                        ui.button(self._t("Повтор"), self._replay_learned, enabled=bool(self._learned_timings)),
+                        ui.text(self._t("IR receiver"), "titleSmall"),
+                        ui.button(self._t("Record"), self.start_learning_async),
+                        ui.button(self._t("Replay"), self._replay_learned, enabled=bool(self._learned_timings)),
                     ], spacing=6),
                 ]
                 if self._learned_timings:
@@ -4859,37 +4859,37 @@ class UsbCIrBackend(BasePlugin):
                         ui.text_field(
                             value=self._signal_name_input,
                             on_change=self._on_signal_name_change,
-                            label=self._t("Имя для сохранения"),
+                            label=self._t("Name to save"),
                             single_line=True,
                         )
                     )
                     learn_items.append(
                         ui.row([
-                            ui.button(self._t("В библиотеку"), self._save_learned_to_library),
+                            ui.button(self._t("To library"), self._save_learned_to_library),
                             ui.button("JSON", self._copy_learned_json),
                             ui.button(".ir", self._copy_learned_flipper),
                         ], spacing=4)
                     )
                 else:
-                    learn_items.append(ui.text(f"{self._t('Статус')}: {self._learned_status}", "bodySmall", "muted"))
+                    learn_items.append(ui.text(f"{self._t('Status')}: {self._learned_status}", "bodySmall", "muted"))
                 tab_content = [ui.card(learn_items, padding=10)]
         elif tab == 2:
             lib = self._library_view()
-            lib_title = f"Библиотека · {len(self._signal_library)} сигналов" if self._lang == "ru" else f"Library · {len(self._signal_library)} signals"
-            lib_saved = f"Сохранено сигналов: {len(lib)}" if self._lang == "ru" else f"Signals saved: {len(lib)}"
+            lib_title = f"Library · {len(self._signal_library)} signals" if self._lang == "ru" else f"Library · {len(self._signal_library)} signals"
+            lib_saved = f"Signals saved: {len(lib)}" if self._lang == "ru" else f"Signals saved: {len(lib)}"
             library_tools = ui.card([
                 ui.text(lib_title, "titleMedium"),
                 ui.text_field(value=self._library_search, on_change=self._on_library_search,
-                              label=self._t("Поиск по имени или группе")),
-                ui.switch(checked=self._favorites_only, on_change=self._set_favorites_only, title=self._t("Только избранное")),
-                ui.button(self._t("Резервная копия JSON"), self._export_backup, style="tonal", enabled=bool(self._signal_library)),
+                              label=self._t("Search by name or group")),
+                ui.switch(checked=self._favorites_only, on_change=self._set_favorites_only, title=self._t("Favorites only")),
+                ui.button(self._t("JSON backup"), self._export_backup, style="tonal", enabled=bool(self._signal_library)),
             ], padding=16)
             if not lib:
                 tab_content = [
                     library_tools,
                     ui.card([
-                        ui.text(self._t("Нет сигналов по этому фильтру") if self._signal_library else self._t("Библиотека пуста"), "titleSmall", "muted"),
-                        ui.text(self._t("Запишите или импортируйте сигналы во вкладках 'Приёмник' или 'Импорт'"), "bodySmall", "muted"),
+                        ui.text(self._t("No signals match this filter") if self._signal_library else self._t("Library is empty"), "titleSmall", "muted"),
+                        ui.text(self._t("Record or import signals in the 'Receiver' or 'Import' tabs"), "bodySmall", "muted"),
                     ], padding=10),
                 ]
             else:
@@ -4898,8 +4898,8 @@ class UsbCIrBackend(BasePlugin):
                     ui.row([
                         ui.text(lib_saved, "titleSmall"),
                         ui.row([
-                            ui.button(self._t("Экспорт всех (.ir)"), self._export_all_library_flipper),
-                            ui.button(self._t("Очистить всё"), self._request_clear_all),
+                            ui.button(self._t("Export all (.ir)"), self._export_all_library_flipper),
+                            ui.button(self._t("Clear all"), self._request_clear_all),
                         ], spacing=4),
                     ], spacing=6),
                 ]
@@ -4912,7 +4912,7 @@ class UsbCIrBackend(BasePlugin):
                     name = entry.get("name", "Signal")
                     dur_ms = sum(p) // 1000 if p else 0
                     created = entry.get("created", "")
-                    subtitle = f"{freq // 1000}kHz • {len(p)} имп. • ~{dur_ms}мс"
+                    subtitle = f"{freq // 1000}kHz • {len(p)} pulses • ~{dur_ms}ms"
                     if created:
                         subtitle += f" • {created}"
                     if entry.get("group"):
@@ -4933,30 +4933,30 @@ class UsbCIrBackend(BasePlugin):
                         ui.row([
                             ui.button("JSON", json_fn),
                             ui.button(".ir", ir_fn),
-                            ui.button("Удалить", del_fn),
+                            ui.button("Delete", del_fn),
                         ], spacing=4),
-                        ui.button("Изменить имя / пульт", edit_fn, style="text"),
+                        ui.button("Edit name / remote", edit_fn, style="text"),
                     ], padding=8))
                 if pages > 1:
                     lib_items.append(ui.row([
-                        ui.button("Назад", lambda: self._change_library_page(-1), enabled=self._library_page > 0),
+                        ui.button("Back", lambda: self._change_library_page(-1), enabled=self._library_page > 0),
                         ui.text(f"{self._library_page + 1} / {pages}", "labelLarge"),
-                        ui.button("Далее", lambda: self._change_library_page(1), enabled=self._library_page + 1 < pages),
+                        ui.button("Next", lambda: self._change_library_page(1), enabled=self._library_page + 1 < pages),
                     ]))
                 tab_content = lib_items
         elif tab == 3:
             tab_content = [
                 ui.card([
-                    ui.text(self._t("Универсальный импорт пультов"), "titleSmall"),
-                    ui.text(self._t("Поддерживает Flipper Zero .ir (raw + parsed), IRPLUS XML, LIRC, Pronto Hex, JSON"), "bodySmall", "muted"),
+                    ui.text(self._t("Universal remote import"), "titleSmall"),
+                    ui.text(self._t("Supports Flipper Zero .ir (raw + parsed), IRPLUS XML, LIRC, Pronto Hex, JSON"), "bodySmall", "muted"),
                     ui.text_field(
                         value=self._import_text,
                         on_change=self._on_import_text_change,
-                        label=self._t("Вставьте содержимое файла или Pronto Hex"),
+                        label=self._t("Paste file contents or Pronto Hex"),
                         single_line=False,
                     ),
-                    ui.text(self._t("Имена сохраняются. Дубликаты пропускаются. Импорт ничего не передаёт"), "bodySmall", "muted"),
-                    ui.button(self._t("Предпросмотр"), self._preview_import, enabled=bool(self._import_text.strip())),
+                    ui.text(self._t("Names are preserved. Duplicates are skipped. Import does not transmit"), "bodySmall", "muted"),
+                    ui.button(self._t("Preview"), self._preview_import, enabled=bool(self._import_text.strip())),
                 ], padding=10),
             ]
             if self._import_preview is not None:
@@ -4965,53 +4965,53 @@ class UsbCIrBackend(BasePlugin):
                 known = {(item["frequency"], tuple(item["pattern"])) for item in self._signal_library}
                 unique = {(item["frequency"], tuple(item["pattern"])) for item in entries}
                 new_count = len(unique - known)
-                sig_count_str = f"{len(entries)} сигналов" if self._lang == "ru" else f"{len(entries)} signals"
-                new_dup_str = f"Новых: {new_count} · Повторных: {len(entries) - new_count}" if self._lang == "ru" else f"New: {new_count} · Duplicates: {len(entries) - new_count}"
+                sig_count_str = f"{len(entries)} signals" if self._lang == "ru" else f"{len(entries)} signals"
+                new_dup_str = f"New: {new_count} · Duplicates: {len(entries) - new_count}" if self._lang == "ru" else f"New: {new_count} · Duplicates: {len(entries) - new_count}"
                 details = [ui.text(f"{preview['format']} · {sig_count_str}", "titleMedium"),
                            ui.text(new_dup_str, "bodySmall", "muted")]
-                pulses_word = "имп." if self._lang == "ru" else "pulses"
-                hz_word = "Гц" if self._lang == "ru" else "Hz"
+                pulses_word = "pulses" if self._lang == "ru" else "pulses"
+                hz_word = "Hz" if self._lang == "ru" else "Hz"
                 for entry in entries[:8]:
                     details.append(ui.text(f"{entry['name']} · {entry['frequency']} {hz_word} · {len(entry['pattern'])} {pulses_word}", "bodySmall"))
                 if preview["warnings"]:
                     details.append(ui.log_panel("\n".join(preview["warnings"][:20]), max_height=160))
-                details.append(ui.button(self._t("Добавить в библиотеку"), self._do_import_parsed, enabled=bool(entries)))
+                details.append(ui.button(self._t("Add to Library"), self._do_import_parsed, enabled=bool(entries)))
                 tab_content.append(ui.card(details, padding=16))
         elif tab == 4:
             finder_controls = [
-                ui.text(self._t("IR Finder (Инфракрасный брутфорсер)"), "titleSmall"),
-                ui.text(self._t("Поиск неизвестных кодов и команд для целевого устройства"), "bodySmall", "muted"),
+                ui.text(self._t("IR Finder (Infrared brute-forcer)"), "titleSmall"),
+                ui.text(self._t("Search unknown codes and commands for the target device"), "bodySmall", "muted"),
                 ui.row([
-                    ui.text(f"{self._t('Протокол')}: {self._finder_proto}", "labelMedium"),
-                    ui.button(self._t("Сменить протокол"), self._cycle_finder_proto, enabled=not self._finder_running),
+                    ui.text(f"{self._t('Protocol')}: {self._finder_proto}", "labelMedium"),
+                    ui.button(self._t("Change protocol"), self._cycle_finder_proto, enabled=not self._finder_running),
                 ], spacing=6),
                 ui.text_field(
                     value=self._finder_prefix,
                     on_change=lambda v: setattr(self, "_finder_prefix", str(v).strip().upper()),
-                    label=self._t("Hex префикс адреса"),
+                    label=self._t("Hex address prefix"),
                     single_line=True,
                 ),
                 ui.slider(value=self._finder_delay_ms, on_change=self._set_finder_delay,
-                          minimum=150, maximum=2000, title=f"{self._t('Пауза между кодами')}: {self._finder_delay_ms} ms"),
+                          minimum=150, maximum=2000, title=f"{self._t('Delay between codes')}: {self._finder_delay_ms} ms"),
                 ui.linear_progress(progress=min(1.0, self._finder_current_code / max(1, self._finder_max_code))),
                 ui.row([
-                    ui.button(self._t("Стоп") if self._finder_running else self._t("Запуск"),
+                    ui.button(self._t("Stop") if self._finder_running else self._t("Start"),
                               self._stop_finder if self._finder_running else self._start_finder),
                     ui.button("-1", self._finder_step_backward, enabled=not self._finder_running),
                     ui.button("+1", self._finder_step_forward, enabled=not self._finder_running),
                 ], spacing=6),
-                ui.text(f"{self._t('Статус')}: {self._finder_status}", "bodySmall", "accent" if self._finder_running else "muted"),
+                ui.text(f"{self._t('Status')}: {self._finder_status}", "bodySmall", "accent" if self._finder_running else "muted"),
             ]
             if self._finder_last_sent:
                 finder_controls.append(
                     ui.row([
-                        ui.text(f"{self._t('Посл. код')}: {self._finder_last_sent}", "labelMedium"),
-                        ui.button(self._t("Сохранить код в библиотеку"), self._save_finder_hit),
+                        ui.text(f"{self._t('Last code')}: {self._finder_last_sent}", "labelMedium"),
+                        ui.button(self._t("Save code to library"), self._save_finder_hit),
                     ], spacing=6)
                 )
             generator_controls = [
-                ui.text(self._t("Конструктор сигналов"), "titleSmall"),
-                ui.text(self._t("Генерация кода по протоколу"), "bodySmall", "muted"),
+                ui.text(self._t("Signal Generator"), "titleSmall"),
+                ui.text(self._t("Protocol Code Generator"), "bodySmall", "muted"),
                 ui.dropdown([
                     ("NEC", "NEC"),
                     ("SIRC", "Sony SIRC"),
@@ -5025,22 +5025,22 @@ class UsbCIrBackend(BasePlugin):
                     ("MITSUBISHI", "Mitsubishi"),
                 ], selected=self._generator_proto,
                 on_select=lambda p: setattr(self, "_generator_proto", str(p)),
-                label=self._t("Протокол")),
+                label=self._t("Protocol")),
                 ui.row([
-                    ui.text_field(value=self._generator_addr, on_change=lambda v: setattr(self, "_generator_addr", str(v).strip()), label=self._t("Адрес (HEX/DEC)"), single_line=True),
-                    ui.text_field(value=self._generator_cmd, on_change=lambda v: setattr(self, "_generator_cmd", str(v).strip()), label=self._t("Команда (HEX/DEC)"), single_line=True),
+                    ui.text_field(value=self._generator_addr, on_change=lambda v: setattr(self, "_generator_addr", str(v).strip()), label=self._t("Address (HEX/DEC)"), single_line=True),
+                    ui.text_field(value=self._generator_cmd, on_change=lambda v: setattr(self, "_generator_cmd", str(v).strip()), label=self._t("Command (HEX/DEC)"), single_line=True),
                 ], spacing=6),
                 ui.row([
-                    ui.button(self._t("Тест передачи"), self._test_generated_code, enabled=can_tx),
-                    ui.button(self._t("Добавить в библиотеку"), self._save_generated_code),
+                    ui.button(self._t("Test Transmit"), self._test_generated_code, enabled=can_tx),
+                    ui.button(self._t("Add to Library"), self._save_generated_code),
                 ], spacing=6),
             ]
             tab_content = [ui.card(finder_controls, padding=10), ui.card(generator_controls, padding=10)]
         elif tab == 5:
             power_items = [
                 ui.text(self._t("Universal Power (TV-B-Gone)"), "titleSmall"),
-                ui.text(self._t("Быстрая отправка команд питания мировых брендов через адаптер"), "bodySmall", "muted"),
-                ui.button(self._t("Остановить Power Sweep") if self._power_running else self._t("Power Sweep: все бренды"),
+                ui.text(self._t("Quick power command blast for global brands via adapter"), "bodySmall", "muted"),
+                ui.button(self._t("Stop Power Sweep") if self._power_running else self._t("Power Sweep: all brands"),
                           self._sweep_universal_power, enabled=self._power_running or (can_tx and not self._finder_running)),
                 ui.divider(),
             ]
@@ -5057,33 +5057,33 @@ class UsbCIrBackend(BasePlugin):
             adb_ready = not self._adb_busy
             tab_content = [
                 ui.card([
-                    ui.text(self._t("Wi-Fi пульт (ADB Android TV)"), "titleSmall"),
-                    ui.text(self._t("Сетевое управление ТВ и приставками по TCP/IP"), "bodySmall", "muted"),
-                    ui.text(self._t("ADB должен быть установлен на телефоне; на ТВ нужны отладка и разрешение подключения"), "bodySmall", "muted"),
+                    ui.text(self._t("Wi-Fi remote (ADB Android TV)"), "titleSmall"),
+                    ui.text(self._t("Network control of TVs and set-top boxes over TCP/IP"), "bodySmall", "muted"),
+                    ui.text(self._t("ADB must be installed on the phone; the TV needs debugging and authorized connection"), "bodySmall", "muted"),
                     ui.text(self._adb_status, "bodySmall", "accent"),
                     ui.text_field(
                         value=self._adb_ip,
                         on_change=self._on_adb_ip_change,
-                        label=self._t("IP-адрес ТВ (например 192.168.1.50:5555)"),
+                        label=self._t("TV IP address (e.g. 192.168.1.50:5555)"),
                         single_line=True,
                     ),
                     ui.row([
-                        ui.button(self._t("Подключить"), lambda: self._adb_shell_async("connect"), enabled=adb_ready),
+                        ui.button(self._t("Connect"), lambda: self._adb_shell_async("connect"), enabled=adb_ready),
                         ui.button("Power", lambda: self._adb_shell_async("shell input keyevent 26"), enabled=adb_ready),
                     ], spacing=6),
-                    ui.button(self._t("Отключить ADB"), lambda: self._adb_shell_async("disconnect"), enabled=adb_ready),
+                    ui.button(self._t("Disconnect ADB"), lambda: self._adb_shell_async("disconnect"), enabled=adb_ready),
                     ui.divider(),
-                    ui.text(self._t("Крестовина D-Pad"), "labelMedium"),
+                    ui.text(self._t("D-Pad"), "labelMedium"),
                     ui.row([
-                        ui.button(self._t("▲ Вверх"), lambda: self._adb_shell_async("shell input keyevent 19"), enabled=adb_ready),
+                        ui.button(self._t("▲ Up"), lambda: self._adb_shell_async("shell input keyevent 19"), enabled=adb_ready),
                     ], spacing=6),
                     ui.row([
-                        ui.button(self._t("◀ Влево"), lambda: self._adb_shell_async("shell input keyevent 21"), enabled=adb_ready),
+                        ui.button(self._t("◀ Left"), lambda: self._adb_shell_async("shell input keyevent 21"), enabled=adb_ready),
                         ui.button("OK", lambda: self._adb_shell_async("shell input keyevent 66"), enabled=adb_ready),
-                        ui.button(self._t("Вправо ▶"), lambda: self._adb_shell_async("shell input keyevent 22"), enabled=adb_ready),
+                        ui.button(self._t("Right ▶"), lambda: self._adb_shell_async("shell input keyevent 22"), enabled=adb_ready),
                     ], spacing=6),
                     ui.row([
-                        ui.button(self._t("▼ Вниз"), lambda: self._adb_shell_async("shell input keyevent 20"), enabled=adb_ready),
+                        ui.button(self._t("▼ Down"), lambda: self._adb_shell_async("shell input keyevent 20"), enabled=adb_ready),
                     ], spacing=6),
                     ui.divider(),
                     ui.row([
@@ -5092,12 +5092,12 @@ class UsbCIrBackend(BasePlugin):
                         ui.button("Mute", lambda: self._adb_shell_async("shell input keyevent 164"), enabled=adb_ready),
                     ], spacing=6),
                     ui.row([
-                        ui.button(self._t("Назад"), lambda: self._adb_shell_async("shell input keyevent 4"), enabled=adb_ready),
-                        ui.button(self._t("Домой"), lambda: self._adb_shell_async("shell input keyevent 3"), enabled=adb_ready),
-                        ui.button(self._t("Меню"), lambda: self._adb_shell_async("shell input keyevent 82"), enabled=adb_ready),
+                        ui.button(self._t("Back"), lambda: self._adb_shell_async("shell input keyevent 4"), enabled=adb_ready),
+                        ui.button(self._t("Home"), lambda: self._adb_shell_async("shell input keyevent 3"), enabled=adb_ready),
+                        ui.button(self._t("Menu"), lambda: self._adb_shell_async("shell input keyevent 82"), enabled=adb_ready),
                     ], spacing=6),
                     ui.divider(),
-                    ui.text(self._t("Запуск приложений"), "labelMedium"),
+                    ui.text(self._t("Launch apps"), "labelMedium"),
                     ui.row([
                         ui.button("YouTube", lambda: self._adb_shell_async("shell monkey -p com.google.android.youtube.tv 1"), enabled=adb_ready),
                         ui.button("SmartTube", lambda: self._adb_shell_async("shell monkey -p com.liskovsoft.smarttubetv.beta 1"), enabled=adb_ready),
@@ -5116,17 +5116,17 @@ class UsbCIrBackend(BasePlugin):
 
         navigation_menu = ui.card([
             ui.row([
-                _tab_button(self._t("Адаптер"), 0),
-                _tab_button(self._t("Приёмник"), 1),
-                _tab_button(self._t("Библиотека"), 2),
+                _tab_button(self._t("Adapter"), 0),
+                _tab_button(self._t("Receiver"), 1),
+                _tab_button(self._t("Library"), 2),
             ], spacing=6),
             ui.row([
-                _tab_button(self._t("Импорт"), 3),
+                _tab_button(self._t("Import"), 3),
                 _tab_button(self._t("IR Finder"), 4),
                 _tab_button(self._t("Power"), 5),
             ], spacing=6),
             ui.row([
-                _tab_button(self._t("Мои пульты"), 7),
+                _tab_button(self._t("My remotes"), 7),
                 _tab_button(self._t("Wi-Fi ADB"), 6),
             ], spacing=6),
         ], padding=8)
@@ -5142,10 +5142,10 @@ class UsbCIrBackend(BasePlugin):
         all_items.append(
             ui.alert_dialog(
                 show=show_single_del,
-                title=self._t("Удалить сигнал?"),
-                message=f"Удалить '{delete_name}' из библиотеки?" if self._lang == "ru" else f"Remove '{delete_name}' from library?",
-                confirm_text=self._t("Удалить"),
-                dismiss_text=self._t("Отмена"),
+                title=self._t("Delete signal?"),
+                message=f"Remove '{delete_name}' from library?" if self._lang == "ru" else f"Remove '{delete_name}' from library?",
+                confirm_text=self._t("Delete"),
+                dismiss_text=self._t("Cancel"),
                 on_confirm=confirm_del_fn,
                 on_dismiss=self._cancel_dialog,
             )
@@ -5153,10 +5153,10 @@ class UsbCIrBackend(BasePlugin):
         all_items.append(
             ui.alert_dialog(
                 show=show_clear_all,
-                title=self._t("Очистить библиотеку?"),
-                message=f"Удалить все {len(self._signal_library)} сигналов?" if self._lang == "ru" else f"Remove all {len(self._signal_library)} signals?",
-                confirm_text=self._t("Очистить всё"),
-                dismiss_text=self._t("Отмена"),
+                title=self._t("Clear library?"),
+                message=f"Remove all {len(self._signal_library)} signals?" if self._lang == "ru" else f"Remove all {len(self._signal_library)} signals?",
+                confirm_text=self._t("Clear all"),
+                dismiss_text=self._t("Cancel"),
                 on_confirm=self._clear_all_library,
                 on_dismiss=self._cancel_dialog,
             )

@@ -2,7 +2,7 @@ __id__ = "MANUAL-IR"
 __name__ = "USB-C & BUILD-IN IR"
 __version__ = "1.0.0"
 __author__ = "CLAUDE & bsfwl"
-__description__ = "Форк плагина @squezze21 с ручным перебором. Поддержка usb c свистков и встроенных модулей"
+__description__ = "Fork of the @squezze21 plugin with manual brute-force. Supports USB-C dongles and built-in IR modules"
 __icon__ = "rounded:usb"
 __permissions__ = ["usb", "ir"]
 
@@ -15,7 +15,7 @@ import time
 from java import jclass, jarray, jbyte
 
 # ---------------------------------------------------------------------------
-# TX: USB IR wire-protocol encoders (без изменений -- рабочий код).
+# TX: USB IR wire-protocol encoders (unchanged -- working code).
 # ---------------------------------------------------------------------------
 class UnknownProtocolEncoder:
     name = "unknown"
@@ -283,45 +283,45 @@ class ElkSmartBulkEncoder:
 
 
 # ---------------------------------------------------------------------------
-# RX: приёмные (learn-mode) декодеры. Интерфейс:
+# RX: receive-side (learn-mode) decoders. Interface:
 #   receiver.capture(conn, out_ep, in_ep, write_chunk, read_chunk, log, deadline_s)
-#   -> {"freq": int, "pattern": [us, ...]}  либо исключение с текстом ошибки.
+#   -> {"freq": int, "pattern": [us, ...]}  or raises an exception with an error message.
 # ---------------------------------------------------------------------------
 class UnknownReceiveProtocol:
     name = "unknown"
     supports_receive = False
 
     def capture(self, conn, out_ep, in_ep, write_chunk, read_chunk, log, deadline_s):
-        raise NotImplementedError("Протокол устройства не определён")
+        raise NotImplementedError("Device protocol not defined")
 
 
 class LegacyBulkStReceiver:
     """
-    TODO: протокол приёма для ZaZa Remote / Tiqiaa TView (VID 0x10C4 / 0x045E,
-    PID 0x8468) ещё не реверснут. См. deadboy18/Tiqiaa-USB-IR-Windows.
+    TODO: the receive protocol for ZaZa Remote / Tiqiaa TView (VID 0x10C4 / 0x045E,
+    PID 0x8468) has not been reverse-engineered yet. See deadboy18/Tiqiaa-USB-IR-Windows.
     """
     name = "legacy_bulk_st"
     supports_receive = False
 
     def capture(self, conn, out_ep, in_ep, write_chunk, read_chunk, log, deadline_s):
         raise NotImplementedError(
-            "Протокол learn-mode для ZaZa/Tiqiaa (chipset D552) пока не перенесён"
+            "Learn-mode protocol for ZaZa/Tiqiaa (chipset D552) is not ported yet"
         )
 
 
 class ElkSmartBulkReceiver:
     """
-    Протокол чипсета ElkSmart (Ocrustar / ZaZa Remote / Tiqiaa TView), D226/D552.
-    Источник: реверс-инжиниринг deadboy18/Ocrustar-USB-IR (MIT).
+    ElkSmart chipset protocol (Ocrustar / ZaZa Remote / Tiqiaa TView), D226/D552.
+    Source: reverse engineering deadboy18/Ocrustar-USB-IR (MIT).
 
         Host  -> Device: FC FC FC FC
         Device-> Host:   FC FC FC FC XX YY
         Host  -> Device: FA FA FA FA
-        Host  -> Device: FE FE FE FE                 (войти в learn mode)
+        Host  -> Device: FE FE FE FE                 (enter learn mode)
         Device-> Host:   FE FE FE FE [len_hi][len_lo][raw_data...]
-        Host  -> Device: FD FD FD FD                 (выйти из learn mode)
+        Host  -> Device: FD FD FD FD                 (exit learn mode)
 
-    raw_data -> тайминги (мкс): b*16 + carry, где 0xFF добавляет carry += 0xFF0.
+    raw_data -> timings (us): b*16 + carry, where 0xFF adds carry += 0xFF0.
     """
     name = "elksmart_bulk"
     supports_receive = True
@@ -389,7 +389,7 @@ class ElkSmartBulkReceiver:
 
         if device_kind is None:
             raise RuntimeError(
-                "Устройство не ответило на handshake (FC FC FC FC) -- см. hex-дамп выше"
+                "Device did not respond to the handshake (FC FC FC FC) -- see the hex dump above"
             )
 
         write_chunk(bytes([0xFA, 0xFA, 0xFA, 0xFA]), timeout_ms=self.HANDSHAKE_TIMEOUT_MS)
@@ -406,7 +406,7 @@ class ElkSmartBulkReceiver:
                 pass
 
         if raw is None:
-            raise RuntimeError("Таймаут: сигнал от пульта не получен")
+            raise RuntimeError("Timeout: no signal received from the remote")
 
         timings = []
         carry = 0
@@ -418,13 +418,13 @@ class ElkSmartBulkReceiver:
                 carry = 0
 
         if not timings:
-            raise RuntimeError("Донгл вернул пустой сигнал")
+            raise RuntimeError("The dongle returned an empty signal")
 
         return {"freq": self.DEFAULT_FREQ_HZ, "pattern": timings}
 
 
 # ---------------------------------------------------------------------------
-# Общая таблица устройств: имя, TX-кодировщик, RX-декодер.
+# Shared device table: name, TX encoder, RX decoder.
 # ---------------------------------------------------------------------------
 SUPPORTED_DONGLES = {
     (0x10C4, 0x8468): ("ZaZa Remote / Tiqiaa / Tview", LegacyBulkStEncoder, LegacyBulkStReceiver),
@@ -440,16 +440,16 @@ SUPPORTED_DONGLES = {
 
 KNOWN_DONGLE_IDS = set(SUPPORTED_DONGLES.keys())
 
-REMOTE_NAME_PRESETS = ["Телевизор", "Кондиционер", "Аудиосистема", "Проектор", "Свет", "Другое устройство"]
+REMOTE_NAME_PRESETS = ["TV", "Air conditioner", "Audio system", "Projector", "Lights", "Other device"]
 
-# Подпапка под Download/, куда экспортируются .ir файлы. Пользователь может
-# сменить её в разделе "Виртуальные пульты"; значение хранится в library.json.
+# Subfolder under Download/ where .ir files are exported. The user can
+# change it in the "Virtual remotes" section; the value is stored in library.json.
 DEFAULT_EXPORT_ROOT = "Dolphy"
 
 
 def _nec_pattern(address, command):
-    """NEC: 9000/4500 мкс лидер, затем address, ~address, command, ~command
-    (младший бит вперёд, каждый бит -- 560 мкс метка + 560/1690 мкс пауза)."""
+    """NEC: 9000/4500 us leader, then address, ~address, command, ~command
+    (LSB first, each bit is a 560 us mark + a 560/1690 us pause)."""
     try:
         address = int(address) & 0xFF
         command = int(command) & 0xFF
@@ -469,10 +469,10 @@ def _nec_pattern(address, command):
         return None
 
 
-# Ручной перебор (brute-force): заглушки, НЕ проверенные реальные коды --
-# только чтобы было через что перебирать. Для настоящего списка возьми .ir
-# файлы из github.com/Lucaslhm/Flipper-IRDB (тот же формат
-# protocol/address/command) и добавь пары (address, command) сюда.
+# Manual brute-force: placeholder codes, NOT verified real codes --
+# just something to iterate over. For a real list, take .ir files from
+# github.com/Lucaslhm/Flipper-IRDB (same protocol/address/command
+# format) and add the (address, command) pairs here.
 BRUTEFORCE_CODES = {
     "TV power": [
         (0x00, 0x02), (0x01, 0x0C), (0x04, 0x08), (0x07, 0x15),
@@ -480,30 +480,30 @@ BRUTEFORCE_CODES = {
     ],
 }
 
-# Канонические имена кнопок -- подтверждены реальным .ir-файлом, экспортированным
-# самим приложением из "Универсальные пульты" (модель AWA MSDV3268O5D0). Именно
-# при таких именах ("Vol_up", а не "VOLUMEUP"!) кнопки встают в общий блок с
-# питанием/стрелками/OK, а не проваливаются в "Прочие" без реального действия.
+# Canonical button names -- confirmed by a real .ir file exported by
+# the app itself from "Universal remotes" (model AWA MSDV3268O5D0). Only with
+# these exact names ("Vol_up", not "VOLUMEUP"!) do the buttons join the common
+# power/arrows/OK block instead of falling into "Other" with no real action.
 BUTTON_NAME_PRESETS = [
-    ("Power", "⏻ Питание"),
-    ("Up", "▲ Вверх"),
-    ("Down", "▼ Вниз"),
-    ("Left", "◀ Влево"),
-    ("Right", "▶ Вправо"),
-    ("Ok", "OK / Выбор"),
+    ("Power", "⏻ Power"),
+    ("Up", "▲ Up"),
+    ("Down", "▼ Down"),
+    ("Left", "◀ Left"),
+    ("Right", "▶ Right"),
+    ("Ok", "OK / Select"),
     ("Mute", "🔇 Mute"),
     ("Back", "⬅ Back"),
     ("Menu", "☰ Menu"),
-    ("Input", "🔀 Источник (Input)"),
-    ("Vol_up", "🔊 Громкость +"),
-    ("Vol_dn", "🔉 Громкость -"),
-    ("Ch_next", "📺 Канал +"),
-    ("Ch_prev", "📺 Канал -"),
+    ("Input", "🔀 Input source"),
+    ("Vol_up", "🔊 Volume +"),
+    ("Vol_dn", "🔉 Volume -"),
+    ("Ch_next", "📺 Channel +"),
+    ("Ch_prev", "📺 Channel -"),
     ("Play", "▶ Play"),
     ("Pause", "⏸ Pause"),
     ("Stop", "⏹ Stop"),
-    ("Fast_fo", "⏩ Перемотка вперёд"),
-    ("Fast_ba", "⏪ Перемотка назад"),
+    ("Fast_fo", "⏩ Fast forward"),
+    ("Fast_ba", "⏪ Rewind"),
     ("Eject", "⏏ Eject"),
     ("List", "📋 List"),
     ("Info", "ℹ Info"),
@@ -549,7 +549,7 @@ class UsbCIrCombo(BasePlugin):
     def on_plugin_load(self):
         self.add_module(
             title="USB-C & BUILD-IN IR Combo",
-            description="Ручной перебор IR через встроенный ИК модуль или через USB-C свисток",
+            description="IR brute-force via the built-in IR module or a USB-C dongle",
             icon="usb",
             screen="main",
             section="INFRARED",
@@ -568,9 +568,9 @@ class UsbCIrCombo(BasePlugin):
         self._encoder = UnknownProtocolEncoder()
         self._receiver = UnknownReceiveProtocol()
 
-        # Общая блокировка: TX и RX используют один и тот же физический
-        # провод/устройство, поэтому передача и запись не должны идти
-        # одновременно -- иначе команды перемешаются на устройстве.
+        # Shared lock: TX and RX use the same physical
+        # wire/device, so transmitting and capturing must not run
+        # at the same time -- otherwise commands get mixed up on the device.
         self._usb_op_lock = threading.Lock()
         self._tx_count = 0
         self._reader_lock = threading.Lock()
@@ -588,8 +588,8 @@ class UsbCIrCombo(BasePlugin):
         self._context = self.api.getContext()
         self._usb_manager = self._context.getSystemService("usb")
 
-        # Регистрируем сервис передачи ИК для всего приложения (в т.ч. для
-        # наших виртуальных пультов после импорта) -- как в исходном
+        # Register the IR transmit service for the whole app (including
+        # our virtual remotes after import) -- as in the original
         # usb_c_ir_backend.
         self.provide_service("infrared.transmitter", 100)
 
@@ -603,13 +603,13 @@ class UsbCIrCombo(BasePlugin):
         for route in ir_status_routes:
             self.hook_screen(route, "usb_status_badge", "fab", 50)
 
-        # -- Виртуальные пульты (навигация внутри одного экрана) --
+        # -- Virtual remotes (navigation within a single screen) --
         self._view = "recorder"  # recorder | remotes | remote_detail | new_remote | add_button | bruteforce
         self._selected_remote_id = None
         self._export_root_draft = None
 
         self._bf_category = "TV power"
-        self._bf_transmit_via = "builtin"  # "builtin" (телефон) | "dongle" (USB)
+        self._bf_transmit_via = "builtin"  # "builtin" (phone) | "dongle" (USB)
         self._bf_index = -1
         self._bf_running = False
         self._bf_delay_ms = 900
@@ -618,9 +618,9 @@ class UsbCIrCombo(BasePlugin):
 
         self._library = self._load_library()
 
-        # Незавершённая запись переживает kill процесса/сворачивание: если
-        # сигнал был записан, но ещё не привязан к кнопке пульта, подхватываем
-        # его обратно как self._last_capture (см. _capture_worker).
+        # An unfinished capture survives a process kill/app minimize: if
+        # a signal was captured but not yet attached to a remote button, we
+        # pick it back up as self._last_capture (see _capture_worker).
         pending = self._library.get("pending_capture")
         if isinstance(pending, dict) and pending.get("pattern"):
             self._last_capture = pending
@@ -656,7 +656,7 @@ class UsbCIrCombo(BasePlugin):
             "TX request: freq=%d, samples=%d, total=%.3fs%s"
             % (
                 freq, len(pattern), total_us / 1_000_000.0,
-                " [ПОДОЗРИТЕЛЬНО ДЛИННЫЙ, обычно пульты <0.3s]" if total_us > 300_000 else "",
+                " [SUSPICIOUSLY LONG, remotes are usually <0.3s]" if total_us > 300_000 else "",
             )
         )
 
@@ -989,15 +989,15 @@ class UsbCIrCombo(BasePlugin):
             self._log("bulkTransfer threw: %s" % e)
             return False
 
-    # -- RX: запись сигнала -------------------------------------------------
+    # -- RX: signal capture -------------------------------------------------
 
     def start_capture(self):
         if not self._is_connected():
-            self._log("Нет подключенного донгла")
+            self._log("No dongle connected")
             return False
         if not getattr(self._receiver, "supports_receive", False):
             self._log(
-                "Протокол '%s' пока не поддерживает приём (learn mode не реализован)"
+                "Protocol '%s' does not support receiving yet (learn mode not implemented)"
                 % self._receiver.name
             )
             return False
@@ -1010,11 +1010,11 @@ class UsbCIrCombo(BasePlugin):
 
     def _capture_worker(self):
         try:
-            self._log("Наведи пульт и нажми кнопку (таймаут 15s)")
+            self._log("Point the remote and press a button (timeout 15s)")
             deadline = time.time() + 15.0
 
-            # Общая блокировка с TX: пока идёт приём, передача через это же
-            # устройство физически невозможна (донгл слушает внешний ИК).
+            # Shared lock with TX: while receiving, transmitting through the
+            # same device is physically impossible (the dongle listens to external IR).
             with self._usb_op_lock:
                 parsed = self._receiver.capture(
                     conn=self._connection,
@@ -1032,11 +1032,11 @@ class UsbCIrCombo(BasePlugin):
             self._library["pending_capture"] = parsed
             self._save_library()
             self._log(
-                "Сигнал записан и сохранён: freq=%s Hz, %d тайминг(ов)"
+                "Signal captured and saved: freq=%s Hz, %d timing(s)"
                 % (parsed.get("freq"), len(parsed.get("pattern", [])))
             )
         except NotImplementedError as e:
-            self._log("Протокол не поддерживает приём: %s" % e)
+            self._log("Protocol does not support receiving: %s" % e)
         except Exception as e:
             self._log("capture error: %s" % e)
         finally:
@@ -1049,10 +1049,10 @@ class UsbCIrCombo(BasePlugin):
     def last_capture(self):
         return self._last_capture
 
-    # -- Ручной перебор (brute-force) кодов через уже подключенный донгл ----
-    # Переиспользует service_infrared_transmitter_transmit -- тот же путь,
-    # что и обычная отправка из пультов -- поэтому кодирование под конкретный
-    # донгл и блокировка от конфликта с записью уже учтены.
+    # -- Manual brute-force of codes through the already connected dongle ----
+    # Reuses service_infrared_transmitter_transmit -- the same path as
+    # a regular send from the remotes -- so dongle-specific encoding
+    # and protection from capture conflicts are already handled.
 
     def _bf_codes(self):
         return BRUTEFORCE_CODES.get(self._bf_category, []) or []
@@ -1071,7 +1071,7 @@ class UsbCIrCombo(BasePlugin):
             })
             return bool(result and result.get("ok"))
         except Exception as e:
-            self._log("Ошибка донгла: %s" % e)
+            self._log("Dongle error: %s" % e)
             return False
 
     def _bf_transmit_builtin(self, pattern):
@@ -1081,37 +1081,37 @@ class UsbCIrCombo(BasePlugin):
                 return False
             return bool(android.irTransmit(38000, pattern))
         except Exception as e:
-            self._log("Ошибка встроенного ИК: %s" % e)
+            self._log("Built-in IR error: %s" % e)
             return False
 
     def _bf_transmit_index(self, idx):
         codes = self._bf_codes()
         if not codes:
-            self._log("Нет кодов в этой категории")
+            self._log("No codes in this category")
             return
         idx = idx % len(codes)
         address, command = codes[idx]
         pattern = _nec_pattern(address, command)
         if not pattern:
-            self._log("Некорректный код #%d" % idx)
+            self._log("Invalid code #%d" % idx)
             return
 
         via_builtin = self._bf_transmit_via == "builtin"
         ok = self._bf_transmit_builtin(pattern) if via_builtin else self._bf_transmit_dongle(pattern)
 
         self._log(
-            "Перебор [%d/%d] NEC addr=0x%02X cmd=0x%02X (%s) -> %s"
+            "Brute-force [%d/%d] NEC addr=0x%02X cmd=0x%02X (%s) -> %s"
             % (
                 idx + 1, len(codes), address, command,
-                "встроенный ИК" if via_builtin else "USB-донгл",
-                "ok" if ok else "ошибка",
+                "built-in IR" if via_builtin else "USB dongle",
+                "ok" if ok else "error",
             )
         )
 
     def _bf_path_ready(self):
         if self._bf_transmit_via == "builtin":
-            return self._bf_builtin_available(), "На этом телефоне нет встроенного ИК-передатчика"
-        return self._is_connected(), "USB-донгл не подключен"
+            return self._bf_builtin_available(), "This phone has no built-in IR transmitter"
+        return self._is_connected(), "USB dongle not connected"
 
     def _bf_set_transmit_via(self, use_builtin):
         self._bf_transmit_via = "builtin" if use_builtin else "dongle"
@@ -1119,7 +1119,7 @@ class UsbCIrCombo(BasePlugin):
 
     def _bf_test_next(self):
         if self._capturing:
-            self._log("Сейчас идёт запись сигнала, подожди")
+            self._log("A signal capture is in progress, wait")
             self.refresh()
             return
         ready, msg = self._bf_path_ready()
@@ -1154,14 +1154,14 @@ class UsbCIrCombo(BasePlugin):
                 try:
                     self.refresh()
                 except Exception:
-                    pass  # обновление UI из фонового потока не гарантировано
-                          # везде -- перебор при этом всё равно продолжается.
+                    pass  # UI updates from a background thread are not guaranteed
+                          # everywhere -- the brute-force keeps running anyway.
                 waited = 0
                 while waited < self._bf_delay_ms and self._bf_running and not self._bf_stop_flag:
                     time.sleep(0.05)
                     waited += 50
         except Exception as e:
-            self._log("Ошибка автоперебора: %s" % e)
+            self._log("Auto brute-force error: %s" % e)
         finally:
             self._bf_running = False
             try:
@@ -1185,7 +1185,7 @@ class UsbCIrCombo(BasePlugin):
                 self._bf_thread.start()
             except Exception as e:
                 self._bf_running = False
-                self._log("Автоперебор недоступен, используй ручной режим: %s" % e)
+                self._log("Auto brute-force unavailable, use manual mode: %s" % e)
         else:
             self._bf_stop_flag = True
             self._bf_running = False
@@ -1210,13 +1210,13 @@ class UsbCIrCombo(BasePlugin):
         self._library["pending_capture"] = captured
         self._save_library()
         self._log(
-            "Код принят (addr=0x%02X cmd=0x%02X) и сохранён как последняя запись "
-            "-- теперь его можно добавить кнопкой в пульт" % (address, command)
+            "Code accepted (addr=0x%02X cmd=0x%02X) and saved as the last capture "
+            "-- it can now be added to a remote as a button" % (address, command)
         )
         self._view = "remotes"
         self.refresh()
 
-    # -- Виртуальные пульты: хранилище ---------------------------------------
+    # -- Virtual remotes: storage ---------------------------------------
 
     def _library_path(self):
         files_dir = self._context.getFilesDir()
@@ -1262,19 +1262,19 @@ class UsbCIrCombo(BasePlugin):
         self._library["settings"] = settings
         self._export_root_draft = None
         self._save_library()
-        self._log("Папка экспорта изменена на Download/%s/" % clean)
+        self._log("Export folder changed to Download/%s/" % clean)
         self.refresh()
 
     def _on_export_root_change(self, value):
-        # Только черновик в памяти -- ничего не пишем на диск при каждом
-        # нажатии клавиши, сохраняем по кнопке "Сохранить".
+        # Only an in-memory draft -- nothing is written to disk on every
+        # keystroke; it is saved via the "Save" button.
         self._export_root_draft = value
 
     @staticmethod
     def _sanitize_export_root(value):
-        # MediaStore.Downloads требует relative_path строго под "Download/",
-        # поэтому тут допустимо только имя (под)папки: без ".." и без
-        # символов, которые не переживут запись через ContentResolver.
+        # MediaStore.Downloads requires relative_path to be strictly under "Download/",
+        # so only a (sub)folder name is allowed here: no ".." and no
+        # characters that would not survive a write through ContentResolver.
         value = (value or "").strip().strip("/")
         if not value:
             return DEFAULT_EXPORT_ROOT
@@ -1291,7 +1291,7 @@ class UsbCIrCombo(BasePlugin):
         used_names = []
         for r in data.get("remotes", []):
             if not r.get("name"):
-                r["name"] = _unique_name(used_names, "Пульт")
+                r["name"] = _unique_name(used_names, "Remote")
                 changed = True
             used_names.append(r["name"])
 
@@ -1303,7 +1303,7 @@ class UsbCIrCombo(BasePlugin):
                 used_btn_names.append(b["name"])
 
         if changed:
-            self._log_lines_safe_append("Восстановлены названия пультов/кнопок, повреждённые старым багом")
+            self._log_lines_safe_append("Restored remote/button names corrupted by an old bug")
 
     def _log_lines_safe_append(self, line):
         if hasattr(self, "_log_lines"):
@@ -1337,7 +1337,7 @@ class UsbCIrCombo(BasePlugin):
         }
         self._library["remotes"].append(remote)
         self._save_library()
-        self._log("Создан пульт '%s'" % name)
+        self._log("Remote '%s' created" % name)
         self._selected_remote_id = remote["id"]
         self._view = "remote_detail"
         self.refresh()
@@ -1348,7 +1348,7 @@ class UsbCIrCombo(BasePlugin):
             return
         self._library["remotes"] = [r for r in self._library["remotes"] if r["id"] != remote_id]
         self._save_library()
-        self._log("Пульт '%s' удалён" % remote["name"])
+        self._log("Remote '%s' deleted" % remote["name"])
         self._selected_remote_id = None
         self._view = "remotes"
         self.refresh()
@@ -1357,7 +1357,7 @@ class UsbCIrCombo(BasePlugin):
         remote = self._find_remote(remote_id)
         capture = self.last_capture()
         if remote is None or capture is None:
-            self._log("Нет записанного сигнала для добавления")
+            self._log("No captured signal to add")
             self._view = "remote_detail"
             self.refresh()
             return
@@ -1370,7 +1370,7 @@ class UsbCIrCombo(BasePlugin):
         })
         self._library.pop("pending_capture", None)
         self._save_library()
-        self._log("Кнопка '%s' добавлена в пульт '%s'" % (name, remote["name"]))
+        self._log("Button '%s' added to remote '%s'" % (name, remote["name"]))
         self._view = "remote_detail"
         self.refresh()
 
@@ -1380,14 +1380,14 @@ class UsbCIrCombo(BasePlugin):
             return
         remote["buttons"] = [b for b in remote["buttons"] if b["name"] != button_name]
         self._save_library()
-        self._log("Кнопка '%s' удалена" % button_name)
+        self._log("Button '%s' deleted" % button_name)
         self._view = "remote_detail"
         self.refresh()
 
     def _export_remote_to_downloads(self, remote_id):
         remote = self._find_remote(remote_id)
         if remote is None or not remote["buttons"]:
-            self._log("Нет кнопок для экспорта")
+            self._log("No buttons to export")
             self.refresh()
             return
 
@@ -1429,7 +1429,7 @@ class UsbCIrCombo(BasePlugin):
                 uri = resolver.insert(MediaStoreDownloads.EXTERNAL_CONTENT_URI, cv)
 
             if uri is None:
-                self._log("Не удалось создать файл в Downloads (insert вернул null)")
+                self._log("Failed to create file in Downloads (insert returned null)")
                 self.refresh()
                 return
 
@@ -1443,15 +1443,15 @@ class UsbCIrCombo(BasePlugin):
             stream.close()
 
             self._log(
-                "Готово: %s%s -- импортируй его в разделе "
-                "'Универсальные пульты' так же, как rid_10001.ir" % (relative_path, filename)
+                "Done: %s%s -- import it in the "
+                "'Universal remotes' section just like rid_10001.ir" % (relative_path, filename)
             )
         except Exception as e:
             self._log("export error: %s" % e)
 
         self.refresh()
 
-    # -- Навигация между "экранами" внутри одного screen_main ---------------
+    # -- Navigation between "screens" inside a single screen_main ---------------
 
     def _go_recorder(self):
         self._view = "recorder"
@@ -1476,19 +1476,19 @@ class UsbCIrCombo(BasePlugin):
 
     def _go_add_button(self):
         if self.last_capture() is None:
-            self._log("Сначала запиши сигнал на вкладке 'Запись'")
+            self._log("Capture a signal on the 'Record' tab first")
             self.refresh()
             return
         self._view = "add_button"
         self.refresh()
 
-    # -- logging / прочее -----------------------------------------------------
+    # -- logging / misc -----------------------------------------------------
 
     def _log_dongle_missing(self, force=False):
         now = time.time()
         if force or now - self._last_missing_log_at >= 15:
             self._last_missing_log_at = now
-            self._log("Донгл не найден, продолжаю поиск")
+            self._log("Dongle not found, keeping searching")
 
     def _log(self, line):
         stamp = time.strftime("%H:%M:%S")
@@ -1517,32 +1517,32 @@ class UsbCIrCombo(BasePlugin):
     def _render_recorder_view(self, ui):
         connected = self._is_connected()
         if connected:
-            status_text = "🟢 %s подключен, tx=%s rx=%s" % (
+            status_text = "🟢 %s connected, tx=%s rx=%s" % (
                 self._dongle_name, self._encoder.name, self._receiver.name
             )
         else:
-            status_text = "🔴 Донгл не найден"
+            status_text = "🔴 Dongle not found"
 
         capture = self.last_capture()
         if capture is not None:
-            capture_text = "Последняя запись: %s Hz, %d тайминг(ов)" % (
+            capture_text = "Last capture: %s Hz, %d timing(s)" % (
                 capture.get("freq"), len(capture.get("pattern", []))
             )
         else:
-            capture_text = "Пока ничего не записано"
+            capture_text = "Nothing captured yet"
 
-        capture_button_label = "Запись..." if self.is_capturing() else "Записать сигнал"
+        capture_button_label = "Recording..." if self.is_capturing() else "Record signal"
 
         buttons = [
             ui.text(status_text, "titleSmall"),
-            ui.text("TX (передача) всегда доступен через штатное 'Отправить' в пультах", "bodySmall", "muted"),
+            ui.text("TX (transmit) is always available via the standard 'Send' in the remotes", "bodySmall", "muted"),
             ui.text(capture_text, "bodySmall", "muted"),
-            ui.button("Обновить", self._manual_rescan),
+            ui.button("Refresh", self._manual_rescan),
             ui.button(capture_button_label, self.start_capture),
         ]
 
-        buttons.append(ui.button("📁 Виртуальные пульты", self._go_remotes))
-        buttons.append(ui.button("🔁 Ручной перебор кодов", self._go_bruteforce))
+        buttons.append(ui.button("📁 Virtual remotes", self._go_remotes))
+        buttons.append(ui.button("🔁 Manual code brute-force", self._go_bruteforce))
 
         return ui.column(
             [
@@ -1557,31 +1557,31 @@ class UsbCIrCombo(BasePlugin):
 
     def _render_remotes_view(self, ui):
         remotes = self._library["remotes"]
-        rows = [ui.text("Виртуальные пульты", "titleSmall")]
+        rows = [ui.text("Virtual remotes", "titleSmall")]
 
         if not remotes:
-            rows.append(ui.text("Пока нет ни одного пульта", "bodySmall", "muted"))
+            rows.append(ui.text("No remotes yet", "bodySmall", "muted"))
         else:
             for r in remotes:
-                label = "%s (%d кнопок)" % (r["name"], len(r["buttons"]))
+                label = "%s (%d buttons)" % (r["name"], len(r["buttons"]))
                 rows.append(ui.button(label, lambda *_a, rid=r["id"]: self._open_remote(rid)))
 
-        rows.append(ui.button("➕ Новый пульт", self._go_new_remote))
-        rows.append(ui.button("⬅ Назад к записи", self._go_recorder))
+        rows.append(ui.button("➕ New remote", self._go_new_remote))
+        rows.append(ui.button("⬅ Back to recording", self._go_recorder))
 
         current_root = self._get_export_root()
         draft = self._export_root_draft if self._export_root_draft is not None else current_root
         rows.append(ui.divider())
-        rows.append(ui.text("Папка экспорта: Download/%s/" % current_root, "labelLarge"))
+        rows.append(ui.text("Export folder: Download/%s/" % current_root, "labelLarge"))
         rows.append(ui.text_field(
             value=draft,
             on_change=self._on_export_root_change,
-            label="Подпапка, например Dolphy или Dolphy/TVs",
+            label="Subfolder, e.g. Dolphy or Dolphy/TVs",
             single_line=True,
             fill_max_width=True,
         ))
         rows.append(ui.button(
-            "Сохранить папку экспорта",
+            "Save export folder",
             lambda *_a: self._set_export_root(
                 self._export_root_draft if self._export_root_draft is not None else current_root
             ),
@@ -1590,42 +1590,42 @@ class UsbCIrCombo(BasePlugin):
         return ui.column([ui.card(rows)], padding=16, spacing=12, fill_max_size=True)
 
     def _render_new_remote_view(self, ui):
-        rows = [ui.text("Выбери тип пульта", "titleSmall")]
+        rows = [ui.text("Choose a remote type", "titleSmall")]
         for preset in REMOTE_NAME_PRESETS:
             rows.append(ui.button(preset, lambda *_a, p=preset: self._create_remote(p)))
-        rows.append(ui.button("⬅ Отмена", self._go_remotes))
+        rows.append(ui.button("⬅ Cancel", self._go_remotes))
 
         return ui.column([ui.card(rows)], padding=16, spacing=12, fill_max_size=True)
 
     def _render_bruteforce_view(self, ui):
         codes = self._bf_codes()
         total = len(codes)
-        pos_text = "Код ещё не пробовали"
+        pos_text = "No code tried yet"
         if 0 <= self._bf_index < total:
             addr, cmd = codes[self._bf_index]
-            pos_text = "Код %d/%d — addr=0x%02X cmd=0x%02X" % (self._bf_index + 1, total, addr, cmd)
+            pos_text = "Code %d/%d — addr=0x%02X cmd=0x%02X" % (self._bf_index + 1, total, addr, cmd)
 
-        status = "🟢 %s подключен" % self._dongle_name if self._is_connected() else "🔴 USB-донгл не найден"
-        builtin_status = "есть" if self._bf_builtin_available() else "нет"
+        status = "🟢 %s connected" % self._dongle_name if self._is_connected() else "🔴 USB dongle not found"
+        builtin_status = "yes" if self._bf_builtin_available() else "no"
 
         rows = [
-            ui.text("Ручной перебор кодов (NEC)", "titleSmall"),
-            ui.text("Встроенный ИК телефона: %s   USB-донгл: %s" % (builtin_status, status), "bodySmall", "muted"),
+            ui.text("Manual code brute-force (NEC)", "titleSmall"),
+            ui.text("Phone built-in IR: %s   USB dongle: %s" % (builtin_status, status), "bodySmall", "muted"),
             ui.switch(
                 checked=(self._bf_transmit_via == "builtin"),
                 on_change=self._bf_set_transmit_via,
-                title="Передавать через встроенный ИК телефона",
-                subtitle="Выключено — через USB-донгл",
+                title="Transmit via the phone built-in IR",
+                subtitle="Off — via USB dongle",
             ),
             ui.text(
-                "Коды сейчас — заглушки для проверки логики, не проверенные реальные "
-                "значения. Пополняй список вручную, например из "
+                "The codes are placeholders for testing the logic, not verified real "
+                "values. Extend the list manually, e.g. from "
                 "github.com/Lucaslhm/Flipper-IRDB.",
                 "bodySmall", "muted",
             ),
             ui.text(pos_text, "titleMedium"),
             ui.button(
-                "Следующий код",
+                "Next code",
                 self._bf_test_next,
                 enabled=not self._bf_running,
                 fill_max_width=True,
@@ -1633,28 +1633,28 @@ class UsbCIrCombo(BasePlugin):
             ui.switch(
                 checked=self._bf_running,
                 on_change=self._bf_toggle_auto,
-                title="Автоперебор",
-                subtitle="Один код каждые %d мс, пока не остановишь" % self._bf_delay_ms,
+                title="Auto brute-force",
+                subtitle="One code every %d ms until you stop it" % self._bf_delay_ms,
             ),
             ui.slider(
                 value=self._bf_delay_ms,
                 on_change=self._bf_set_delay,
                 minimum=300,
                 maximum=2000,
-                title="Задержка между кодами (мс)",
+                title="Delay between codes (ms)",
                 steps=17,
             ),
         ]
 
         if 0 <= self._bf_index < total:
             rows.append(ui.button(
-                "✅ Сработало — сохранить этот код",
+                "✅ It worked — save this code",
                 self._bf_accept_current,
                 style="filled",
                 fill_max_width=True,
             ))
 
-        rows.append(ui.button("⬅ Назад к записи", self._go_recorder))
+        rows.append(ui.button("⬅ Back to recording", self._go_recorder))
         rows.append(ui.log_panel("\n".join(self._log_lines[-14:]), max_height=220))
 
         return ui.column([ui.card(rows)], padding=16, spacing=12, fill_max_size=True)
@@ -1668,23 +1668,23 @@ class UsbCIrCombo(BasePlugin):
         rows = [ui.text(remote["name"], "titleSmall")]
 
         if not remote["buttons"]:
-            rows.append(ui.text("В этом пульте пока нет кнопок", "bodySmall", "muted"))
+            rows.append(ui.text("No buttons in this remote yet", "bodySmall", "muted"))
         else:
             for b in remote["buttons"]:
                 pretty = BUTTON_NAME_LABELS.get(b["name"], b["name"])
-                label = "%s — %s Hz, %d тайминг(ов)" % (pretty, b.get("freq"), len(b.get("pattern", [])))
+                label = "%s — %s Hz, %d timing(s)" % (pretty, b.get("freq"), len(b.get("pattern", [])))
                 rows.append(ui.text(label, "bodySmall"))
-                rows.append(ui.button("Удалить '%s'" % pretty, lambda *_a, bn=b["name"]: self._delete_button(remote["id"], bn)))
+                rows.append(ui.button("Delete '%s'" % pretty, lambda *_a, bn=b["name"]: self._delete_button(remote["id"], bn)))
 
         capture = self.last_capture()
-        add_label = "➕ Добавить записанный сигнал" if capture is not None else "➕ Добавить (сначала запиши сигнал)"
+        add_label = "➕ Add captured signal" if capture is not None else "➕ Add (capture a signal first)"
         rows.append(ui.button(add_label, self._go_add_button))
 
         if remote["buttons"]:
-            rows.append(ui.button("📤 Экспортировать как .ir (в Downloads)", lambda *_a: self._export_remote_to_downloads(remote["id"])))
+            rows.append(ui.button("📤 Export as .ir (to Downloads)", lambda *_a: self._export_remote_to_downloads(remote["id"])))
 
-        rows.append(ui.button("🗑 Удалить весь пульт", lambda *_a: self._delete_remote(remote["id"])))
-        rows.append(ui.button("⬅ К списку пультов", self._go_remotes))
+        rows.append(ui.button("🗑 Delete entire remote", lambda *_a: self._delete_remote(remote["id"])))
+        rows.append(ui.button("⬅ Back to remotes", self._go_remotes))
 
         return ui.column([ui.card(rows)], padding=16, spacing=12, fill_max_size=True)
 
@@ -1694,14 +1694,14 @@ class UsbCIrCombo(BasePlugin):
             self._view = "remotes"
             return self._render_remotes_view(ui)
 
-        rows = [ui.text("Название кнопки для '%s'" % remote["name"], "titleSmall")]
+        rows = [ui.text("Button name for '%s'" % remote["name"], "titleSmall")]
         for key, label in BUTTON_NAME_PRESETS:
             rows.append(ui.button(label, lambda *_a, k=key: self._add_button_to_remote(remote["id"], k)))
         rows.append(ui.button(
-            "Другое (SIGNAL N)",
+            "Other (SIGNAL N)",
             lambda *_a: self._add_button_to_remote(remote["id"], "SIGNAL"),
         ))
-        rows.append(ui.button("⬅ Отмена", lambda *_a: self._open_remote(remote["id"])))
+        rows.append(ui.button("⬅ Cancel", lambda *_a: self._open_remote(remote["id"])))
 
         return ui.column([ui.card(rows)], padding=16, spacing=12, fill_max_size=True)
 
